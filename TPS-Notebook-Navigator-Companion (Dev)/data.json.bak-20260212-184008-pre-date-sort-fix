@@ -1,0 +1,214 @@
+{
+  "enabled": true,
+  "autoApplyOnFileOpen": true,
+  "autoApplyOnMetadataChange": true,
+  "applyOnStartup": true,
+  "startupDelayMs": 800,
+  "metadataDebounceMs": 350,
+  "frontmatterIconField": "icon",
+  "frontmatterColorField": "color",
+  "frontmatterWriteExclusions": "System/Templates/",
+  "noteCheckboxIconColor": "#813aa1",
+  "clearIconWhenNoMatch": true,
+  "clearColorWhenNoMatch": true,
+  "debugLogging": false,
+  "rules": [
+    {
+      "id": "rule-1770935476138-q9npl05",
+      "enabled": true,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "System/Archive",
+      "icon": "lucide:archive",
+      "color": "#868d86",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770922305828-lq1x5wa",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "wont-do",
+      "pathPrefix": "",
+      "icon": "square-x",
+      "color": "#7c8488",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770918794071-34zkd54",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "complete",
+      "pathPrefix": "Action Items",
+      "icon": "lucide:check-square-2",
+      "color": "#509636",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770922624258-qnu9aad",
+      "enabled": true,
+      "property": "scheduled",
+      "operator": "contains",
+      "value": "-",
+      "pathPrefix": "Action Items",
+      "icon": "lucide:calendar",
+      "color": "",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770919759005-ss37o65",
+      "enabled": true,
+      "property": "status",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "Action Items",
+      "icon": "lucide-box-select",
+      "color": "",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770919820871-i1lc2k1",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "high",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#b94b4b",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770921527111-w0llft4",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "normal",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#4c76ae",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770921549949-wdo8uul",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "low",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#919191",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770921568202-jo37jsz",
+      "enabled": true,
+      "property": "Priority",
+      "operator": "is",
+      "value": "medium",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#9fab3f",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770919731602-yqk5jbc",
+      "enabled": true,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide:file-text",
+      "color": "",
+      "match": "all",
+      "conditions": []
+    }
+  ],
+  "smartSort": {
+    "enabled": true,
+    "field": "sort",
+    "separator": "_",
+    "appendBasename": true,
+    "clearWhenNoMatch": false,
+    "segments": [
+      {
+        "id": "sort-segment-1770918401328-0paef6e",
+        "enabled": true,
+        "source": "frontmatter",
+        "field": "scheduled",
+        "fallback": "9999-12-31-23-59-59",
+        "mappings": [],
+        "match": "all",
+        "conditions": []
+      },
+      {
+        "id": "sort-segment-1770918526107-yfzfqnb",
+        "enabled": true,
+        "source": "frontmatter",
+        "field": "status",
+        "fallback": "000",
+        "mappings": [
+          {
+            "input": "open",
+            "output": "001"
+          },
+          {
+            "input": "working",
+            "output": "001"
+          },
+          {
+            "input": "blocked",
+            "output": "003"
+          },
+          {
+            "input": "complete",
+            "output": "004"
+          },
+          {
+            "input": "wont-do",
+            "output": "005"
+          }
+        ],
+        "match": "all",
+        "conditions": []
+      },
+      {
+        "id": "sort-segment-1770918695765-ei0hyfd",
+        "enabled": true,
+        "source": "frontmatter",
+        "field": "priority",
+        "fallback": "000",
+        "mappings": [
+          {
+            "input": "high",
+            "output": "001"
+          },
+          {
+            "input": "medium",
+            "output": "002"
+          },
+          {
+            "input": "normal",
+            "output": "003"
+          },
+          {
+            "input": "low",
+            "output": "004"
+          }
+        ],
+        "match": "all",
+        "conditions": []
+      }
+    ]
+  }
+}

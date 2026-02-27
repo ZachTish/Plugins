@@ -1,0 +1,9 @@
+{
+	"id": "tps-calendar-base",
+	"name": "TPS Calendar Base",
+	"version": "0.1.0",
+	"minAppVersion": "1.10.0",
+	"description": "Weekly time-grid calendar layout for Bases powered by FullCalendar.",
+	"author": "Codex",
+	"isDesktopOnly": false
+}

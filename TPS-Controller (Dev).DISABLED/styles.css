@@ -1,0 +1,60 @@
+/* TPS Controller Mode - UI Lockdown */
+
+/* When in controller mode, hide most of the UI and show a warning overlay */
+body.tps-controller-mode {
+    /* Hide the main editor area */
+    .workspace-split.mod-root > .workspace-tabs {
+        display: none !important;
+    }
+
+    /* Hide the left sidebar (file explorer, etc) */
+    .workspace-split.mod-left-split {
+        display: none !important;
+    }
+
+    /* Hide the right sidebar (outline, backlinks, etc) */
+    .workspace-split.mod-right-split {
+        display: none !important;
+    }
+
+    /* Hide the ribbon (left sidebar icons) */
+    .workspace-ribbon {
+        display: none !important;
+    }
+
+    /* Keep status bar visible so user can see controller status */
+    .status-bar {
+        display: flex !important;
+    }
+
+    /* Add a large warning overlay */
+    .workspace::before {
+        content: '⚙️ CONTROLLER MODE';
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 3rem;
+        font-weight: bold;
+        color: var(--text-muted);
+        text-align: center;
+        z-index: 1000;
+        pointer-events: none;
+    }
+
+    .workspace::after {
+        content: 'This vault is running automation in the background.\AOpen the settings to switch to User mode.';
+        white-space: pre-line;
+        position: fixed;
+        top: 60%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 1.2rem;
+        color: var(--text-muted);
+        text-align: center;
+        max-width: 600px;
+        z-index: 1000;
+        pointer-events: none;
+        line-height: 1.6;
+    }
+}

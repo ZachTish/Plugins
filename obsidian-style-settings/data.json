@@ -1,0 +1,8 @@
+{
+  "minimal-style@@bases-toolbar-opacity": 0.85,
+  "minimal-style@@bases-table-header-icon-display": "flex",
+  "things-style@@floating-button-off": true,
+  "notebook-navigator-style-settings@@nn-theme-list-heading-font-weight": 500,
+  "notebook-navigator-style-settings@@nn-theme-file-border-radius": 3,
+  "notebook-navigator-style-settings@@nn-theme-mobile-list-header-breadcrumb-font-weight": 300
+}

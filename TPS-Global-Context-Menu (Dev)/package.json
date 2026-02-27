@@ -1,0 +1,31 @@
+{
+  "name": "tps-global-context-menu",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Define a single reusable context menu for every note link across the vault.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "version": "node version-bump.mjs && git add manifest.json versions.json"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "tps",
+    "context menu"
+  ],
+  "author": "Codex",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^20.11.2",
+    "builtin-modules": "3.3.0",
+    "esbuild": "^0.19.3",
+    "obsidian": "latest",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "rrule": "^2.8.1"
+  }
+}

@@ -1,0 +1,35 @@
+name: Branch Protection
+
+on:
+  push:
+    branches: [ main, develop ]
+
+jobs:
+  protect-branches:
+    runs-on: ubuntu-latest
+    if: github.repository == 'ZachTish/TPS-Projects'
+    
+    steps:
+    - name: Check branch protection
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const { owner, repo } = context.repo;
+          const branch = context.ref.replace('refs/heads/', '');
+          
+          // Block direct pushes to main
+          if (branch === 'main' && context.event_name === 'push') {
+            const prs = await github.rest.pulls.list({
+              owner,
+              repo,
+              head: context.sha,
+              state: 'open'
+            });
+            
+            if (prs.data.length === 0) {
+              core.setFailed('❌ Direct push to main is not allowed. Use Pull Request.');
+              return;
+            }
+          }
+          
+          console.log(`✅ Branch ${branch} protection check passed`);

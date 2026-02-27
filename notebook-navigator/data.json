@@ -1,0 +1,499 @@
+{
+  "vaultProfiles": [
+    {
+      "id": "default",
+      "name": "Default",
+      "fileVisibility": "all",
+      "hiddenFolders": [
+        "Attachments*",
+        "Templates"
+      ],
+      "hiddenTags": [],
+      "hiddenFileNames": [
+        "Archive/*"
+      ],
+      "hiddenFileTags": [
+        "archive*",
+        "hide"
+      ],
+      "hiddenFileProperties": [],
+      "navigationBanner": null,
+      "periodicNotesFolder": "",
+      "shortcuts": [
+        {
+          "type": "tag",
+          "tagPath": "__untagged__"
+        }
+      ],
+      "propertyKeys": [
+        {
+          "key": "scheduled",
+          "showInNavigation": false,
+          "showInList": true
+        },
+        {
+          "key": "priority",
+          "showInNavigation": true,
+          "showInList": true
+        },
+        {
+          "key": "due",
+          "showInNavigation": false,
+          "showInList": true
+        },
+        {
+          "key": "location",
+          "showInNavigation": false,
+          "showInList": true
+        },
+        {
+          "key": "recurrenceRule",
+          "showInNavigation": true,
+          "showInList": true
+        },
+        {
+          "key": "parent",
+          "showInNavigation": true,
+          "showInList": true
+        }
+      ]
+    }
+  ],
+  "vaultProfile": "default",
+  "vaultTitle": "navigation",
+  "syncModes": {
+    "vaultProfile": "synced",
+    "folderSortOrder": "synced",
+    "tagSortOrder": "synced",
+    "propertySortOrder": "synced",
+    "includeDescendantNotes": "synced",
+    "useFloatingToolbars": "synced",
+    "dualPane": "synced",
+    "dualPaneOrientation": "synced",
+    "paneTransitionDuration": "synced",
+    "toolbarVisibility": "local",
+    "pinNavigationBanner": "synced",
+    "navIndent": "synced",
+    "navItemHeight": "synced",
+    "navItemHeightScaleText": "synced",
+    "calendarPlacement": "synced",
+    "calendarLeftPlacement": "synced",
+    "calendarWeeksToShow": "synced",
+    "compactItemHeight": "synced",
+    "compactItemHeightScaleText": "synced",
+    "uiScale": "local"
+  },
+  "createNewNotesInNewTab": true,
+  "autoRevealActiveFile": true,
+  "autoRevealShortestPath": true,
+  "autoRevealIgnoreRightSidebar": true,
+  "paneTransitionDuration": 150,
+  "multiSelectModifier": "cmdCtrl",
+  "enterToOpenFiles": false,
+  "shiftEnterOpenContext": "tab",
+  "cmdCtrlEnterOpenContext": "split",
+  "startView": "navigation",
+  "showInfoButtons": true,
+  "homepage": null,
+  "mobileHomepage": "Bases/Calendar 3 Day.base",
+  "useMobileHomepage": true,
+  "dualPane": true,
+  "dualPaneOrientation": "horizontal",
+  "showTooltips": true,
+  "showTooltipPath": true,
+  "desktopBackground": "separate",
+  "useFloatingToolbars": true,
+  "interfaceIcons": {
+    "file-unfinished-task": "❗"
+  },
+  "colorIconOnly": true,
+  "dateFormat": "MMM D, YYYY",
+  "timeFormat": "h:mm a",
+  "calendarTemplateFolder": "Markdown/Templates",
+  "confirmBeforeDelete": true,
+  "deleteAttachments": "ask",
+  "moveFileConflicts": "ask",
+  "externalIconProviders": {},
+  "checkForUpdatesOnStart": true,
+  "pinNavigationBanner": true,
+  "showNoteCount": true,
+  "separateNoteCounts": true,
+  "showIndentGuides": true,
+  "rootLevelSpacing": 0,
+  "navIndent": 10,
+  "navItemHeight": 25,
+  "navItemHeightScaleText": true,
+  "collapseBehavior": "all",
+  "smartCollapse": true,
+  "autoSelectFirstFileOnFocusChange": false,
+  "autoExpandNavItems": true,
+  "springLoadedFolders": true,
+  "springLoadedFoldersInitialDelay": 0.5,
+  "springLoadedFoldersSubsequentDelay": 0.5,
+  "showSectionIcons": true,
+  "showShortcuts": true,
+  "shortcutBadgeDisplay": "index",
+  "skipAutoScroll": false,
+  "showRecentNotes": true,
+  "hideRecentNotes": "folder-notes",
+  "pinRecentNotesWithShortcuts": true,
+  "recentNotesCount": 5,
+  "showFolderIcons": true,
+  "showRootFolder": true,
+  "inheritFolderColors": false,
+  "folderSortOrder": "alpha-asc",
+  "enableFolderNotes": true,
+  "folderNoteType": "markdown",
+  "folderNoteName": "",
+  "folderNoteNamePattern": "",
+  "folderNoteTemplate": "System/Templates/foldernote.md",
+  "openFolderNotesInNewTab": false,
+  "hideFolderNoteInList": true,
+  "pinCreatedFolderNote": true,
+  "showTags": true,
+  "showTagIcons": true,
+  "showAllTagsFolder": true,
+  "showUntagged": true,
+  "tagSortOrder": "frequency-desc",
+  "inheritTagColors": true,
+  "keepEmptyTagsProperty": true,
+  "showProperties": true,
+  "showPropertyIcons": true,
+  "inheritPropertyColors": true,
+  "propertySortOrder": "frequency-desc",
+  "showAllPropertiesFolder": true,
+  "defaultListMode": "standard",
+  "includeDescendantNotes": true,
+  "defaultFolderSort": "modified-desc",
+  "propertySortKey": "scheduled",
+  "propertySortSecondary": "modified",
+  "revealFileOnListChanges": false,
+  "listPaneTitle": "header",
+  "noteGrouping": "date",
+  "filterPinnedByFolder": true,
+  "showPinnedGroupHeader": true,
+  "showPinnedIcon": true,
+  "optimizeNoteHeight": true,
+  "compactItemHeight": 28,
+  "compactItemHeightScaleText": true,
+  "showQuickActions": true,
+  "quickActionRevealInFolder": false,
+  "quickActionAddTag": true,
+  "quickActionAddToShortcuts": true,
+  "quickActionPinNote": true,
+  "quickActionOpenInNewTab": false,
+  "useFrontmatterMetadata": true,
+  "frontmatterIconField": "icon",
+  "frontmatterColorField": "color",
+  "frontmatterBackgroundField": "background",
+  "frontmatterNameField": "title",
+  "frontmatterCreatedField": "dateCreated",
+  "frontmatterModifiedField": "dateModified",
+  "frontmatterDateFormat": "",
+  "showFileIcons": true,
+  "showFileIconUnfinishedTask": true,
+  "showFilenameMatchIcons": false,
+  "fileNameIconMap": {},
+  "showCategoryIcons": true,
+  "fileTypeIconMap": {},
+  "fileNameRows": 1,
+  "showFilePreview": true,
+  "skipHeadingsInPreview": true,
+  "skipCodeBlocksInPreview": true,
+  "stripHtmlInPreview": true,
+  "previewRows": 2,
+  "previewProperties": [],
+  "showFeatureImage": true,
+  "featureImageProperties": [],
+  "featureImageExcludeProperties": [],
+  "forceSquareFeatureImage": true,
+  "downloadExternalFeatureImages": true,
+  "showFileTags": true,
+  "colorFileTags": true,
+  "prioritizeColoredFileTags": true,
+  "showFileTagAncestors": false,
+  "showFileTagsInCompactMode": false,
+  "showFileProperties": true,
+  "colorFileProperties": true,
+  "prioritizeColoredFileProperties": true,
+  "notePropertyType": "none",
+  "showFilePropertiesInCompactMode": true,
+  "showPropertiesOnSeparateRows": false,
+  "showFileDate": false,
+  "alphabeticalDateMode": "modified",
+  "showParentFolder": false,
+  "parentFolderClickRevealsFile": false,
+  "showParentFolderColor": false,
+  "showParentFolderIcon": false,
+  "calendarPlacement": "left-sidebar",
+  "calendarConfirmBeforeCreate": true,
+  "calendarLocale": "system-default",
+  "calendarWeekendDays": "sat-sun",
+  "calendarHighlightToday": true,
+  "calendarShowFeatureImage": false,
+  "calendarShowWeekNumber": false,
+  "calendarShowQuarter": false,
+  "calendarShowYearCalendar": true,
+  "calendarLeftPlacement": "navigation",
+  "calendarWeeksToShow": 1,
+  "calendarIntegrationMode": "daily-notes",
+  "calendarCustomFilePattern": "YYYY-MM-DD",
+  "calendarCustomWeekPattern": "gggg/[W]ww",
+  "calendarCustomMonthPattern": "YYYY/YYYYMM",
+  "calendarCustomQuarterPattern": "YYYY/[Q]Q",
+  "calendarCustomYearPattern": "YYYY",
+  "calendarCustomFileTemplate": null,
+  "calendarCustomWeekTemplate": null,
+  "calendarCustomMonthTemplate": null,
+  "calendarCustomQuarterTemplate": null,
+  "calendarCustomYearTemplate": null,
+  "keyboardShortcuts": {
+    "pane:move-up": [
+      {
+        "key": "ArrowUp",
+        "modifiers": []
+      }
+    ],
+    "pane:move-down": [
+      {
+        "key": "ArrowDown",
+        "modifiers": []
+      }
+    ],
+    "pane:page-up": [
+      {
+        "key": "PageUp",
+        "modifiers": []
+      }
+    ],
+    "pane:page-down": [
+      {
+        "key": "PageDown",
+        "modifiers": []
+      }
+    ],
+    "pane:home": [
+      {
+        "key": "Home",
+        "modifiers": []
+      }
+    ],
+    "pane:end": [
+      {
+        "key": "End",
+        "modifiers": []
+      }
+    ],
+    "navigation:collapse-or-parent": [
+      {
+        "key": "ArrowLeft",
+        "modifiers": []
+      }
+    ],
+    "navigation:expand-or-focus-list": [
+      {
+        "key": "ArrowRight",
+        "modifiers": []
+      }
+    ],
+    "navigation:focus-list": [
+      {
+        "key": "Tab",
+        "modifiers": []
+      }
+    ],
+    "pane:delete-selected": [
+      {
+        "key": "Delete",
+        "modifiers": []
+      },
+      {
+        "key": "Backspace",
+        "modifiers": []
+      }
+    ],
+    "list:focus-navigation": [
+      {
+        "key": "ArrowLeft",
+        "modifiers": []
+      },
+      {
+        "key": "Tab",
+        "modifiers": [
+          "Shift"
+        ]
+      }
+    ],
+    "list:focus-editor": [
+      {
+        "key": "ArrowRight",
+        "modifiers": []
+      },
+      {
+        "key": "Tab",
+        "modifiers": []
+      }
+    ],
+    "list:select-all": [
+      {
+        "key": "A",
+        "modifiers": [
+          "Mod"
+        ]
+      }
+    ],
+    "list:extend-selection-up": [
+      {
+        "key": "ArrowUp",
+        "modifiers": [
+          "Shift"
+        ]
+      }
+    ],
+    "list:extend-selection-down": [
+      {
+        "key": "ArrowDown",
+        "modifiers": [
+          "Shift"
+        ]
+      }
+    ],
+    "list:range-to-start": [
+      {
+        "key": "Home",
+        "modifiers": [
+          "Shift"
+        ]
+      }
+    ],
+    "list:range-to-end": [
+      {
+        "key": "End",
+        "modifiers": [
+          "Shift"
+        ]
+      }
+    ],
+    "search:focus-list": [
+      {
+        "key": "Tab",
+        "modifiers": []
+      },
+      {
+        "key": "Enter",
+        "modifiers": []
+      }
+    ],
+    "search:focus-navigation": [
+      {
+        "key": "Tab",
+        "modifiers": [
+          "Shift"
+        ]
+      }
+    ],
+    "search:close": [
+      {
+        "key": "Escape",
+        "modifiers": []
+      }
+    ]
+  },
+  "customVaultName": "",
+  "pinnedNotes": {},
+  "fileIcons": {},
+  "fileColors": {},
+  "folderIcons": {
+    "Markdown/Action Items/Events": "calendar",
+    "Archive": "archive",
+    "Bases": "database",
+    "Canvas": "layout-dashboard",
+    "Markdown": "folder-tree",
+    "Markdown/Action Items": "folder-tree",
+    "Markdown/Notes": "folder-tree",
+    "Markdown/Action Items/Reminders": "clock-alert",
+    "Markdown/Action Items/Todo": "list-todo",
+    "Markdown/Action Items/Toget": "shopping-basket",
+    "Markdown/Daily Notes": "sun"
+  },
+  "folderColors": {},
+  "folderBackgroundColors": {},
+  "folderSortOverrides": {
+    "Markdown/Action Items": "property-asc",
+    "Markdown/Notes": "property-asc",
+    "/": "title-asc"
+  },
+  "folderTreeSortOverrides": {},
+  "folderAppearances": {},
+  "tagIcons": {
+    "__untagged__": "inbox"
+  },
+  "tagColors": {
+    "career": "#ef4444",
+    "assets": "#eab308",
+    "elective": "#a855f7"
+  },
+  "tagBackgroundColors": {},
+  "tagSortOverrides": {
+    "__tagged__": "property-asc"
+  },
+  "tagTreeSortOverrides": {},
+  "tagAppearances": {
+    "wo": {
+      "mode": "compact"
+    }
+  },
+  "propertyIcons": {
+    "key:status=open": "circle",
+    "key:status=working": "circle-dot",
+    "key:status=complete": "check-circle",
+    "key:status=wont-do": "circle-off",
+    "key:scheduled": "calendar",
+    "key:status": "emoji:❕",
+    "key:priority": "arrow-up-narrow-wide",
+    "key:location": "map-pin",
+    "key:due": "clock-alert"
+  },
+  "propertyColors": {
+    "key:status=wont-do": "#ffffff",
+    "key:status=open": "#ffffff",
+    "key:status=working": "#ffffff",
+    "key:status=complete": "#ffffff"
+  },
+  "propertyBackgroundColors": {
+    "key:status=complete": "#10b981",
+    "key:status=open": "#3b82f6",
+    "key:status=working": "#6366f1",
+    "key:status=wont-do": "#f59e0b"
+  },
+  "propertyTreeSortOverrides": {
+    "key:scheduled": "alpha-desc"
+  },
+  "navigationSeparators": {},
+  "userColors": [
+    "#ffffff",
+    "#d9d9d9",
+    "#a6a6a6",
+    "#737373",
+    "#000000",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040",
+    "#404040"
+  ],
+  "lastShownVersion": "2.4.2",
+  "rootFolderOrder": [],
+  "rootTagOrder": [],
+  "rootPropertyOrder": []
+}
