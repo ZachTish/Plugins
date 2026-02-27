@@ -1,0 +1,10 @@
+{
+  "id": "tps-global-context-menu",
+  "name": "TPS Global Context Menu",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Define a single reusable context menu for every note link across the vault.",
+  "author": "Codex",
+  "authorUrl": "https://example.com",
+  "isDesktopOnly": false
+}

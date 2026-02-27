@@ -1,0 +1,10 @@
+{
+	"id": "tps-notifier",
+	"name": "TPS Notifier",
+	"version": "v1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Two-way notifications via Telegram for an always-on vault.",
+	"author": "Zach Tisherman",
+	"authorUrl": "https://github.com/zachtisherman",
+	"main": "main.js"
+}

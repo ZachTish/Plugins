@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [16.x, 18.x, 20.x]
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Run type check
+      run: npm run type-check || npx tsc --noEmit
+      
+    - name: Run linting
+      run: npm run lint || echo "No lint script found"
+      
+    - name: Build plugin
+      run: npm run build
+      
+    - name: Check manifest validity
+      run: |
+        node -e "
+        const fs = require('fs');
+        const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+        const required = ['id', 'name', 'version', 'minAppVersion', 'description'];
+        required.forEach(field => {
+          if (!manifest[field]) throw new Error(\`Missing required field: \${field}\`);
+        });
+        console.log('✅ Manifest is valid');
+        "
+        
+    - name: Check required files
+      run: |
+        echo "Checking required files for BRAT..."
+        [ -f "main.js" ] || (echo "❌ main.js missing" && exit 1)
+        [ -f "manifest.json" ] || (echo "❌ manifest.json missing" && exit 1)
+        echo "✅ All required files present"
+        
+    - name: Check file sizes
+      run: |
+        echo "Checking file sizes..."
+        MAIN_SIZE=$(stat -c%s "main.js" 2>/dev/null || stat -f%z "main.js" 2>/dev/null)
+        if [ "$MAIN_SIZE" -gt 5000000 ]; then
+          echo "❌ main.js is too large: ${MAIN_SIZE} bytes (max 5MB)"
+          exit 1
+        fi
+        echo "✅ File sizes acceptable"
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run security audit
+      run: npm audit --audit-level moderate
+      
+    - name: Check for secrets
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD

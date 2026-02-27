@@ -1,0 +1,11 @@
+{
+  "id": "TPS-Smart-Explorer",
+  "name": "TPS - Smart Explorer",
+  "version": "v1.0.0",
+  "minAppVersion": "1.7.0",
+  "description": "Adds a second sidebar tab that mirrors the native File Explorer.",
+  "author": "Kilo Code",
+  "authorUrl": "https://example.com",
+  "isDesktopOnly": false,
+  "main": "main.js"
+}
