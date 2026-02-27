@@ -10,7 +10,7 @@ import {
     ruleHasMeaning,
     PRIORITY_KEYS,
     STATUS_KEYS
-} from "./style-rule-service";
+} from "./services/style-rule-service";
 
 export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     syncIntervalMinutes: 15,

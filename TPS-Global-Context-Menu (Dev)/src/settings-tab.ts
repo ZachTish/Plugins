@@ -1,7 +1,7 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from './main';
 import type { AppearanceSettingKey, ViewModeConditionOperator, ViewModeConditionType, ViewModeRule, ViewModeRuleCondition } from './types';
-import { PropertyProfilesModal } from './property-profile-modal';
+import { PropertyProfilesModal } from './modals/property-profile-modal';
 
 /**
  * Settings tab for the plugin

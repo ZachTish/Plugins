@@ -1,14 +1,14 @@
 import { Notice, Plugin, TFile, moment, WorkspaceLeaf, Modal, App } from 'obsidian';
 import * as logger from "./logger";
 import { NotificationView, NOTIFICATION_VIEW_TYPE } from './notification-view';
-import { OverdueItemsModal } from './overdue-modal';
+import { OverdueItemsModal } from './modals/overdue-modal';
 import { TPSNotifierSettings, PropertyReminder, OverdueItem } from './types';
 import { TPSNotifierSettingTab } from './settings-tab';
 import {
     parseDate, parseTimeRange, parseDuration, getEffectiveEndTime,
     formatTemplate, formatRemaining, checkStopCondition,
     normalizeStatus, getStatuses, hasRequiredStatus, shouldIgnoreForReminder
-} from './time-calculation-service';
+} from './services/time-calculation-service';
 
 // ============================================================================
 // TYPES & INTERFACES

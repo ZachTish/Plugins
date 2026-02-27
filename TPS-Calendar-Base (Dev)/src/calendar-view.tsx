@@ -24,7 +24,7 @@ import { StrictMode } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { CalendarReactView, CalendarEntry } from "./CalendarReactView";
 import { AppContext } from "./context";
-import { NewEventService } from "./new-event-service";
+import { NewEventService } from "./services/new-event-service";
 import { CalendarPluginBridge } from "./plugin-interface";
 import {
   DEFAULT_CONDENSE_LEVEL,
@@ -32,10 +32,10 @@ import {
   MAX_CONDENSE_LEVEL,
   formatDateTimeForFrontmatter,
 } from "./utils";
-import { ExternalCalendarService } from "./external-calendar-service";
+import { ExternalCalendarService } from "./services/external-calendar-service";
 import { CalendarViewMode, ExternalCalendarEvent } from "./types";
-import { ExternalEventModal, createMeetingNoteFromExternalEvent } from "./external-event-modal";
-import { applyParentLinkToChild, createBidirectionalLink } from "./parent-child-link";
+import { ExternalEventModal, createMeetingNoteFromExternalEvent } from "./modals/external-event-modal";
+import { applyParentLinkToChild, createBidirectionalLink } from "./services/parent-child-link";
 import * as logger from "./logger";
 
 export const CalendarViewType = "calendar";

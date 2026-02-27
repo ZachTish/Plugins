@@ -6,12 +6,12 @@ import {
   CalendarField,
   CalendarOperator,
 } from "./types";
-import { CalendarStyleBuilderModal } from "./visual-builder";
+import { CalendarStyleBuilderModal } from "./services/visual-builder";
 import {
   DEFAULT_MATCH,
   CALENDAR_OPERATORS,
   createDefaultCondition,
-} from "./style-rule-service";
+} from "./services/style-rule-service";
 import { normalizeCalendarUrl } from "./utils";
 import { createCollapsibleSection } from "./ui/section-helpers";
 import { renderListWithControls } from "./ui/list-renderer";

@@ -1,6 +1,6 @@
 import { ItemView, WorkspaceLeaf, TFile, IconName, Menu, setIcon, debounce, moment } from 'obsidian';
 import { OverdueItem, TPSNotifierSettings } from './types';
-import { SnoozeModal } from './snooze-modal';
+import { SnoozeModal } from './modals/snooze-modal';
 
 export const NOTIFICATION_VIEW_TYPE = 'tps-notification-view';
 

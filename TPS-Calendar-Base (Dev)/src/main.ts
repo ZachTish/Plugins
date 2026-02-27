@@ -2,14 +2,14 @@ import { Notice, Plugin, TFile, MarkdownView } from "obsidian";
 import { CalendarView, CalendarViewType } from "./calendar-view";
 import { DEFAULT_CONDENSE_LEVEL } from "./utils";
 import { CalendarPluginBridge } from "./plugin-interface";
-import { ExternalCalendarService } from "./external-calendar-service";
+import { ExternalCalendarService } from "./services/external-calendar-service";
 import { CalendarStyleRule } from "./types";
 import { CalendarPluginSettingsTab } from "./settings-tab";
-import { removeChildLinkFromParent } from "./parent-child-link";
+import { removeChildLinkFromParent } from "./services/parent-child-link";
 import {
   createDefaultCondition,
   findStyleOverride,
-} from "./style-rule-service";
+} from "./services/style-rule-service";
 import { normalizeCalendarUrl, normalizeCalendarTag } from "./utils";
 import { ExternalCalendarConfig, CalendarPluginSettings } from "./types";
 import { DEFAULT_SETTINGS, migrateSettings } from "./settings-migration";

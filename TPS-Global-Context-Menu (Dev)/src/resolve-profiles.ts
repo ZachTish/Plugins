@@ -1,5 +1,5 @@
 import { CustomProperty, CustomPropertyProfile } from './types';
-import { ViewModeService } from './view-mode-service';
+import { ViewModeService } from './services/view-mode-service';
 import * as logger from './logger';
 
 export function resolveCustomProperties(
