@@ -1,0 +1,359 @@
+/* ============================================
+   TPS Canvas Notes - Styles
+   ============================================ */
+
+/* ============================================
+   LIVE PREVIEW - Card Lines
+   ============================================ */
+
+.tps-canvas-card-line {
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 4px solid var(--interactive-accent-hover);
+  padding: 16px 24px;
+  margin: 2px 0;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.tps-canvas-card-line:first-of-type {
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+  margin-top: 16px;
+  padding-top: 20px;
+}
+
+.tps-canvas-card-line:last-of-type {
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 20px;
+}
+
+.tps-canvas-card-line:hover {
+  background: var(--background-modifier-hover);
+  border-left-color: var(--interactive-accent);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+  cursor: grab;
+}
+
+.tps-canvas-card-line:active {
+  cursor: grabbing;
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+/* Empty card state */
+.tps-canvas-card-empty {
+  min-height: 120px;
+  background: var(--background-secondary) !important;
+  border: 2px dashed var(--background-modifier-border) !important;
+  border-left: 4px dashed var(--text-faint) !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+}
+
+.tps-canvas-card-empty::before {
+  content: '✏️ Click to start typing...';
+  color: var(--text-faint);
+  font-size: 1em;
+  font-style: italic;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* Hide card delimiters (---) */
+.tps-card-delimiter-hidden {
+  display: none;
+}
+
+/* Hide empty lines between cards for cleaner appearance */
+.tps-canvas-card-line + .cm-line:empty {
+  display: none;
+}
+
+/* Also hide empty lines before the first card */
+.cm-line:empty + .tps-canvas-card-line {
+  margin-top: 0;
+}
+
+/* Hide empty lines between card boundary and next card */
+.tps-card-delimiter-hidden + .cm-line:empty {
+  display: none;
+}
+
+/* ============================================
+   LIVE PREVIEW - Card Menu Button
+   ============================================ */
+
+.tps-card-menu-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 8px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease;
+  vertical-align: middle;
+}
+
+.tps-canvas-card-line:hover .tps-card-menu-button {
+  opacity: 1;
+}
+
+.tps-card-menu-button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.tps-card-menu-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ============================================
+   LIVE PREVIEW - Insertion Zones
+   ============================================ */
+
+.tps-card-insertion-zone {
+  min-height: 32px;
+  width: 100%;
+  margin: 12px 0;
+  background: transparent;
+  border-radius: 8px;
+  border: 2px dashed transparent;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tps-card-insertion-zone:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent-hover);
+  min-height: 48px;
+}
+
+.tps-card-insertion-zone::before {
+  content: '+ Click to add a new card';
+  display: block;
+  text-align: center;
+  padding: 8px 0;
+  opacity: 0;
+  font-size: 0.95em;
+  font-weight: 500;
+  color: var(--interactive-accent);
+  transition: opacity 0.2s ease;
+}
+
+.tps-card-insertion-zone:hover::before {
+  opacity: 0.8;
+}
+
+/* ============================================
+   DRAG & DROP States (Live Preview)
+   ============================================ */
+
+.tps-card-dragging {
+  opacity: 0.4;
+  background: var(--background-modifier-border) !important;
+}
+
+.tps-card-drop-target {
+  border-left-color: var(--interactive-accent) !important;
+  border-left-width: 4px !important;
+  background: var(--interactive-accent-hover) !important;
+}
+
+/* ============================================
+   READING MODE - Cards
+   ============================================ */
+
+.tps-canvas-reading-container {
+  padding: 12px 0;
+}
+
+.tps-canvas-card {
+  position: relative;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+  background: var(--background-primary-alt);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  cursor: grab;
+}
+
+.tps-canvas-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-color: var(--interactive-accent);
+}
+
+.tps-canvas-card:active {
+  cursor: grabbing;
+}
+
+/* Empty cards in reading mode */
+.tps-canvas-card.tps-canvas-card-empty {
+  min-height: 80px;
+  background: var(--background-secondary);
+  border-style: dashed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tps-canvas-card.tps-canvas-card-empty::before {
+  content: 'Empty card';
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* Card content wrapper */
+.tps-canvas-card-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* Menu button in reading mode */
+.tps-canvas-card .tps-card-menu-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0;
+  z-index: 10;
+}
+
+.tps-canvas-card:hover .tps-card-menu-button {
+  opacity: 1;
+}
+
+/* ============================================
+   READING MODE - Insertion Zones
+   ============================================ */
+
+.tps-canvas-reading-container .tps-card-insertion-zone {
+  min-height: 24px;
+  margin: 8px 0;
+  background: transparent;
+  border: 2px dashed transparent;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tps-canvas-reading-container .tps-card-insertion-zone:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--background-modifier-border);
+  min-height: 40px;
+}
+
+.tps-canvas-reading-container .tps-card-insertion-zone::before {
+  content: '+ Add card';
+  opacity: 0;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  transition: opacity 0.2s ease;
+}
+
+.tps-canvas-reading-container .tps-card-insertion-zone:hover::before {
+  opacity: 1;
+}
+
+/* ============================================
+   READING MODE - Drag States
+   ============================================ */
+
+.tps-canvas-card.tps-card-dragging {
+  opacity: 0.4;
+  transform: scale(0.98);
+}
+
+.tps-canvas-card.tps-card-drop-target {
+  border-color: var(--interactive-accent);
+  border-width: 2px;
+  background: var(--interactive-accent-hover);
+}
+
+/* ============================================
+   MOBILE ADJUSTMENTS
+   ============================================ */
+
+@media (max-width: 768px) {
+  .tps-canvas-card {
+    padding: 12px;
+  }
+
+  .tps-card-menu-button {
+    opacity: 1; /* Always show on mobile */
+  }
+
+  .tps-card-insertion-zone::before {
+    opacity: 1; /* Always show on mobile */
+  }
+}
+
+/* ============================================
+   THEME COMPATIBILITY
+   ============================================ */
+
+/* Ensure cards work in dark mode */
+.theme-dark .tps-canvas-card,
+.theme-dark .tps-canvas-card-line {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.theme-dark .tps-canvas-card:hover,
+.theme-dark .tps-canvas-card-line:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* ============================================
+   ACCESSIBILITY
+   ============================================ */
+
+.tps-card-menu-button:focus {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  opacity: 1;
+}
+
+.tps-card-insertion-zone:focus {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  background: var(--background-modifier-hover);
+}
+
+/* ============================================
+   SETTINGS-BASED VISIBILITY
+   ============================================ */
+
+/* Hide insertion zones by default if set to hover-only */
+body[data-tps-insertion-visibility="hover"] .tps-card-insertion-zone:not(:hover) {
+  min-height: 4px;
+}
+
+body[data-tps-insertion-visibility="hover"] .tps-card-insertion-zone:not(:hover)::before {
+  display: none;
+}
+
+/* Hide insertion zones completely if set to drag-only */
+body[data-tps-insertion-visibility="drag-only"] .tps-card-insertion-zone {
+  display: none;
+}
+
+body[data-tps-insertion-visibility="drag-only"].tps-is-dragging .tps-card-insertion-zone {
+  display: flex;
+}

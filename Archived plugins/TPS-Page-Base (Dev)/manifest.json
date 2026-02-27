@@ -1,0 +1,9 @@
+{
+  "id": "tps-page-base",
+  "name": "TPS Page Base",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Display all Base entries as a seamless scrollable page",
+  "author": "Codex",
+  "isDesktopOnly": false
+}

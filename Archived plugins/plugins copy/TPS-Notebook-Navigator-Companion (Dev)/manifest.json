@@ -1,0 +1,10 @@
+{
+  "id": "tps-notebook-navigator-companion",
+  "name": "TPS Notebook Navigator Companion",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Rule-based frontmatter icon/color automation for Notebook Navigator.",
+  "author": "Codex",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}

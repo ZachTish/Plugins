@@ -1,0 +1,1278 @@
+{
+  "enabled": true,
+  "autoApplyOnFileOpen": true,
+  "autoApplyOnMetadataChange": true,
+  "applyOnStartup": true,
+  "startupDelayMs": 800,
+  "metadataDebounceMs": 350,
+  "frontmatterIconField": "icon",
+  "frontmatterColorField": "color",
+  "upstreamLinkKeys": [
+    "parent",
+    "attachments"
+  ],
+  "frontmatterWriteExclusions": "*/Templates/*.md",
+  "noteCheckboxIconColor": "#e62828",
+  "clearIconWhenNoMatch": true,
+  "clearColorWhenNoMatch": true,
+  "debugLogging": false,
+  "rules": [
+    {
+      "id": "rule-1770935476138-q9npl05",
+      "name": "",
+      "enabled": true,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide:archive",
+      "color": "#868d86",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "tag",
+          "field": "",
+          "operator": "contains",
+          "value": "archive"
+        }
+      ]
+    },
+    {
+      "id": "rule-1771100744432-8j9wclf",
+      "name": "",
+      "enabled": true,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "System/Archive",
+      "icon": "lucide:sun",
+      "color": "#91a159",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Daily Notes"
+        },
+        {
+          "source": "name",
+          "field": "",
+          "operator": "contains",
+          "value": "-"
+        }
+      ]
+    },
+    {
+      "id": "rule-1770922305828-lq1x5wa",
+      "name": "",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "wont-do",
+      "pathPrefix": "",
+      "icon": "square-x",
+      "color": "#7c8488",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770918794071-34zkd54",
+      "name": "",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "complete",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "lucide:check-square-2",
+      "color": "#509636",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-parent-icon",
+      "name": "",
+      "enabled": true,
+      "property": "status",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "Action Items",
+      "icon": "lucide:folder-tree",
+      "color": "#a155d9",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "backlink",
+          "field": "parent",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!contains",
+          "value": "complete"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!contains",
+          "value": "wont-do"
+        }
+      ]
+    },
+    {
+      "id": "rule-1771366663182-aya0frp",
+      "name": "",
+      "enabled": true,
+      "property": "scheduled",
+      "operator": "!is",
+      "value": "",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "lucide:calendar",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "is-not-empty",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "rule-1770919759005-ss37o65",
+      "name": "",
+      "enabled": true,
+      "property": "status",
+      "operator": "!is",
+      "value": "",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "lucide-box-select",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "path",
+          "field": "",
+          "operator": "starts",
+          "value": "Markdown/Action Items"
+        }
+      ]
+    },
+    {
+      "id": "rule-1770919820871-i1lc2k1",
+      "name": "",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "high",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#b94b4b",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770921527111-w0llft4",
+      "name": "",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "normal",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#4c76ae",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770921549949-wdo8uul",
+      "name": "",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "low",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#919191",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770921568202-jo37jsz",
+      "name": "",
+      "enabled": true,
+      "property": "Priority",
+      "operator": "is",
+      "value": "medium",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#9fab3f",
+      "match": "all",
+      "conditions": []
+    },
+    {
+      "id": "rule-1770919731602-yqk5jbc",
+      "name": "",
+      "enabled": true,
+      "property": "folderpath",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide:file-text",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is-not-empty",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "rule-1771946846483-j9frszr",
+      "name": "",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide:triangle-alert",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "is",
+          "value": "md"
+        }
+      ]
+    }
+  ],
+  "smartSort": {
+    "enabled": true,
+    "field": "sort",
+    "separator": "_",
+    "appendBasename": true,
+    "clearWhenNoMatch": false,
+    "buckets": [
+      {
+        "id": "bucket-001-today-dailynote",
+        "enabled": true,
+        "name": "Today's Dailynote",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Daily Notes"
+          },
+          {
+            "source": "name",
+            "field": "",
+            "operator": "is-today",
+            "value": ""
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "last"
+          }
+        ]
+      },
+      {
+        "id": "bucket-003-scheduled-week-high",
+        "enabled": true,
+        "name": "Scheduled today",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "is-today",
+            "value": ""
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "complete"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "wont-do"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "Daily Notes"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "hide"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "last"
+          }
+        ]
+      },
+      {
+        "id": "bucket-005-action-open-subitems",
+        "enabled": true,
+        "name": "projects",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Action Items"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "complete"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "wont-do"
+          },
+          {
+            "source": "backlink",
+            "field": "parent",
+            "operator": "exists",
+            "value": ""
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "hide"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "type": "status",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "working",
+                "output": "001"
+              },
+              {
+                "input": "open",
+                "output": "002"
+              },
+              {
+                "input": "blocked",
+                "output": "003"
+              },
+              {
+                "input": "complete",
+                "output": "004"
+              },
+              {
+                "input": "wont-do",
+                "output": "005"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "priority",
+            "type": "priority",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "high",
+                "output": "001"
+              },
+              {
+                "input": "medium",
+                "output": "002"
+              },
+              {
+                "input": "normal",
+                "output": "003"
+              },
+              {
+                "input": "low",
+                "output": "004"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "first"
+          }
+        ]
+      },
+      {
+        "id": "bucket-002-scheduled-next5days",
+        "enabled": true,
+        "name": "Scheduled Next 7 Days (Any Priority)",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "within-next-days",
+            "value": "7"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "complete"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "wont-do"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Action Items"
+          },
+          {
+            "source": "frontmatter",
+            "field": "priority",
+            "operator": "!is",
+            "value": "low"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "last"
+          }
+        ]
+      },
+      {
+        "id": "bucket-006-action-no-open",
+        "enabled": true,
+        "name": "Tasks",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Action Items"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "complete"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "wont-do"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "hide"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "!is-before-today",
+            "value": ""
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "!is-after-today",
+            "value": ""
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "!is-today",
+            "value": ""
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "type": "status",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "working",
+                "output": "001"
+              },
+              {
+                "input": "open",
+                "output": "002"
+              },
+              {
+                "input": "blocked",
+                "output": "003"
+              },
+              {
+                "input": "complete",
+                "output": "004"
+              },
+              {
+                "input": "wont-do",
+                "output": "005"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "priority",
+            "type": "priority",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "high",
+                "output": "001"
+              },
+              {
+                "input": "medium",
+                "output": "002"
+              },
+              {
+                "input": "normal",
+                "output": "003"
+              },
+              {
+                "input": "low",
+                "output": "004"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "first"
+          }
+        ]
+      },
+      {
+        "id": "bucket-1771859251482-e2uniub",
+        "enabled": true,
+        "name": "Tasks (copy)",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Action Items"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "wont-do"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "frontmatter",
+            "field": "parent",
+            "operator": "contains",
+            "value": "[["
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "type": "status",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "working",
+                "output": "001"
+              },
+              {
+                "input": "open",
+                "output": "002"
+              },
+              {
+                "input": "blocked",
+                "output": "003"
+              },
+              {
+                "input": "complete",
+                "output": "004"
+              },
+              {
+                "input": "wont-do",
+                "output": "005"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "priority",
+            "type": "priority",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "high",
+                "output": "001"
+              },
+              {
+                "input": "medium",
+                "output": "002"
+              },
+              {
+                "input": "normal",
+                "output": "003"
+              },
+              {
+                "input": "low",
+                "output": "004"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "first"
+          }
+        ]
+      },
+      {
+        "id": "bucket-1771858340888-piqlmzj",
+        "enabled": true,
+        "name": "Notes",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "Action Items"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "complete"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "wont-do"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "hide"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Markdown"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "Daily Notes"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "Template"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "type": "status",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "working",
+                "output": "001"
+              },
+              {
+                "input": "open",
+                "output": "002"
+              },
+              {
+                "input": "blocked",
+                "output": "003"
+              },
+              {
+                "input": "complete",
+                "output": "004"
+              },
+              {
+                "input": "wont-do",
+                "output": "005"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "priority",
+            "type": "priority",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "high",
+                "output": "001"
+              },
+              {
+                "input": "medium",
+                "output": "002"
+              },
+              {
+                "input": "normal",
+                "output": "003"
+              },
+              {
+                "input": "low",
+                "output": "004"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "first"
+          }
+        ]
+      },
+      {
+        "id": "bucket-1771858437749-s00lxsi",
+        "enabled": true,
+        "name": "DN and task far past",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "complete"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "wont-do"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "hide"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Markdown"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "Templates"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "is-before-today",
+            "value": ""
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "type": "status",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "working",
+                "output": "001"
+              },
+              {
+                "input": "open",
+                "output": "002"
+              },
+              {
+                "input": "blocked",
+                "output": "003"
+              },
+              {
+                "input": "complete",
+                "output": "004"
+              },
+              {
+                "input": "wont-do",
+                "output": "005"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "priority",
+            "type": "priority",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "high",
+                "output": "001"
+              },
+              {
+                "input": "medium",
+                "output": "002"
+              },
+              {
+                "input": "normal",
+                "output": "003"
+              },
+              {
+                "input": "low",
+                "output": "004"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "first"
+          }
+        ]
+      },
+      {
+        "id": "bucket-1771858967869-cj6gpcy",
+        "enabled": true,
+        "name": "task far future",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "complete"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "wont-do"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "hide"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Markdown"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "Templates"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "is-before-today",
+            "value": ""
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "type": "status",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "working",
+                "output": "001"
+              },
+              {
+                "input": "open",
+                "output": "002"
+              },
+              {
+                "input": "blocked",
+                "output": "003"
+              },
+              {
+                "input": "complete",
+                "output": "004"
+              },
+              {
+                "input": "wont-do",
+                "output": "005"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "priority",
+            "type": "priority",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "high",
+                "output": "001"
+              },
+              {
+                "input": "medium",
+                "output": "002"
+              },
+              {
+                "input": "normal",
+                "output": "003"
+              },
+              {
+                "input": "low",
+                "output": "004"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "first"
+          }
+        ]
+      },
+      {
+        "id": "bucket-1771857842156-6ifj3xg",
+        "enabled": true,
+        "name": "Templates",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Templates"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "name",
+            "field": "",
+            "type": "text",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "last"
+          }
+        ]
+      },
+      {
+        "id": "bucket-1771859103663-mgf3qn8",
+        "enabled": true,
+        "name": "Attachments",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "extension",
+            "field": "",
+            "operator": "!is",
+            "value": "md"
+          }
+        ],
+        "sortCriteria": []
+      },
+      {
+        "id": "bucket-013-archive",
+        "enabled": true,
+        "name": "Bottom",
+        "match": "any",
+        "conditions": [
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "contains",
+            "value": "archive"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Archive"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "contains",
+            "value": "hide"
+          }
+        ],
+        "sortCriteria": []
+      }
+    ]
+  },
+  "hideRules": [
+    {
+      "id": "hide-rule-1771423445868",
+      "name": "New Hide Rule",
+      "enabled": true,
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Action Items"
+        },
+        {
+          "source": "body",
+          "field": "",
+          "operator": "!has-open-checkboxes",
+          "value": ""
+        }
+      ],
+      "mode": "add",
+      "tagName": "hide"
+    },
+    {
+      "id": "hide-rule-1771423503959",
+      "name": "New Hide Rule",
+      "enabled": true,
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "wont-do"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Action Items"
+        },
+        {
+          "source": "body",
+          "field": "",
+          "operator": "!has-open-checkboxes",
+          "value": ""
+        }
+      ],
+      "mode": "add",
+      "tagName": "hide"
+    },
+    {
+      "id": "hide-rule-1771520501880",
+      "name": "New Hide Rule",
+      "enabled": true,
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "parent",
+          "operator": "contains",
+          "value": "[["
+        },
+        {
+          "source": "body",
+          "field": "",
+          "operator": "!has-open-checkboxes",
+          "value": ""
+        }
+      ],
+      "mode": "add",
+      "tagName": "hide"
+    },
+    {
+      "id": "hide-rule-1771974341284",
+      "name": "New Hide Rule",
+      "enabled": true,
+      "match": "all",
+      "conditions": [
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Daily Note"
+        },
+        {
+          "source": "name",
+          "field": "",
+          "operator": "!is-today",
+          "value": ""
+        },
+        {
+          "source": "body",
+          "field": "",
+          "operator": "!has-open-checkboxes",
+          "value": ""
+        }
+      ],
+      "mode": "add",
+      "tagName": "hide"
+    },
+    {
+      "id": "hide-rule-1771974474716",
+      "name": "New Hide Rule",
+      "enabled": true,
+      "match": "any",
+      "conditions": [
+        {
+          "source": "body",
+          "field": "",
+          "operator": "has-open-checkboxes",
+          "value": ""
+        }
+      ],
+      "mode": "remove",
+      "tagName": "hide"
+    }
+  ]
+}

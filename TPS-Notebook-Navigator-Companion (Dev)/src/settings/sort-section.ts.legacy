@@ -1,0 +1,841 @@
+import { Menu, Setting } from "obsidian";
+import { RuleCondition, SortSegmentRule } from "../types";
+import {
+  createDefaultCondition,
+  getConditionValuePlaceholder,
+  normalizeConditionSource,
+  normalizeRuleMatchMode,
+  normalizeSmartOperator,
+  parseMappings,
+  SettingsSectionContext,
+  stringifyMappings
+} from "./ui-common";
+
+let selectedSegmentId: string | null = null;
+let segmentFilterQuery = "";
+
+const PRIORITY_MAPPING = "high=001, normal=002, low=003";
+const BOOL_MAPPING = "true=001, false=002";
+const STATUS_MAPPING = "open=001, working=002, complete=003, wont-do=004";
+const DATE_MISSING_LAST = "9999-12-31";
+const DATE_MISSING_FIRST = "0000-00-00";
+
+export class SortSectionRenderer {
+  private readonly context: SettingsSectionContext;
+
+  constructor(context: SettingsSectionContext) {
+    this.context = context;
+  }
+
+  render(container: HTMLElement): void {
+    const { plugin, bindCommittedText, refresh } = this.context;
+    const section = container.createDiv({ cls: "tps-nn-section" });
+
+    section.createEl("h3", { text: "Smart Sort Key" });
+    section.createEl("p", {
+      cls: "setting-item-description",
+      text: "Notebook Navigator sorts custom properties lexicographically (A-Z). Build fixed-width string keys."
+    });
+    section.createEl("div", {
+      cls: "tps-nn-callout",
+      text: "Use mappings like high=001, normal=002, low=003 to get stable logical order."
+    });
+
+    const preview = plugin.getSmartSortPreviewForActiveFile();
+    section.createEl("p", {
+      cls: "setting-item-description",
+      text: preview ? `Active note key preview: ${preview}` : "Active note key preview: (unavailable)"
+    });
+
+    const smartSort = plugin.settings.smartSort;
+
+    new Setting(section)
+      .setName("Enable smart sort key")
+      .setDesc("Write computed sort key to frontmatter.")
+      .addToggle((toggle) => {
+        toggle
+          .setValue(smartSort.enabled)
+          .onChange(async (value) => {
+            smartSort.enabled = value;
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          });
+      });
+
+    new Setting(section)
+      .setName("Sort key field")
+      .setDesc("Frontmatter key for computed sort key.")
+      .addText((text) => {
+        text.setPlaceholder("navigator_sort");
+        bindCommittedText(text, smartSort.field, async (value) => {
+          smartSort.field = value.trim().replace(/\s+/g, "") || "navigator_sort";
+        }, false, true);
+      });
+
+    new Setting(section)
+      .setName("Segment separator")
+      .setDesc("Delimiter used to join segments.")
+      .addText((text) => {
+        text.setPlaceholder("_");
+        bindCommittedText(text, smartSort.separator, async (value) => {
+          const trimmed = value.trim();
+          smartSort.separator = trimmed.slice(0, 3) || "_";
+        }, false, true);
+      });
+
+    new Setting(section)
+      .setName("Append basename")
+      .setDesc("Append note basename as final segment.")
+      .addToggle((toggle) => {
+        toggle
+          .setValue(smartSort.appendBasename)
+          .onChange(async (value) => {
+            smartSort.appendBasename = value;
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          });
+      });
+
+    new Setting(section)
+      .setName("Clear key when empty")
+      .setDesc("Remove sort field when no segment produced a value.")
+      .addToggle((toggle) => {
+        toggle
+          .setValue(smartSort.clearWhenNoMatch)
+          .onChange(async (value) => {
+            smartSort.clearWhenNoMatch = value;
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          });
+      });
+
+    const toolbar = section.createDiv({ cls: "tps-nn-toolbar" });
+    this.createActionButton(toolbar, "+ Add segment", async () => {
+      const segment = plugin.createDefaultSortSegment();
+      plugin.settings.smartSort.segments.push(segment);
+      selectedSegmentId = segment.id;
+      await plugin.saveSettings();
+      refresh();
+    }, true);
+    this.createActionButton(toolbar, "Apply active note", async () => {
+      await plugin.applyRulesToActiveFile(true);
+    });
+
+    if (smartSort.segments.length === 0) {
+      section.createEl("p", {
+        cls: "setting-item-description",
+        text: "No sort segments configured."
+      });
+      return;
+    }
+
+    const selected = this.getSelectedSegment(smartSort.segments);
+    if (!selected) {
+      return;
+    }
+
+    const shell = section.createDiv({ cls: "tps-nn-split" });
+    const listPane = shell.createDiv({ cls: "tps-nn-list-pane" });
+    const editorPane = shell.createDiv({ cls: "tps-nn-editor-pane" });
+
+    const filterRow = listPane.createDiv({ cls: "tps-nn-toolbar" });
+    const filterInput = filterRow.createEl("input", {
+      cls: "tps-nn-filter-input",
+      attr: {
+        type: "search",
+        placeholder: "Filter segments..."
+      }
+    });
+    filterInput.value = segmentFilterQuery;
+    filterInput.addEventListener("input", () => {
+      segmentFilterQuery = filterInput.value.trim().toLowerCase();
+      refresh();
+    });
+
+    const visibleSegments = smartSort.segments
+      .map((segment, index) => ({ segment, index }))
+      .filter(({ segment, index }) => this.matchesSegmentFilter(segment, index + 1, segmentFilterQuery));
+
+    if (visibleSegments.length === 0) {
+      listPane.createEl("p", {
+        cls: "setting-item-description",
+        text: "No segments match the current filter."
+      });
+    } else {
+      visibleSegments.forEach(({ segment, index }) => {
+        this.renderSegmentListItem(listPane, segment, index, selected.id);
+      });
+    }
+
+    this.renderSegmentEditor(editorPane, selected.segment, selected.index);
+  }
+
+  private renderSegmentListItem(
+    listPane: HTMLElement,
+    segment: SortSegmentRule,
+    index: number,
+    activeId: string
+  ): void {
+    const row = listPane.createEl("button", { cls: "tps-nn-list-item" });
+    row.type = "button";
+    if (segment.id === activeId) {
+      row.addClass("is-active");
+    }
+    row.addEventListener("click", () => {
+      selectedSegmentId = segment.id;
+      this.context.refresh();
+    });
+
+    row.createDiv({ cls: "tps-nn-list-item-title", text: `Segment ${index + 1}` });
+    row.createDiv({ cls: "tps-nn-list-item-summary", text: this.getSegmentSummary(segment) });
+
+    row.createDiv({
+      cls: "tps-nn-list-item-summary",
+      text: segment.enabled ? "Enabled" : "Disabled"
+    });
+  }
+
+  private renderSegmentEditor(editorPane: HTMLElement, segment: SortSegmentRule, index: number): void {
+    const { plugin, bindCommittedText, refresh } = this.context;
+    const segmentId = segment.id;
+    editorPane.createEl("h4", { text: `Editing Segment ${index + 1}` });
+
+    const topBar = editorPane.createDiv({ cls: "tps-nn-toolbar" });
+    this.createActionButton(topBar, "Previous", async () => {
+      const previousIndex = Math.max(0, index - 1);
+      const previous = plugin.settings.smartSort.segments[previousIndex];
+      if (!previous) {
+        return;
+      }
+      selectedSegmentId = previous.id;
+      refresh();
+    }, false, index === 0);
+    this.createActionButton(topBar, "Next", async () => {
+      const nextIndex = Math.min(plugin.settings.smartSort.segments.length - 1, index + 1);
+      const next = plugin.settings.smartSort.segments[nextIndex];
+      if (!next) {
+        return;
+      }
+      selectedSegmentId = next.id;
+      refresh();
+    }, false, index >= plugin.settings.smartSort.segments.length - 1);
+    this.createMenuButton(topBar, "Segment actions", (triggerEl) => {
+      this.openSegmentActionsMenu(triggerEl, segment, index);
+    });
+    this.createMenuButton(topBar, "Mapping presets", (triggerEl) => {
+      this.openMappingPresetMenu(triggerEl, segment);
+    });
+
+    new Setting(editorPane)
+      .setName("Enabled")
+      .setDesc("Disable this segment without deleting it.")
+      .addToggle((toggle) => {
+        toggle
+          .setValue(segment.enabled)
+          .onChange(async (value) => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.enabled = value;
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          });
+      });
+
+    new Setting(editorPane)
+      .setName("Source")
+      .setDesc("Where this segment value is read from.")
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("frontmatter", "frontmatter")
+          .addOption("path", "path")
+          .addOption("name", "name")
+          .addOption("extension", "extension")
+          .addOption("tag", "tag")
+          .setValue(segment.source)
+          .onChange(async (value) => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.source = normalizeConditionSource(value);
+            if (live.source !== "frontmatter") {
+              live.field = "";
+            } else if (!live.field) {
+              live.field = "status";
+            }
+            await plugin.saveSettings();
+            refresh();
+          });
+      });
+
+    if (segment.source === "frontmatter") {
+      new Setting(editorPane)
+        .setName("Frontmatter field")
+        .addText((text) => {
+          text.setPlaceholder("priority");
+          bindCommittedText(text, segment.field, async (value) => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.field = value.trim();
+          }, false, true);
+        });
+    }
+
+    new Setting(editorPane)
+      .setName("Fallback value")
+      .setDesc("Used when source has no value.")
+      .addText((text) => {
+        text.setPlaceholder("999");
+        bindCommittedText(text, segment.fallback, async (value) => {
+          const live = this.getLiveSegment(segmentId);
+          if (!live) {
+            return;
+          }
+          live.fallback = value.trim();
+        }, false, true);
+      });
+
+    new Setting(editorPane)
+      .setName("Value mappings")
+      .setDesc("Format: source=output pairs. Example: high=001, normal=002, low=003.")
+      .addText((text) => {
+        text.setPlaceholder("high=001, normal=002, low=003");
+        bindCommittedText(text, stringifyMappings(segment.mappings), async (value) => {
+          const live = this.getLiveSegment(segmentId);
+          if (!live) {
+            return;
+          }
+          live.mappings = parseMappings(value);
+        }, false, true);
+      });
+
+    this.renderSegmentConditions(editorPane, segmentId, segment);
+  }
+
+  private renderSegmentConditions(editorPane: HTMLElement, segmentId: string, segment: SortSegmentRule): void {
+    const { plugin, refresh } = this.context;
+    segment.match = normalizeRuleMatchMode(segment.match);
+    const conditions = this.ensureSegmentConditions(segment);
+
+    const panel = editorPane.createEl("details", { cls: "tps-nn-sub-collapsible" });
+    panel.open = conditions.length > 0;
+    panel.createEl("summary", { text: "Segment conditions (optional)" });
+    const content = panel.createDiv({ cls: "tps-nn-sub-body" });
+
+    new Setting(content)
+      .setName("Match mode")
+      .setDesc("If no conditions are configured, this segment always applies.")
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("all", "All conditions")
+          .addOption("any", "Any condition")
+          .setValue(segment.match)
+          .onChange(async (value) => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.match = normalizeRuleMatchMode(value);
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+          });
+      });
+
+    if (conditions.length === 0) {
+      content.createEl("p", {
+        cls: "setting-item-description",
+        text: "No conditions configured; this segment applies to all notes."
+      });
+    }
+
+    conditions.forEach((condition, conditionIndex) => {
+      const conditionCard = content.createDiv({ cls: "tps-nn-condition-card" });
+      const head = conditionCard.createDiv({ cls: "tps-nn-condition-head" });
+      head.createEl("strong", { text: `Condition ${conditionIndex + 1}` });
+      const deleteButton = head.createEl("button", { text: "Delete", cls: "tps-nn-compact-btn" });
+      deleteButton.type = "button";
+      deleteButton.addEventListener("click", () => {
+        void (async () => {
+          const live = this.getLiveSegment(segmentId);
+          if (!live) {
+            return;
+          }
+          live.conditions = this.ensureSegmentConditions(live).filter((_, idx) => idx !== conditionIndex);
+          await plugin.saveSettings();
+          await plugin.applyRulesToActiveFile(false);
+          refresh();
+        })();
+      });
+
+      const grid = conditionCard.createDiv({ cls: "tps-nn-condition-grid" });
+
+      const sourceWrap = grid.createDiv({ cls: "tps-nn-condition-field" });
+      sourceWrap.createEl("label", { text: "Source" });
+      const sourceSelect = sourceWrap.createEl("select");
+      for (const source of ["frontmatter", "path", "extension", "name", "tag"]) {
+        sourceSelect.createEl("option", { value: source, text: source });
+      }
+      sourceSelect.value = condition.source;
+      sourceSelect.addEventListener("change", () => {
+        void (async () => {
+          const live = this.getLiveSegment(segmentId);
+          if (!live) {
+            return;
+          }
+          const liveCondition = this.ensureSegmentConditions(live)[conditionIndex];
+          if (!liveCondition) {
+            return;
+          }
+          liveCondition.source = normalizeConditionSource(sourceSelect.value);
+          if (liveCondition.source !== "frontmatter") {
+            liveCondition.field = "";
+          }
+          await plugin.saveSettings();
+          await plugin.applyRulesToActiveFile(false);
+          refresh();
+        })();
+      });
+
+      const operatorWrap = grid.createDiv({ cls: "tps-nn-condition-field" });
+      operatorWrap.createEl("label", { text: "Operator" });
+      const operatorSelect = operatorWrap.createEl("select");
+      for (const operator of [
+        "is",
+        "contains",
+        "exists",
+        "!is",
+        "!contains",
+        "!exists",
+        "starts",
+        "!starts",
+        "within-next-days",
+        "!within-next-days"
+      ]) {
+        operatorSelect.createEl("option", { value: operator, text: operator });
+      }
+      operatorSelect.value = condition.operator;
+      operatorSelect.addEventListener("change", () => {
+        void (async () => {
+          const live = this.getLiveSegment(segmentId);
+          if (!live) {
+            return;
+          }
+          const liveCondition = this.ensureSegmentConditions(live)[conditionIndex];
+          if (!liveCondition) {
+            return;
+          }
+          liveCondition.operator = normalizeSmartOperator(operatorSelect.value);
+          await plugin.saveSettings();
+          await plugin.applyRulesToActiveFile(false);
+        })();
+      });
+
+      if (condition.source === "frontmatter") {
+        const fieldWrap = grid.createDiv({ cls: "tps-nn-condition-field" });
+        fieldWrap.createEl("label", { text: "Field" });
+        const fieldInput = fieldWrap.createEl("input", {
+          attr: {
+            type: "text",
+            placeholder: "status"
+          }
+        });
+        fieldInput.value = String(condition.field || "");
+        fieldInput.addEventListener("blur", () => {
+          void (async () => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            const liveCondition = this.ensureSegmentConditions(live)[conditionIndex];
+            if (!liveCondition) {
+              return;
+            }
+            liveCondition.field = fieldInput.value.trim();
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+          })();
+        });
+      }
+
+      const valueWrap = grid.createDiv({ cls: "tps-nn-condition-field tps-nn-condition-field-value" });
+      valueWrap.createEl("label", { text: "Value" });
+      const valueInput = valueWrap.createEl("input", {
+        attr: {
+          type: "text",
+          placeholder: getConditionValuePlaceholder(condition)
+        }
+      });
+      valueInput.value = String(condition.value || "");
+      valueInput.addEventListener("blur", () => {
+        void (async () => {
+          const live = this.getLiveSegment(segmentId);
+          if (!live) {
+            return;
+          }
+          const liveCondition = this.ensureSegmentConditions(live)[conditionIndex];
+          if (!liveCondition) {
+            return;
+          }
+          liveCondition.value = valueInput.value;
+          await plugin.saveSettings();
+          await plugin.applyRulesToActiveFile(false);
+        })();
+      });
+    });
+
+    new Setting(content)
+      .setName("Add condition")
+      .addButton((button) => {
+        button
+          .setButtonText("+ Add condition")
+          .onClick(async () => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            this.ensureSegmentConditions(live).push(createDefaultCondition());
+            live.match = normalizeRuleMatchMode(live.match);
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          });
+      });
+  }
+
+  private openSegmentActionsMenu(triggerEl: HTMLElement, segment: SortSegmentRule, index: number): void {
+    const { plugin, refresh } = this.context;
+    const menu = new Menu();
+
+    menu.addItem((item) => {
+      item
+        .setTitle(segment.enabled ? "Disable segment" : "Enable segment")
+        .setIcon(segment.enabled ? "toggle-right" : "toggle-left")
+        .onClick(() => {
+          void (async () => {
+            segment.enabled = !segment.enabled;
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          })();
+        });
+    });
+
+    menu.addSeparator();
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Move up")
+        .setIcon("arrow-up")
+        .setDisabled(index === 0)
+        .onClick(() => {
+          void (async () => {
+            if (index === 0) return;
+            const segments = plugin.settings.smartSort.segments;
+            [segments[index - 1], segments[index]] = [segments[index], segments[index - 1]];
+            await plugin.saveSettings();
+            refresh();
+          })();
+        });
+    });
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Move down")
+        .setIcon("arrow-down")
+        .setDisabled(index >= plugin.settings.smartSort.segments.length - 1)
+        .onClick(() => {
+          void (async () => {
+            if (index >= plugin.settings.smartSort.segments.length - 1) return;
+            const segments = plugin.settings.smartSort.segments;
+            [segments[index + 1], segments[index]] = [segments[index], segments[index + 1]];
+            await plugin.saveSettings();
+            refresh();
+          })();
+        });
+    });
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Duplicate")
+        .setIcon("copy")
+        .onClick(() => {
+          void (async () => {
+            const clone = plugin.createDefaultSortSegment();
+            clone.enabled = segment.enabled;
+            clone.source = segment.source;
+            clone.field = segment.field;
+            clone.fallback = segment.fallback;
+            clone.mappings = segment.mappings.map((mapping) => ({ ...mapping }));
+            clone.match = normalizeRuleMatchMode(segment.match);
+            clone.conditions = this.ensureSegmentConditions(segment).map((condition) => ({ ...condition }));
+            plugin.settings.smartSort.segments.splice(index + 1, 0, clone);
+            selectedSegmentId = clone.id;
+            await plugin.saveSettings();
+            refresh();
+          })();
+        });
+    });
+
+    menu.addSeparator();
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Delete")
+        .setIcon("trash")
+        .onClick(() => {
+          void (async () => {
+            plugin.settings.smartSort.segments = plugin.settings.smartSort.segments.filter(
+              (existing) => existing.id !== segment.id
+            );
+            if (selectedSegmentId === segment.id) {
+              selectedSegmentId = plugin.settings.smartSort.segments[0]?.id ?? null;
+            }
+            await plugin.saveSettings();
+            refresh();
+          })();
+        });
+    });
+
+    this.showMenuBelowElement(menu, triggerEl);
+  }
+
+  private openMappingPresetMenu(triggerEl: HTMLElement, segment: SortSegmentRule): void {
+    const { plugin, refresh } = this.context;
+    const segmentId = segment.id;
+    const menu = new Menu();
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Priority preset")
+        .setIcon("list-ordered")
+        .onClick(() => {
+          void (async () => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.mappings = parseMappings(PRIORITY_MAPPING);
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          })();
+        });
+    });
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Boolean preset")
+        .setIcon("binary")
+        .onClick(() => {
+          void (async () => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.mappings = parseMappings(BOOL_MAPPING);
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          })();
+        });
+    });
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Status preset")
+        .setIcon("list-filter")
+        .onClick(() => {
+          void (async () => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.source = "frontmatter";
+            live.field = "status";
+            live.fallback = "";
+            live.mappings = parseMappings(STATUS_MAPPING);
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          })();
+        });
+    });
+
+    menu.addSeparator();
+    menu.addItem((item) => {
+      item
+        .setTitle("Date preset (missing last)")
+        .setIcon("calendar-days")
+        .onClick(() => {
+          void (async () => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.source = "frontmatter";
+            live.field = "scheduled";
+            live.mappings = [];
+            live.fallback = DATE_MISSING_LAST;
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          })();
+        });
+    });
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Date preset (missing first)")
+        .setIcon("calendar-clock")
+        .onClick(() => {
+          void (async () => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.source = "frontmatter";
+            live.field = "scheduled";
+            live.mappings = [];
+            live.fallback = DATE_MISSING_FIRST;
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          })();
+        });
+    });
+
+    menu.addItem((item) => {
+      item
+        .setTitle("Clear mappings")
+        .setIcon("x")
+        .onClick(() => {
+          void (async () => {
+            const live = this.getLiveSegment(segmentId);
+            if (!live) {
+              return;
+            }
+            live.mappings = [];
+            await plugin.saveSettings();
+            await plugin.applyRulesToActiveFile(false);
+            refresh();
+          })();
+        });
+    });
+
+    this.showMenuBelowElement(menu, triggerEl);
+  }
+
+  private getSelectedSegment(
+    segments: SortSegmentRule[]
+  ): { id: string; segment: SortSegmentRule; index: number } | null {
+    if (segments.length === 0) {
+      selectedSegmentId = null;
+      return null;
+    }
+    if (!selectedSegmentId || !segments.some((segment) => segment.id === selectedSegmentId)) {
+      selectedSegmentId = segments[0].id;
+    }
+    const index = segments.findIndex((segment) => segment.id === selectedSegmentId);
+    if (index < 0) {
+      return null;
+    }
+    return {
+      id: selectedSegmentId,
+      segment: segments[index],
+      index
+    };
+  }
+
+  private createActionButton(
+    container: HTMLElement,
+    label: string,
+    onClick: () => Promise<void>,
+    isPrimary = false,
+    isDisabled = false
+  ): HTMLButtonElement {
+    const button = container.createEl("button", { text: label });
+    button.type = "button";
+    button.disabled = isDisabled;
+    if (isPrimary) {
+      button.addClass("mod-cta");
+    }
+    button.addEventListener("click", () => {
+      void onClick();
+    });
+    return button;
+  }
+
+  private createMenuButton(
+    container: HTMLElement,
+    label: string,
+    onOpen: (triggerEl: HTMLElement) => void,
+    stopPropagation = false
+  ): HTMLButtonElement {
+    const button = container.createEl("button", { text: label });
+    button.type = "button";
+    button.addEventListener("click", (event) => {
+      if (stopPropagation) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      onOpen(button);
+    });
+    return button;
+  }
+
+  private showMenuBelowElement(menu: Menu, triggerEl: HTMLElement): void {
+    const rect = triggerEl.getBoundingClientRect();
+    menu.showAtPosition({
+      x: rect.left,
+      y: rect.bottom + 4
+    });
+  }
+
+  private getLiveSegment(segmentId: string): SortSegmentRule | null {
+    return this.context.plugin.settings.smartSort.segments.find((segment) => segment.id === segmentId) ?? null;
+  }
+
+  private ensureSegmentConditions(segment: SortSegmentRule): RuleCondition[] {
+    if (!Array.isArray(segment.conditions)) {
+      segment.conditions = [];
+    }
+    return segment.conditions;
+  }
+
+  private getSegmentSummary(segment: SortSegmentRule): string {
+    const conditionCount = this.ensureSegmentConditions(segment).length;
+    const conditionSummary = conditionCount > 0 ? ` | ${conditionCount} condition${conditionCount === 1 ? "" : "s"}` : "";
+    const source = segment.source;
+    if (source === "frontmatter") {
+      const field = String(segment.field || "").trim() || "(field)";
+      return `${source}.${field} -> ${String(segment.fallback || "").trim() || "(fallback none)"}${conditionSummary}`;
+    }
+    return `${source} -> ${String(segment.fallback || "").trim() || "(fallback none)"}${conditionSummary}`;
+  }
+
+  private matchesSegmentFilter(segment: SortSegmentRule, segmentNumber: number, rawQuery: string): boolean {
+    const query = String(rawQuery || "").trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+
+    const haystack = [
+      `segment ${segmentNumber}`,
+      this.getSegmentSummary(segment),
+      segment.enabled ? "enabled" : "disabled",
+      segment.source
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return haystack.includes(query);
+  }
+}

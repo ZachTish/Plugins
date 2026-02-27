@@ -1,0 +1,32 @@
+{
+  "name": "tps-notebook-navigator-companion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rule-based frontmatter icon/color automation for Notebook Navigator.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "jest --runInBand",
+    "version": "git add manifest.json versions.json"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "tps",
+    "notebook-navigator"
+  ],
+  "author": "Codex",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.11.2",
+    "builtin-modules": "3.3.0",
+    "esbuild": "^0.19.3",
+    "jest": "^30.2.0",
+    "obsidian": "latest",
+    "ts-jest": "^29.4.1",
+    "typescript": "^5.3.3"
+  }
+}

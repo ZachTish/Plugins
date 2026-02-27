@@ -1,0 +1,12 @@
+{
+  "defaultPath": "Attachments/PDF",
+  "assetUrl": "",
+  "useRelativePaths": false,
+  "showWelcomeModal": false,
+  "collapseEmbeds": false,
+  "favoriteTemplate": "blank.pdf",
+  "templatesAtCustom": false,
+  "templatesPath": "/templates/",
+  "openInNewTab": true,
+  "createFolderIfNotExists": true
+}

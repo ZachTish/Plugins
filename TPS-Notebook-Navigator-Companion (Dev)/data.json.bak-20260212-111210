@@ -1,0 +1,1792 @@
+{
+  "enabled": true,
+  "autoApplyOnFileOpen": true,
+  "autoApplyOnMetadataChange": true,
+  "applyOnStartup": true,
+  "startupDelayMs": 800,
+  "metadataDebounceMs": 350,
+  "frontmatterIconField": "icon",
+  "frontmatterColorField": "color",
+  "clearIconWhenNoMatch": true,
+  "clearColorWhenNoMatch": true,
+  "debugLogging": false,
+  "rules": [
+    {
+      "id": "smart-icon-5eFAd",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "working",
+      "pathPrefix": "02",
+      "icon": "lucide-notebook-pen",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "starts",
+          "value": "02"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-CYurj",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "complete",
+      "pathPrefix": "",
+      "icon": "lucide-file-check",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "02"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-Dywu2",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "lucide-square-minus",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "low"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-xaUGZ",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "lucide-square-minus",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-DyeNu",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "lucide-square-minus",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "medium"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-IusAw",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "lucide-square-minus",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "high"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-t3MzH-medium",
+      "enabled": true,
+      "property": "recurrenceRule",
+      "operator": "exists",
+      "value": "START",
+      "pathPrefix": "",
+      "icon": "lucide-square-arrow-right",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "recurrenceRule",
+          "operator": "exists",
+          "value": "START"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "medium"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "complete"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-PNjsZ",
+      "enabled": true,
+      "property": "recurrenceRule",
+      "operator": "exists",
+      "value": "START",
+      "pathPrefix": "",
+      "icon": "lucide-square-arrow-right",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "recurrenceRule",
+          "operator": "exists",
+          "value": "START"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "complete"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "high"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-GkUNL",
+      "enabled": true,
+      "property": "recurrenceRule",
+      "operator": "exists",
+      "value": "START",
+      "pathPrefix": "",
+      "icon": "lucide-square-arrow-right",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "recurrenceRule",
+          "operator": "exists",
+          "value": "START"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-t3MzH-low",
+      "enabled": true,
+      "property": "recurrenceRule",
+      "operator": "exists",
+      "value": "START",
+      "pathPrefix": "",
+      "icon": "lucide-square-arrow-right",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "recurrenceRule",
+          "operator": "exists",
+          "value": "START"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "low"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "complete"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-SWk8p",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "low",
+      "pathPrefix": "",
+      "icon": "lucide-square",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "low"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-O9LCD",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "normal",
+      "pathPrefix": "",
+      "icon": "lucide-square",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-ezLQI",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "medium",
+      "pathPrefix": "",
+      "icon": "lucide-square",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "medium"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-fxkgh",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "high",
+      "pathPrefix": "",
+      "icon": "lucide-square",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "high"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-xuHis",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "open",
+      "pathPrefix": "",
+      "icon": "lucide-box-select",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "open"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "low"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-GJO21",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "open",
+      "pathPrefix": "",
+      "icon": "lucide-box-select",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "open"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-5Gzl9",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "medium",
+      "pathPrefix": "",
+      "icon": "lucide-box-select",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "medium"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "complete"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-uuSIR",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "open",
+      "pathPrefix": "",
+      "icon": "lucide-box-select",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "open"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "high"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-VTM9c",
+      "enabled": true,
+      "property": "",
+      "operator": "is",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide-layout-dashboard",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Dashboards"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "03"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-yT1iH",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "lint-ignored-file",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "02"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-aS05B",
+      "enabled": true,
+      "property": "",
+      "operator": "is",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide-inbox",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "name",
+          "field": "",
+          "operator": "is",
+          "value": "Inbox"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-GWr43",
+      "enabled": true,
+      "property": "",
+      "operator": "is",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide-check-square",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Action Items"
+        },
+        {
+          "source": "name",
+          "field": "",
+          "operator": "!contains",
+          "value": "Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-bCOyn",
+      "enabled": true,
+      "property": "",
+      "operator": "is",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide-folder-pen",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Resources"
+        }
+      ]
+    },
+    {
+      "id": "smart-icon-types-folder-icon",
+      "enabled": true,
+      "property": "",
+      "operator": "is",
+      "value": "",
+      "pathPrefix": "__tps/types",
+      "icon": "lucide-tags",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "is",
+          "value": "__tps/types"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-6tmnd",
+      "enabled": true,
+      "property": "",
+      "operator": "is",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "purple",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "tag",
+          "field": "",
+          "operator": "contains",
+          "value": "Archive"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-ihKDz",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "complete",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#2f482e",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-TFcXU",
+      "enabled": true,
+      "property": "status",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#f04472",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "is",
+          "value": "md"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "!contains",
+          "value": "system"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "!contains",
+          "value": "03"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-CGpK2",
+      "enabled": true,
+      "property": "priority",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#f04472",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "path",
+          "field": "",
+          "operator": "!contains",
+          "value": "system"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "!contains",
+          "value": "03"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "is",
+          "value": "md"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-FrgRo",
+      "enabled": true,
+      "property": "",
+      "operator": "is",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#8a8f98",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "!is",
+          "value": "md"
+        },
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "!is",
+          "value": "canvas"
+        },
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "!is",
+          "value": "base"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-task-status-wontdo",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "wont-do",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#8a8f98",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "wont-do"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-2s4WY",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "complete",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#375c44",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-zqXer",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "complete",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#8656ae",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "02"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "complete"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "wont-do"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "blocked"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-5eFAd",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "working",
+      "pathPrefix": "02",
+      "icon": "",
+      "color": "purple",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "starts",
+          "value": "02"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-CYurj",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "complete",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#2f482e",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "02"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-Dywu2",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#8a8f98",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "low"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-xaUGZ",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#478fee",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-DyeNu",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#e49320",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "medium"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-IusAw",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#f04472",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "high"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-t3MzH-medium",
+      "enabled": true,
+      "property": "recurrenceRule",
+      "operator": "exists",
+      "value": "START",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#e49320",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "recurrenceRule",
+          "operator": "exists",
+          "value": "START"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "medium"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "complete"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-PNjsZ",
+      "enabled": true,
+      "property": "recurrenceRule",
+      "operator": "exists",
+      "value": "START",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#f04472",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "recurrenceRule",
+          "operator": "exists",
+          "value": "START"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "complete"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "high"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-GkUNL",
+      "enabled": true,
+      "property": "recurrenceRule",
+      "operator": "exists",
+      "value": "START",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#478fee",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "recurrenceRule",
+          "operator": "exists",
+          "value": "START"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-SWk8p",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "low",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#8a8f98",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "low"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-O9LCD",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "normal",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#478fee",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-ezLQI",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "medium",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#e49320",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "medium"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-fxkgh",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "high",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#f04472",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "high"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "working"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-xuHis",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "open",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#8a8f98",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "open"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "low"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-GJO21",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "open",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#478fee",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "open"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-5Gzl9",
+      "enabled": true,
+      "property": "priority",
+      "operator": "is",
+      "value": "medium",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#e49320",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "medium"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "complete"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-uuSIR",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "open",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#f04472",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "open"
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "high"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "01 Action Items"
+        }
+      ]
+    },
+    {
+      "id": "smart-color-yT1iH",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#5a5930",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "extension",
+          "field": "",
+          "operator": "exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "02"
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "blocked"
+        }
+      ]
+    }
+  ],
+  "smartSort": {
+    "enabled": false,
+    "field": "sort",
+    "separator": "_",
+    "appendBasename": true,
+    "clearWhenNoMatch": false,
+    "segments": [
+      {
+        "id": "sort-segment-1770911410015-neb213y",
+        "enabled": true,
+        "source": "frontmatter",
+        "field": "status",
+        "fallback": "",
+        "mappings": []
+      }
+    ]
+  }
+}

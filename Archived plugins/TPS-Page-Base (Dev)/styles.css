@@ -1,0 +1,354 @@
+/* Page Base Plugin Styles */
+
+/* Container */
+.bases-page-container {
+  height: 100%;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.bases-page-container.is-loading {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.bases-page-container.is-error {
+  color: var(--text-error);
+}
+
+/* Base title (H1) */
+.bases-page-title {
+  font-size: 2em;
+  font-weight: 700;
+  margin-bottom: 1.5em;
+  border-bottom: 2px solid var(--background-modifier-border);
+  padding-bottom: 0.5em;
+  color: var(--text-normal);
+}
+
+/* Entry list container */
+.bases-page-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 2em;
+}
+
+/* Empty state */
+.bases-page-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 2em;
+  text-align: center;
+}
+
+/* Entry container */
+.bases-page-entry {
+  margin-bottom: 2em;
+}
+
+/* Entry title (H2) - clickable */
+.bases-page-entry-title {
+  font-size: 1.5em;
+  font-weight: 600;
+  margin-bottom: 0.8em;
+  margin-top: 0;
+  cursor: pointer;
+  color: var(--text-accent);
+  transition: all 0.2s ease;
+  padding: 0.25em 0;
+}
+
+.bases-page-entry-title:hover {
+  color: var(--interactive-accent);
+  text-decoration: underline;
+  transform: translateX(2px);
+}
+
+/* Group title (H2 when grouping is active) */
+.bases-page-group-title {
+  font-size: 1.5em;
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.8em;
+  padding-bottom: 0.5em;
+  border-bottom: 2px solid var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+.bases-page-group-title:first-child {
+  margin-top: 0;
+}
+
+/* Grouped entry title (H3 when inside a group) */
+.bases-page-entry-title-grouped {
+  font-size: 1.2em;
+  font-weight: 600;
+  margin-bottom: 0.6em;
+  margin-top: 0;
+  cursor: pointer;
+  color: var(--text-accent);
+  transition: all 0.2s ease;
+  padding: 0.25em 0;
+  padding-left: 1em;
+}
+
+.bases-page-entry-title-grouped:hover {
+  color: var(--interactive-accent);
+  text-decoration: underline;
+  transform: translateX(2px);
+}
+
+/* Entry body */
+.bases-page-entry-body {
+  padding-left: 0;
+  line-height: 1.6;
+  color: var(--text-normal);
+}
+
+.bases-page-entry-body p {
+  margin: 0.5em 0;
+}
+
+.bases-page-entry-body ul,
+.bases-page-entry-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.bases-page-entry-body a {
+  color: var(--text-accent);
+  text-decoration: none;
+}
+
+.bases-page-entry-body a:hover {
+  text-decoration: underline;
+}
+
+/* Placeholder for lazy-loaded entries */
+.bases-page-entry-placeholder {
+  padding: 1em;
+  color: var(--text-muted);
+  text-align: center;
+  font-style: italic;
+}
+
+/* ============================================
+   Hover Editor Styles
+   ============================================ */
+
+.bases-page-hover-editor {
+  position: fixed;
+  z-index: 1000;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  min-width: 500px;
+  max-width: 700px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header */
+.bases-page-hover-editor-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  border-radius: 8px 8px 0 0;
+}
+
+.bases-page-hover-editor-filename {
+  font-weight: 600;
+  color: var(--text-normal);
+  font-size: 0.95em;
+}
+
+/* Textarea */
+.bases-page-hover-editor-textarea {
+  flex: 1;
+  min-height: 300px;
+  max-height: 500px;
+  padding: 16px;
+  border: none;
+  resize: vertical;
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+  line-height: 1.5;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  overflow: auto;
+}
+
+.bases-page-hover-editor-textarea:focus {
+  outline: none;
+  background: var(--background-primary-alt);
+}
+
+.bases-page-hover-editor-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* Actions */
+.bases-page-hover-editor-actions {
+  padding: 12px 16px;
+  border-top: 1px solid var(--background-modifier-border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  background: var(--background-secondary);
+  border-radius: 0 0 8px 8px;
+}
+
+.bases-page-hover-editor-action-cancel,
+.bases-page-hover-editor-action-save {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-weight: 500;
+  font-size: 0.9em;
+}
+
+.bases-page-hover-editor-action-cancel:hover {
+  background: var(--interactive-hover);
+}
+
+.bases-page-hover-editor-action-save {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.bases-page-hover-editor-action-save:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.bases-page-hover-editor-action-cancel:disabled,
+.bases-page-hover-editor-action-save:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Hint */
+.bases-page-hover-editor-hint {
+  padding: 8px 16px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 0.8em;
+  text-align: right;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.bases-page-hover-editor-hint kbd {
+  display: inline-block;
+  padding: 2px 4px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 3px;
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
+}
+
+/* ============================================
+   Mobile Responsiveness
+   ============================================ */
+
+@media (max-width: 768px) {
+  .bases-page-container {
+    padding: 12px;
+  }
+
+  .bases-page-title {
+    font-size: 1.5em;
+  }
+
+  .bases-page-entry-title {
+    font-size: 1.2em;
+  }
+
+  /* Full-width editor on mobile */
+  .bases-page-hover-editor {
+    min-width: calc(100vw - 32px);
+    max-width: calc(100vw - 32px);
+    left: 16px !important;
+    right: 16px !important;
+    max-height: calc(90vh - 32px);
+  }
+
+  .bases-page-hover-editor-textarea {
+    min-height: 200px;
+    max-height: calc(90vh - 180px);
+  }
+}
+
+/* ============================================
+   Dark Theme Overrides
+   ============================================ */
+
+body.theme-dark .bases-page-hover-editor {
+  background: var(--background-primary);
+  border-color: var(--background-modifier-border);
+}
+
+body.theme-dark .bases-page-hover-editor-textarea {
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+body.theme-dark .bases-page-hover-editor-textarea:focus {
+  background: var(--background-primary-alt);
+}
+
+body.theme-dark .bases-page-entry-body a {
+  color: var(--text-accent);
+}
+
+/* ============================================
+   Light Theme Overrides
+   ============================================ */
+
+body.theme-light .bases-page-entry-title {
+  color: var(--interactive-accent);
+}
+
+
+/* Collapsible Entries */
+.bases-page-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* space between icon/title/button */
+  cursor: pointer;
+  margin-bottom: 0.8em;
+  padding: 4px 0;
+  border-radius: 4px;
+}
+
+.bases-page-entry-header:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.bases-page-entry-header .bases-page-entry-title,
+.bases-page-entry-header .bases-page-entry-title-grouped {
+  margin: 0;
+  flex-grow: 1;
+}
+
+.bases-page-entry.is-collapsed .bases-page-entry-header {
+  margin-bottom: 0;
+  opacity: 0.7;
+}
+
+/* Adjust Open button when in header */
+.bases-page-entry-open-btn {
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.bases-page-entry-header:hover .bases-page-entry-open-btn {
+  opacity: 1;
+}

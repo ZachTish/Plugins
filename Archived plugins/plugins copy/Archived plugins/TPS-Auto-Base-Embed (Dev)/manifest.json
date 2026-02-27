@@ -1,0 +1,10 @@
+{
+  "id": "tps-auto-base-embed",
+  "name": "TPS Auto Base Embed",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Render a chosen Base at the bottom of every note without embedding it manually.",
+  "author": "Codex",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}
