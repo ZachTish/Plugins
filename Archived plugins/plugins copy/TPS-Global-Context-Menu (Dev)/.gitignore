@@ -1,7 +1,0 @@
-node_modules/
-main.js
-*.map
-*.log
-dist/
-build/
-.DS_Store
