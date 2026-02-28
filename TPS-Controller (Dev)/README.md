@@ -76,3 +76,57 @@ src/
     tag-utils.ts
     activity-tracker.ts
 ```
+
+---
+
+## Known Issues & Planned Improvements
+
+### Critical
+- **`pollMinutes: 0.5` default** — 30-second polling is extremely aggressive. Default should be `2.0` (2 minutes). Better: switch to event-driven evaluation using `metadataCache:changed` with a 5-minute fallback timer.
+- **`endProperty: "timeEstimate"` semantic mismatch** — `timeEstimate` is a duration, not an end time. Default should be `"timeEnd"` or `"scheduledEnd"` to match GCM frontmatter conventions.
+- **Duplicate services** — `external-calendar-service.ts`, `ical-parser-service.ts`, `parent-child-link.ts`, `template-resolution-service.ts`, and `tag-utils.ts` all exist in both this plugin and TPS-Calendar-Base. Controller should be the canonical source; Calendar-Base should consume them through the typed API.
+
+### Medium
+- **No typed API interface** — Other plugins access Controller via `(this.app as any).plugins?.getPlugin?.("tps-controller")` with no type contract. Define and export a formal `TPSControllerAPI` interface (see `Examples/notebook-navigator/src/api/` for reference pattern).
+- **`(window as any).TPS` global** — Not cleaned up in `onunload()`. Add `delete (window as any).TPS` to prevent stale reference after plugin disabled.
+- **No `onExternalSettingsChange()`** — Device role changes and reminder config synced via Obsidian Sync don't take effect until vault reload.
+- **Auto-create service has no rate limit** — On first scan, could create many files rapidly.
+
+### Low
+- **`app.workspace.activeLeaf` (deprecated)** — Replace throughout with `getActiveViewOfType()`.
+- **`getAbstractFileByPath` usage** — Replace with `vault.getFileByPath()` (v1.5.7+).
+- **No `onUserEnable()` hook** — First-time setup (folder creation, role selection) should use this instead of running every `onload()`.
+
+### Planned
+- Formal `TPSControllerAPI` class with versioning and typed sub-modules (RemindersAPI, CalendarAPI, DeviceRoleAPI).
+- `removeCommand()` usage to dynamically un-register commands that don't apply to current device role.
+- Per-device named profiles ("Work Mac", "iPad") for device-specific settings.
+- Event-driven reminders: evaluate files immediately on `metadataCache:changed` instead of polling.
+
+---
+
+## Integration with TPS Suite
+
+| Plugin | Relationship |
+|--------|-------------|
+| TPS-Calendar-Base | Shares 4 service files (currently duplicated — to be consolidated) |
+| TPS-Notifier | Drives Notifier's reminder dispatch; owns the `ReminderEngine` |
+| TPS-NNC | NNC queries Controller for device role via plugin API |
+| TPS-GCM | GCM reads device role from Controller (optional) |
+
+> For full analysis, see `TPS-ANALYSIS.md` in the plugins root.
+
+---
+
+## Shared Utility Files (Intentional Duplication)
+
+The following source files are deliberately copied across multiple TPS plugins. Each plugin remains fully self-contained to avoid build-time cross-plugin dependencies. When updating logic in one of these files, mirror the change to the other plugins that carry a copy:
+
+| File | Also in |
+|------|---------|
+| `src/utils/tag-utils.ts` | TPS-Calendar-Base, TPS-GCM |
+| `src/utils/template-resolution-service.ts` | TPS-Calendar-Base |
+| `src/utils/template-variable-service.ts` | TPS-Calendar-Base |
+| `src/utils/time-calculation-service.ts` | TPS-Notifier |
+| `src/ui/list-renderer.ts` | TPS-Calendar-Base, TPS-GCM |
+| `src/ui/section-helpers.ts` | TPS-Calendar-Base, TPS-GCM |

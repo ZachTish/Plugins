@@ -370,6 +370,16 @@ export class BulkEditService {
             }
         }
 
+        // Log the operation for debugging
+        const _updateKeys = Object.keys(updates);
+        const _fileLabel = files.length <= 3
+            ? files.map(f => f.basename).join(', ')
+            : `${files[0].basename}… (+${files.length - 1} more)`;
+        logger.log(`[BulkEditService] updateFrontmatter ×${files.length}: [${_updateKeys.join(', ')}] on: ${_fileLabel}`);
+        if (updates.status !== undefined) {
+            logger.log(`[BulkEditService] Status change → "${updates.status}" on: ${_fileLabel}`);
+        }
+
         // Checklist Prompt Logic (Single file only to avoid spam)
         if (
             this.plugin.settings.checkOpenChecklistItems &&
@@ -856,6 +866,15 @@ export class BulkEditService {
                 this.setFrontmatterValueCaseInsensitive(fm, 'scheduled', newScheduled);
                 this.setFrontmatterValueCaseInsensitive(fm, 'title', baseName);
                 this.setFrontmatterValueCaseInsensitive(fm, 'status', newStatus);
+
+                // Strip Companion-managed display properties so they are
+                // recalculated fresh by the rule engine on the new instance
+                // rather than carrying over stale values from the predecessor.
+                for (const key of Object.keys(fm)) {
+                    if (['sort', 'hidden', 'icon', 'color'].includes(key.toLowerCase())) {
+                        delete fm[key];
+                    }
+                }
             });
 
             await this.completeRecurrenceOp(recurrenceOpKey, newFilePath);

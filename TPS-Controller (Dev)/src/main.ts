@@ -9,6 +9,7 @@ import { SyncConflictWatcher } from "./services/sync-conflict-watcher";
 import { normalizeCalendarUrl, normalizeCalendarTag } from "./utils";
 import { TPSControllerSettingTab } from "./settings-tab";
 import * as logger from "./logger";
+import { getPluginById, isPluginEnabled } from "./core";
 
 // ============================================================================
 // Plugin API Types (for cross-plugin communication)
@@ -206,10 +207,12 @@ export default class TPSControllerPlugin extends Plugin {
         }
 
         this.sanitizeFrontmatterKeySettings();
+        logger.setLoggingEnabled(this.settings.enableLogging);
     }
 
     async saveSettings() {
         await this.saveData(this.settings);
+        logger.setLoggingEnabled(this.settings.enableLogging);
     }
 
     private sanitizeFrontmatterKeySettings(): void {
@@ -685,46 +688,30 @@ export default class TPSControllerPlugin extends Plugin {
     // ========================================================================
 
     private getCalendarPlugin(): CalendarPluginAPI | null {
-        const plugin = (this.app as any).plugins?.getPlugin?.("tps-calendar-base");
-        return plugin?.api || null;
+        const plugin = getPluginById(this.app, "tps-calendar-base");
+        return (plugin as any)?.api || null;
     }
 
     private getNotifierPlugin(): NotifierPluginAPI | null {
-        const plugin = (this.app as any).plugins?.getPlugin?.("tps-notifier");
-        // Try API first, then fall back to plugin itself (for sendMessage)
-        return plugin?.api || plugin || null;
+        const plugin = getPluginById(this.app, "tps-notifier");
+        // Try the plugin's API first, then fall back to the plugin instance itself
+        return (plugin as any)?.api || plugin || null;
     }
 
     private getCompanionPlugin(): CompanionPluginAPI | null {
-        if (!this.isPluginEnabled("tps-notebook-navigator-companion")) {
-            return null;
-        }
-        const plugin = (this.app as any).plugins?.getPlugin?.("tps-notebook-navigator-companion");
-        return plugin?.api || plugin || null;
+        if (!isPluginEnabled(this.app, "tps-notebook-navigator-companion")) return null;
+        const plugin = getPluginById(this.app, "tps-notebook-navigator-companion");
+        return (plugin as any)?.api || plugin || null;
     }
 
     private getGcmPlugin(): GcmPluginAPI | null {
-        if (!this.isPluginEnabled("tps-global-context-menu")) {
-            return null;
-        }
-        const plugin = (this.app as any).plugins?.getPlugin?.("tps-global-context-menu");
-        return (plugin?.api || plugin || null) as GcmPluginAPI | null;
+        if (!isPluginEnabled(this.app, "tps-global-context-menu")) return null;
+        const plugin = getPluginById(this.app, "tps-global-context-menu");
+        return ((plugin as any)?.api || plugin || null) as GcmPluginAPI | null;
     }
 
     private isPluginEnabled(pluginId: string): boolean {
-        const manager = (this.app as any).plugins;
-        const enabledPlugins = manager?.enabledPlugins;
-
-        if (enabledPlugins instanceof Set) {
-            return enabledPlugins.has(pluginId);
-        }
-
-        if (Array.isArray(enabledPlugins)) {
-            return enabledPlugins.includes(pluginId);
-        }
-
-        const plugin = manager?.getPlugin?.(pluginId);
-        return !!plugin;
+        return isPluginEnabled(this.app, pluginId);
     }
 
     private async runRecurrenceMaintenanceTick(): Promise<void> {
@@ -760,9 +747,9 @@ export default class TPSControllerPlugin extends Plugin {
 
         try {
             // Migrate from Notifier
-            const notifierPlugin = (this.app as any).plugins?.getPlugin?.("tps-notifier");
-            if (notifierPlugin?.settings) {
-                const ns = notifierPlugin.settings;
+            const notifierPlugin = getPluginById(this.app, "tps-notifier");
+            const ns = (notifierPlugin as any)?.settings;
+            if (ns) {
                 if (Array.isArray(ns.reminders)) {
                     this.settings.reminders = JSON.parse(JSON.stringify(ns.reminders));
                     migrated = true;
@@ -779,9 +766,9 @@ export default class TPSControllerPlugin extends Plugin {
             }
 
             // Migrate from Calendar
-            const calendarPlugin = (this.app as any).plugins?.getPlugin?.("tps-calendar-base");
-            if (calendarPlugin?.settings) {
-                const cs = calendarPlugin.settings;
+            const calendarPlugin = getPluginById(this.app, "tps-calendar-base");
+            const cs = (calendarPlugin as any)?.settings;
+            if (cs) {
                 if (typeof cs.syncIntervalMinutes === 'number') this.settings.syncIntervalMinutes = cs.syncIntervalMinutes;
                 if (cs.syncOnEventDelete) this.settings.syncOnEventDelete = cs.syncOnEventDelete;
                 if (typeof cs.archiveFolder === 'string') this.settings.archiveFolder = cs.archiveFolder;

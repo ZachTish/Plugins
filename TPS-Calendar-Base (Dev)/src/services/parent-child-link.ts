@@ -1,12 +1,12 @@
 import { App, TFile, normalizePath } from "obsidian";
 import * as logger from "../logger";
-import { mergeTagInputs, parseTagInput } from "./tag-utils";
+import { mergeTagInputs, parseTagInput } from "../utils/tag-utils";
+import { getPluginSettings } from "../core";
 
 type ParentLinkFormat = "wikilink" | "markdown-title";
 
 function getGlobalContextMenuSettings(app: App): Record<string, any> {
-    const settings = (app as any)?.plugins?.plugins?.["tps-global-context-menu"]?.settings;
-    return settings && typeof settings === "object" ? settings : {};
+    return getPluginSettings(app, 'tps-global-context-menu');
 }
 
 function getParentLinkFormat(app: App): ParentLinkFormat {

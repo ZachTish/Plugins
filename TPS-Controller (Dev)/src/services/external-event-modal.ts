@@ -7,9 +7,10 @@ import {
   applyTemplateVars,
   buildExternalEventTemplateVars,
   type TemplateVars,
-} from "./template-variable-service";
-import { resolveTemplateFile as resolveTemplateFilePath } from "./template-resolution-service";
-import { mergeTagInputs, normalizeTagValue } from "./tag-utils";
+} from "../utils/template-variable-service";
+import { resolveTemplateFile as resolveTemplateFilePath } from "../utils/template-resolution-service";
+import { mergeTagInputs, normalizeTagValue } from "../utils/tag-utils";
+import { getPluginById, getErrorMessage } from "../core";
 
 const malformedFrontmatterWarnedPaths = new Set<string>();
 
@@ -336,6 +337,10 @@ export async function createMeetingNoteFromExternalEvent(
       logger.error(`[CreateMeetingNote] Failed to create file after ${maxRetries} attempts: ${errorMsg}`);
       throw new Error(`Failed to create meeting note after ${maxRetries} attempts: ${errorMsg}`);
     }
+
+    // Run Templater explicitly so any <% tp.* %> tags in the template are evaluated.
+    // Must run before processFrontmatterSafely so TPS fields are applied last (additive merge).
+    await runTemplaterOnFile(app, file);
   }
 
   // Apply identity/event frontmatter in one place so templates with existing
@@ -375,6 +380,24 @@ export async function createMeetingNoteFromExternalEvent(
   return file;
 }
 
+/**
+ * Explicitly invoke Templater's "Replace templates in file" on a newly-created
+ * file so <% tp.* %> expressions are evaluated in-place.
+ * Safe no-op when Templater is not installed.
+ *
+ * Uses overwrite_file_commands(file, false) — same code path as "Replace templates
+ * in the active file" but works on any file object without an active editor view.
+ */
+async function runTemplaterOnFile(app: App, file: TFile): Promise<void> {
+  const templater = getPluginById(app, 'templater-obsidian') as any;
+  if (!templater?.templater) return;
+  try {
+    await templater.templater.overwrite_file_commands(file, false);
+  } catch (e) {
+    logger.warn('[CreateMeetingNote] Templater failed to process file (non-fatal):', file.path, e);
+  }
+}
+
 async function resolveTemplateFromPath(app: App, path: string | null): Promise<TFile | null> {
   return resolveTemplateFilePath(app, path, {
     allowBasenameMatchInTemplaterRoot: true,
@@ -388,7 +411,7 @@ async function processTemplate(app: App, templateFile: TFile, vars: TemplateVars
     return applyTemplateVars(raw, vars);
   } catch (e) {
     logger.error("[ExternalEvent] Template processing failed", e);
-    new Notice(`⚠️ Calendar Base: Error processing template "${templateFile.basename}".\n${e instanceof Error ? e.message : String(e)}`);
+    new Notice(`⚠️ Calendar Base: Error processing template "${templateFile.basename}".\n${getErrorMessage(e)}`);
     return null;
   }
 }

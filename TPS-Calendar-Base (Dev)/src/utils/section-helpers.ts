@@ -22,7 +22,7 @@ export function createCollapsibleSection(
 ): HTMLElement {
   const details = parent.createEl("details", { cls: "tps-collapsible-section" });
 
-  if (config.defaultOpen !== false) {
+  if (config.defaultOpen === true) {
     details.setAttr("open", "true");
   }
 

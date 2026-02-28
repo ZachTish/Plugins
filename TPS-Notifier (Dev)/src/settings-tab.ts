@@ -1,5 +1,6 @@
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, debounce } from 'obsidian';
 import type TPSNotifier from './main';
+import { createCollapsibleSection } from './utils/section-helpers';
 
 export class TPSNotifierSettingTab extends PluginSettingTab {
     plugin: TPSNotifier;
@@ -13,26 +14,12 @@ export class TPSNotifierSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
+        const debouncedSave = debounce(() => this.plugin.saveSettings(), 300);
+
         containerEl.createEl('h2', { text: 'TPS Notifier Settings' });
 
-        const createSection = (title: string, open = false) => {
-            const details = containerEl.createEl('details', { cls: 'tps-notifier-settings-group' });
-            details.style.border = '1px solid var(--background-modifier-border)';
-            details.style.borderRadius = '6px';
-            details.style.padding = '10px';
-            details.style.marginBottom = '10px';
-            if (open) details.setAttr('open', '');
-
-            const summary = details.createEl('summary', { text: title });
-            summary.style.fontWeight = 'bold';
-            summary.style.cursor = 'pointer';
-            summary.style.marginBottom = '10px';
-
-            return details.createDiv({ cls: 'tps-notifier-settings-group-content' });
-        };
-
         // --- Connection Settings ---
-        const connection = createSection('Connection', true);
+        const connection = createCollapsibleSection(containerEl, { title: 'Connection' });
 
         new Setting(connection)
             .setName('ntfy Server')
@@ -40,9 +27,9 @@ export class TPSNotifierSettingTab extends PluginSettingTab {
             .addText(text => text
                 .setPlaceholder('https://ntfy.sh')
                 .setValue(this.plugin.settings.ntfyServer)
-                .onChange(async (value) => {
+                .onChange((value) => {
                     this.plugin.settings.ntfyServer = value;
-                    await this.plugin.saveSettings();
+                    void debouncedSave();
                 }));
 
         new Setting(connection)
@@ -51,9 +38,9 @@ export class TPSNotifierSettingTab extends PluginSettingTab {
             .addText(text => text
                 .setPlaceholder('my-reminders')
                 .setValue(this.plugin.settings.ntfyTopic)
-                .onChange(async (value) => {
+                .onChange((value) => {
                     this.plugin.settings.ntfyTopic = value;
-                    await this.plugin.saveSettings();
+                    void debouncedSave();
                 }));
 
         new Setting(connection)
@@ -69,7 +56,7 @@ export class TPSNotifierSettingTab extends PluginSettingTab {
                 }));
 
         // --- Snooze ---
-        const snooze = createSection('Snooze', false);
+        const snooze = createCollapsibleSection(containerEl, { title: 'Snooze' });
 
         new Setting(snooze)
             .setName('Snooze Property')
@@ -77,44 +64,33 @@ export class TPSNotifierSettingTab extends PluginSettingTab {
             .addText(text => text
                 .setPlaceholder('reminderSnooze')
                 .setValue(this.plugin.settings.snoozeProperty || 'reminderSnooze')
-                .onChange(async (value) => {
+                .onChange((value) => {
                     this.plugin.settings.snoozeProperty = value.trim() || 'reminderSnooze';
-                    await this.plugin.saveSettings();
+                    void debouncedSave();
                 }));
 
-        const snoozeDetails = snooze.createEl('details');
-        snoozeDetails.style.border = '1px solid var(--background-modifier-border)';
-        snoozeDetails.style.borderRadius = '6px';
-        snoozeDetails.style.padding = '8px 10px';
-        snoozeDetails.style.marginBottom = '10px';
-        const snoozeSummary = snoozeDetails.createEl('summary', { text: 'Snooze Presets' });
-        snoozeSummary.style.fontWeight = '600';
-        snoozeSummary.style.cursor = 'pointer';
-        const snoozeContent = snoozeDetails.createDiv({ cls: 'tps-notifier-snooze-options' });
-        snoozeContent.style.marginTop = '8px';
-        this.renderSnoozeOptions(snoozeContent);
-        new Setting(snoozeContent)
+        const snoozePresetsEl = createCollapsibleSection(snooze, { title: 'Snooze Presets', cssClass: 'tps-collapsible-subsection' });
+        this.renderSnoozeOptions(snoozePresetsEl);
+        new Setting(snoozePresetsEl)
             .addButton((btn) =>
                 btn.setButtonText('Add Preset').setCta().onClick(async () => {
                     if (!Array.isArray(this.plugin.settings.snoozeOptions)) this.plugin.settings.snoozeOptions = [];
                     this.plugin.settings.snoozeOptions.push({ label: '15 Minutes', minutes: 15 });
                     await this.plugin.saveSettings();
-                    this.renderSnoozeOptions(snoozeContent);
+                    this.renderSnoozeOptions(snoozePresetsEl);
                 })
             );
 
         // --- Info: Reminders managed by Controller ---
-        const info = createSection('Reminders', false);
+        const info = createCollapsibleSection(containerEl, { title: 'Reminders' });
         const infoDiv = info.createDiv();
-        infoDiv.style.padding = '10px';
-        infoDiv.style.color = 'var(--text-muted)';
         infoDiv.innerHTML = `
             <p>Reminder rules are now managed by the <strong>TPS-Controller</strong> plugin.</p>
             <p>Open the Controller's settings to add, edit, or remove reminder rules.</p>
         `;
 
         // --- Debug ---
-        const debug = createSection('Debug', false);
+        const debug = createCollapsibleSection(containerEl, { title: 'Debug' });
 
         new Setting(debug)
             .setName('Enable Logging')

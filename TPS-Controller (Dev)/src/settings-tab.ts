@@ -1,9 +1,9 @@
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, debounce } from 'obsidian';
 import type TPSControllerPlugin from './main';
 import type { PropertyReminder, ExternalCalendarConfig } from './types';
 import { normalizeCalendarUrl } from './utils';
-import { createCollapsibleSection } from './ui/section-helpers';
-import { renderListWithControls } from './ui/list-renderer';
+import { createCollapsibleSection } from './utils/section-helpers';
+import { renderListWithControls } from './utils/list-renderer';
 
 const createCalendarId = () => `calendar-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
 
@@ -23,30 +23,31 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
+        const debouncedSave = debounce(() => this.plugin.saveSettings(), 300);
+
         containerEl.createEl('h2', { text: 'TPS Controller Settings' });
 
         // ── Device Role ─────────────────────────────────────────────
         const roleSection = createCollapsibleSection(containerEl, {
             title: 'Device Role',
-            defaultOpen: true
+            defaultOpen: false
         });
 
-        const roleDesc = roleSection.createDiv();
-        roleDesc.style.marginBottom = '10px';
-        roleDesc.style.padding = '8px 12px';
-        roleDesc.style.borderRadius = '6px';
-        roleDesc.style.background = 'var(--background-secondary)';
+        const roleDesc = roleSection.createDiv({ cls: 'tps-controller-role-desc' });
+        const updateRoleDesc = (role: string) => {
+            const isCtrl = role === 'controller';
+            roleDesc.innerHTML = `
+                <strong>Current Role:</strong>
+                <span class="${isCtrl ? 'tps-role-controller' : 'tps-role-user'}">
+                    ${isCtrl ? '🟢 Controller (Background Automation)' : '⚪ User (Normal Use)'}
+                </span>
+                <br><small class="tps-role-hint">
+                    ${isCtrl ? 'This device runs all automation (calendar sync, reminders, companion scan). UI is locked down.' : 'This device is in normal user mode — no automation runs.'}
+                </small>
+            `;
+        };
         const currentRole = this.plugin.deviceRoleManager?.role || 'user';
-        const isCtrl = currentRole === 'controller';
-        roleDesc.innerHTML = `
-            <strong>Current Role:</strong>
-            <span style="color: ${isCtrl ? 'var(--text-success)' : 'var(--text-muted)'}; font-weight: bold;">
-                ${isCtrl ? '🟢 Controller (Background Automation)' : '⚪ User (Normal Use)'}
-            </span>
-            <br><small style="color: var(--text-muted);">
-                ${isCtrl ? 'This device runs all automation (calendar sync, reminders, companion scan). UI is locked down.' : 'This device is in normal user mode — no automation runs.'}
-            </small>
-        `;
+        updateRoleDesc(currentRole);
 
         new Setting(roleSection)
             .setName('Set Device Role')
@@ -56,14 +57,14 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                 .setValue(currentRole)
                 .onChange(async (value) => {
                     this.plugin.deviceRoleManager.setRole(value as any);
+                    updateRoleDesc(value);
                     new Notice(`Device set to ${value === 'controller' ? 'CONTROLLER' : 'USER'} mode.`);
-                    this.display(); // refresh
                 }));
 
         // ── External Calendars ─────────────────────────────────────
         const extCalSection = createCollapsibleSection(containerEl, {
             title: 'External Calendars',
-            defaultOpen: true
+            defaultOpen: false
         });
         const calendarsContainer = extCalSection.createDiv();
         this.renderExternalCalendars(calendarsContainer);
@@ -138,9 +139,9 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             .addText(text => text
                 .setPlaceholder('System/Archive')
                 .setValue(this.plugin.settings.archiveFolder)
-                .onChange(async (value) => {
+                .onChange((value) => {
                     this.plugin.settings.archiveFolder = value;
-                    await this.plugin.saveSettings();
+                    void debouncedSave();
                 }));
 
         new Setting(calSection)
@@ -149,9 +150,9 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             .addText(text => text
                 .setPlaceholder('Canceled')
                 .setValue(this.plugin.settings.externalCalendarFilter)
-                .onChange(async (value) => {
+                .onChange((value) => {
                     this.plugin.settings.externalCalendarFilter = value;
-                    await this.plugin.saveSettings();
+                    void debouncedSave();
                 }));
 
         new Setting(calSection)
@@ -160,22 +161,15 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             .addText(text => text
                 .setPlaceholder('cancelled')
                 .setValue(this.plugin.settings.canceledStatusValue)
-                .onChange(async (value) => {
+                .onChange((value) => {
                     this.plugin.settings.canceledStatusValue = value;
-                    await this.plugin.saveSettings();
+                    void debouncedSave();
                 }));
 
         // Calendar Frontmatter Keys (collapsible)
-        const fmDetails = calSection.createEl('details');
-        fmDetails.style.border = '1px solid var(--background-modifier-border)';
-        fmDetails.style.borderRadius = '6px';
-        fmDetails.style.padding = '8px 10px';
-        fmDetails.style.marginBottom = '10px';
+        const fmDetails = calSection.createEl('details', { cls: 'tps-collapsible-subsection' });
         const fmSummary = fmDetails.createEl('summary', { text: 'Frontmatter Keys' });
-        fmSummary.style.fontWeight = '600';
-        fmSummary.style.cursor = 'pointer';
-        const fmContent = fmDetails.createDiv();
-        fmContent.style.marginTop = '8px';
+        const fmContent = fmDetails.createDiv({ cls: 'tps-rule-content' });
 
         const fmKeys: { key: keyof typeof this.plugin.settings; label: string; placeholder: string }[] = [
             { key: 'eventIdKey', label: 'Event ID Key', placeholder: 'externalEventId' },
@@ -247,16 +241,9 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                 }));
 
         // Global ignore lists (collapsible)
-        const ignoreDetails = remSection.createEl('details');
-        ignoreDetails.style.border = '1px solid var(--background-modifier-border)';
-        ignoreDetails.style.borderRadius = '6px';
-        ignoreDetails.style.padding = '8px 10px';
-        ignoreDetails.style.marginBottom = '10px';
+        const ignoreDetails = remSection.createEl('details', { cls: 'tps-collapsible-subsection' });
         const ignoreSummary = ignoreDetails.createEl('summary', { text: 'Global Ignore Lists' });
-        ignoreSummary.style.fontWeight = '600';
-        ignoreSummary.style.cursor = 'pointer';
-        const ignoreContent = ignoreDetails.createDiv();
-        ignoreContent.style.marginTop = '8px';
+        const ignoreContent = ignoreDetails.createDiv({ cls: 'tps-rule-content' });
 
         new Setting(ignoreContent)
             .setName('Ignore Paths')
@@ -430,39 +417,24 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         const reminders = this.plugin.settings.reminders || [];
 
         if (reminders.length === 0) {
-            const empty = container.createDiv();
-            empty.style.padding = '12px';
-            empty.style.color = 'var(--text-muted)';
-            empty.style.textAlign = 'center';
+            const empty = container.createDiv({ cls: 'tps-empty-state' });
             empty.textContent = 'No reminder rules configured.';
             return;
         }
 
         reminders.forEach((rem, index) => {
             const ruleEl = container.createEl('details', { cls: 'tps-controller-reminder-rule' });
-            ruleEl.style.border = '1px solid var(--background-modifier-border)';
-            ruleEl.style.borderRadius = '6px';
-            ruleEl.style.padding = '8px 10px';
-            ruleEl.style.marginBottom = '8px';
 
             const ruleSummary = ruleEl.createEl('summary');
-            ruleSummary.style.cursor = 'pointer';
-            ruleSummary.style.display = 'flex';
-            ruleSummary.style.justifyContent = 'space-between';
-            ruleSummary.style.alignItems = 'center';
 
-            const labelSpan = ruleSummary.createSpan();
-            labelSpan.style.fontWeight = '600';
+            const labelSpan = ruleSummary.createSpan({ cls: 'tps-rule-label' });
             const enabledDot = rem.enabled ? '🟢' : '⚫';
             labelSpan.textContent = `${enabledDot} ${rem.label || `Rule ${index + 1}`}`;
 
-            const descSpan = ruleSummary.createSpan();
-            descSpan.style.color = 'var(--text-muted)';
-            descSpan.style.fontSize = '0.85em';
+            const descSpan = ruleSummary.createSpan({ cls: 'tps-rule-desc' });
             descSpan.textContent = `${rem.property} • ${rem.offsetMinutes >= 0 ? '+' : ''}${rem.offsetMinutes}min`;
 
-            const ruleContent = ruleEl.createDiv();
-            ruleContent.style.marginTop = '10px';
+            const ruleContent = ruleEl.createDiv({ cls: 'tps-rule-content' });
 
             // ── General ──────────────────────────────────────
             // Label
@@ -489,16 +461,9 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             // ── Trigger Settings ─────────────────────────────
             const triggerGroup = ruleContent.createEl('details');
-            triggerGroup.style.border = '1px solid var(--background-modifier-border)';
-            triggerGroup.style.borderRadius = '6px';
-            triggerGroup.style.padding = '8px 10px';
-            triggerGroup.style.marginBottom = '8px';
             triggerGroup.setAttr('open', 'true');
             const triggerSummary = triggerGroup.createEl('summary', { text: 'Trigger Settings' });
-            triggerSummary.style.fontWeight = '600';
-            triggerSummary.style.cursor = 'pointer';
             const triggerContent = triggerGroup.createDiv();
-            triggerContent.style.marginTop = '8px';
 
             // Property
             new Setting(triggerContent)
@@ -601,18 +566,11 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             // ── Repeat & Stop ────────────────────────────────
             const repeatGroup = ruleContent.createEl('details');
-            repeatGroup.style.border = '1px solid var(--background-modifier-border)';
-            repeatGroup.style.borderRadius = '6px';
-            repeatGroup.style.padding = '8px 10px';
-            repeatGroup.style.marginBottom = '8px';
             const repeatSummary = repeatGroup.createEl('summary');
-            repeatSummary.style.fontWeight = '600';
-            repeatSummary.style.cursor = 'pointer';
             repeatSummary.textContent = rem.repeatUntilComplete
                 ? `Repeat & Stop — every ${rem.repeatIntervalMinutes}min`
                 : 'Repeat & Stop — single notification';
             const repeatContent = repeatGroup.createDiv();
-            repeatContent.style.marginTop = '8px';
 
             // Repeat
             new Setting(repeatContent)
@@ -652,15 +610,8 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             // ── Filtering ────────────────────────────────────
             const filterGroup = ruleContent.createEl('details');
-            filterGroup.style.border = '1px solid var(--background-modifier-border)';
-            filterGroup.style.borderRadius = '6px';
-            filterGroup.style.padding = '8px 10px';
-            filterGroup.style.marginBottom = '8px';
             const filterSummary = filterGroup.createEl('summary', { text: 'Filtering' });
-            filterSummary.style.fontWeight = '600';
-            filterSummary.style.cursor = 'pointer';
             const filterContent = filterGroup.createDiv();
-            filterContent.style.marginTop = '8px';
 
             // Required statuses
             new Setting(filterContent)
@@ -720,15 +671,8 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             // ── Notification ─────────────────────────────────
             const notifGroup = ruleContent.createEl('details');
-            notifGroup.style.border = '1px solid var(--background-modifier-border)';
-            notifGroup.style.borderRadius = '6px';
-            notifGroup.style.padding = '8px 10px';
-            notifGroup.style.marginBottom = '8px';
             const notifSummary = notifGroup.createEl('summary', { text: 'Notification Template' });
-            notifSummary.style.fontWeight = '600';
-            notifSummary.style.cursor = 'pointer';
             const notifContent = notifGroup.createDiv();
-            notifContent.style.marginTop = '8px';
 
             // Title / Body templates
             new Setting(notifContent)

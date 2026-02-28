@@ -384,6 +384,10 @@ export class DailyNoteNavManager extends Component {
 
         try {
             const created = await this.plugin.app.vault.create(normalizedPath, content);
+
+            // Run Templater explicitly so <% tp.* %> expressions in the template are evaluated.
+            await this.runTemplaterOnFile(created);
+
             if (shouldWriteTitleViaFrontmatterApi) {
                 try {
                     await this.plugin.app.fileManager.processFrontMatter(created, (fm) => {
@@ -397,6 +401,24 @@ export class DailyNoteNavManager extends Component {
         } catch (err) {
             logger.error("Failed creating daily note from template", normalizedPath, err);
             return null;
+        }
+    }
+
+    /**
+     * Explicitly invoke Templater's "Replace templates in file" on a newly-created
+     * file so <% tp.* %> expressions are evaluated in-place.
+     * Safe no-op when Templater is not installed.
+     *
+     * Uses overwrite_file_commands(file, false) — same code path as "Replace templates
+     * in the active file" but works on any file object without an active editor view.
+     */
+    private async runTemplaterOnFile(file: TFile): Promise<void> {
+        const templater = (this.plugin.app as any)?.plugins?.plugins?.['templater-obsidian'];
+        if (!templater?.templater) return;
+        try {
+            await templater.templater.overwrite_file_commands(file, false);
+        } catch (e) {
+            logger.warn('[DailyNoteNavManager] Templater failed to process file (non-fatal):', file.path, e);
         }
     }
 

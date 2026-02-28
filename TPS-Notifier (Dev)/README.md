@@ -58,3 +58,54 @@ src/
     list-renderer.ts
     section-helpers.ts
 ```
+
+---
+
+## Known Issues & Planned Improvements
+
+### Critical
+- **`time-calculation-service.ts` is a duplicate** — This file (276 lines) is a copy of `TPS-Controller (Dev)/src/services/time-calculation-service.ts` (286 lines) that has silently diverged. Since Controller owns the `ReminderEngine`, Notifier should import these utilities from Controller's typed API and delete its local copy.
+- **`PropertyReminder` type duplicated** — Defined identically in both `types.ts` here and in Controller's `types.ts`. Notifier should import from Controller.
+
+### Medium
+- **`pollMinutes: 0.5` default** — 30-second polling is too aggressive. Default should be `2.0`. (Note: Notifier itself does not poll — this legacy field exists in settings but is unused at runtime.)
+- **Legacy dead fields in `TPSNotifierSettings`** — `deviceRole?`, `pollMinutes?`, `reminders?`, `alertState?` are retained for migration compat but never read. Either clean them up (with migration guard) or document explicitly with `/** @deprecated */` JSDoc tags.
+- **No retry on failed ntfy.sh push** — A failed HTTP push is silently dropped. Should retry 2-3 times with brief delay before giving up.
+- **ntfy.sh URL has no validation** — Free-text field should validate `http://`/`https://` prefix and optionally ping on save.
+
+### Low
+- **No `onExternalSettingsChange()`** — ntfy.sh topic/server changes synced via Obsidian Sync don't reload until restart.
+- **Snooze property not auto-cleared** — Check whether `reminderSnooze` frontmatter is cleared after the snooze time passes. If not, stale snooze values will perpetually block re-notification.
+- **No reminder delivery history** — Failed or sent notifications are not logged. A small rolling log (50 entries) in settings would help with debugging missed alerts.
+
+### Planned
+- Delete local `time-calculation-service.ts` and import from Controller API.
+- Import `PropertyReminder` type from Controller.
+- Add retry logic with 3-attempt exponential backoff for ntfy.sh pushes.
+- URL validation + connection test button in settings.
+- Reminder delivery history log.
+
+---
+
+## Integration with TPS Suite
+
+| Plugin | Relationship |
+|--------|-------------|
+| TPS-Controller | **Primary dependency** — Controller drives all reminder evaluation and calls `sendNotification()` on this plugin |
+| TPS-GCM | GCM writes `reminderSnooze` frontmatter that Notifier/Controller reads |
+| TPS-Calendar-Base | Independent |
+| TPS-NNC | Independent |
+
+> For full analysis, see `TPS-ANALYSIS.md` in the plugins root.
+
+---
+
+## Shared Utility Files (Intentional Duplication)
+
+The following source file is deliberately copied from TPS-Controller. Each plugin is self-contained to avoid build-time cross-plugin dependencies. When updating logic, mirror the change to all copies:
+
+| File | Also in |
+|------|---------|
+| `src/utils/time-calculation-service.ts` | TPS-Controller |
+
+**Note:** `PropertyReminder` is defined in TPS-Controller as the canonical source. Notifier carries a local copy in `src/utils/time-calculation-service.ts` solely for its overdue-scan evaluation logic. Reminder *configuration* lives only in Controller settings.

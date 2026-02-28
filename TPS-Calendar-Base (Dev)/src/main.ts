@@ -1,4 +1,5 @@
 import { Notice, Plugin, TFile, MarkdownView } from "obsidian";
+import * as logger from "./logger";
 import { CalendarView, CalendarViewType } from "./calendar-view";
 import { DEFAULT_CONDENSE_LEVEL } from "./utils";
 import { CalendarPluginBridge } from "./plugin-interface";
@@ -13,6 +14,7 @@ import {
 import { normalizeCalendarUrl, normalizeCalendarTag } from "./utils";
 import { ExternalCalendarConfig, CalendarPluginSettings } from "./types";
 import { DEFAULT_SETTINGS, migrateSettings } from "./settings-migration";
+import { getPluginById } from "./core";
 import { EmbedRenderer } from "./embed-renderer";
 
 
@@ -122,11 +124,13 @@ export default class ObsidianCalendarPlugin
   async loadSettings() {
     const stored = await this.loadData();
     this.settings = migrateSettings(stored);
+    logger.setLoggingEnabled(this.settings.enableLogging);
   }
 
 
   async saveSettings() {
     await this.saveData(this.settings);
+    logger.setLoggingEnabled(this.settings.enableLogging);
     this.refreshCalendarViews();
     // Fire a custom workspace event so Bases-registered views also get notified.
     this.app.workspace.trigger("tps-calendar-settings-changed" as any);
@@ -173,7 +177,7 @@ export default class ObsidianCalendarPlugin
 
   getEffectiveExternalCalendars(): ExternalCalendarConfig[] {
     // 1. Check TPS-Controller
-    const controller = (this.app as any).plugins?.getPlugin("tps-controller");
+    const controller = getPluginById(this.app, "tps-controller") as any;
     if (controller?.settings?.externalCalendars?.length) {
       return controller.settings.externalCalendars;
     }
@@ -191,7 +195,7 @@ export default class ObsidianCalendarPlugin
 
   getExternalCalendarFilter(): string {
     // Check Controller for filter too
-    const controller = (this.app as any).plugins?.getPlugin("tps-controller");
+    const controller = getPluginById(this.app, "tps-controller") as any;
     if (controller?.settings?.externalCalendarFilter) {
       return controller.settings.externalCalendarFilter;
     }

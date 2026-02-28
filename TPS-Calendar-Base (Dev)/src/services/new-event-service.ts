@@ -10,11 +10,12 @@ import {
 } from "obsidian";
 import * as logger from "../logger";
 import { formatDateTimeForFrontmatter } from "../utils";
-import { applyTemplateVars, buildTemplateVars, type TemplateVars } from "./template-variable-service";
+import { applyTemplateVars, buildTemplateVars, type TemplateVars } from "../utils/template-variable-service";
 import { TypeFolderOption, TypeFolderService } from "./type-folder-service";
-import { resolveTemplateFile } from "./template-resolution-service";
-import { mergeTagInputs, normalizeTagValue } from "./tag-utils";
+import { resolveTemplateFile } from "../utils/template-resolution-service";
+import { mergeTagInputs, normalizeTagValue } from "../utils/tag-utils";
 import { applyParentLinkToChild } from "./parent-child-link";
+import { getPluginById } from "../core";
 
 export interface NewEventServiceConfig {
   app: App;
@@ -164,29 +165,28 @@ export class NewEventService {
       );
 
       if (templateFile) {
-        const file = await this.config.app.vault.create(path, "");
-        await this.delay(300);
-        const processed = await this.processTemplate(templateFile, file, {
+        // Pre-build template content BEFORE creating the file so it is never born blank.
+        // A blank file (a) syncs to other devices as an empty stub, triggering Templater
+        // folder-templates there, and (b) creates a race condition where Templater
+        // and TPS both try to write to the file at the same time.
+        // Instead: create with content → run Templater explicitly (ordered) → apply TPS
+        // frontmatter last (additive merge). This is fully deterministic.
+        const templateVars: TemplateVars = {
           title: cleanTitle,
           scheduled: frontmatter.scheduled,
           due: frontmatter.due,
           status: frontmatter.status,
           priority: frontmatter.priority,
           tags: resolvedTags,
-        });
-        if (processed != null) {
-          await this.config.app.vault.modify(file, processed);
-        } else {
-          try {
-            const raw = await this.config.app.vault.read(templateFile);
-            await this.config.app.vault.modify(file, raw);
-          } catch (err) {
-            logger.warn("[Weekly Calendar] Failed to load template", err);
-          }
-        }
+        };
+        const initialContent = await this.buildInitialContent(templateFile, path, templateVars);
+        const file = await this.config.app.vault.create(path, initialContent || '---\n---\n');
+        logger.log(`[NewEventService] Created note: "${file.basename}" at ${file.path}`);
 
-        // Templater's global "Trigger on new file creation" handles <% tp.* %>
-        // directives automatically — no explicit call needed.
+        // Explicitly run Templater to process any remaining <% tp.* %> tags.
+        // Done BEFORE applying TPS frontmatter so Templater runs first; TPS then
+        // merges its required fields on top (additive, never destructive).
+        await this.runTemplaterOnFile(file);
 
         if (!options?.useBaseDefaults) {
           const frontmatterWithFolder = {
@@ -215,9 +215,12 @@ export class NewEventService {
 
         return file;
       } else {
-        // No template - create empty file and apply frontmatter via processFrontMatter.
-        const file = await this.config.app.vault.create(path, "");
-        await this.delay(300);
+        // No template — create with a minimal stub so the file is never blank.
+        // Blank files sync to other devices and trigger Templater folder-templates there.
+        // If Templater has a folder-template for this folder it will fire via the vault
+        // 'create' event and overwrite the stub — that is expected and correct.
+        // TPS then applies its frontmatter additively on top.
+        const file = await this.config.app.vault.create(path, '---\n---\n');
 
         if (!options?.useBaseDefaults) {
           const frontmatterWithFolder = {
@@ -693,10 +696,6 @@ export class NewEventService {
     }
   }
 
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
   private async applyEventFrontmatter(file: TFile, frontmatter: Record<string, any>): Promise<void> {
     await this.processFrontmatterSafely(file, "apply-event-frontmatter", (fm) => {
       this.deleteFrontmatterValueCaseInsensitive(fm, "title");
@@ -946,29 +945,54 @@ export class NewEventService {
     );
   }
 
-  private async loadTemplate(path?: string | null): Promise<string | null> {
-    if (!path) return null;
-    try {
-      const file = this.config.app.vault.getAbstractFileByPath(
-        normalizePath(path),
-      );
-      if (file && file instanceof TFile) {
-        return await this.config.app.vault.read(file);
-      }
-    } catch (error) {
-      logger.warn("[Weekly Calendar] Failed to load template", error);
-    }
-    return null;
-  }
-
-  private async processTemplate(templateFile: TFile, targetFile: TFile, extraVars: TemplateVars = {}): Promise<string | null> {
+  /**
+   * Pre-build template content using all vars we know BEFORE the file is created.
+   * Resolves {{vars}} placeholders. <% tp.* %> tags are left intact for Templater
+   * to process via runTemplaterOnFile() after creation.
+   *
+   * Returns the processed string, or '' on failure (caller should use a stub).
+   */
+  private async buildInitialContent(
+    templateFile: TFile,
+    filePath: string,
+    extraVars: TemplateVars = {}
+  ): Promise<string> {
     try {
       const raw = await this.config.app.vault.read(templateFile);
-      return applyTemplateVars(raw, buildTemplateVars(targetFile, extraVars));
+      const basename = filePath.replace(/^.*\//, '').replace(/\.md$/i, '');
+      const folderPath = filePath.includes('/') ? filePath.replace(/\/[^/]+$/, '') : '';
+      const vars = buildTemplateVars(null, {
+        title: basename,
+        file_name: `${basename}.md`,
+        file_basename: basename,
+        file_path: filePath,
+        file_folder: folderPath,
+        ...extraVars,
+      });
+      return applyTemplateVars(raw, vars);
     } catch (e) {
-      logger.error("[Weekly Calendar] Template processing failed", e);
-      new Notice(`⚠️ Calendar Base: Error processing template "${templateFile.basename}".\n${e instanceof Error ? e.message : String(e)}`);
-      return null;
+      logger.warn('[NewEventService] Failed to pre-build template content (non-fatal):', e);
+      return '';
+    }
+  }
+
+  /**
+   * Explicitly invoke Templater's "Replace templates in file" on a newly-created
+   * file so <% tp.* %> expressions are evaluated in-place.
+   * Safe no-op when Templater is not installed or the file has no Templater syntax.
+   *
+   * Uses overwrite_file_commands(file, false) directly — this is the same code path
+   * that backs "Replace templates in the active file", but works on any file object
+   * without requiring it to be the active editor view.
+   */
+  private async runTemplaterOnFile(file: TFile): Promise<void> {
+    const templater = getPluginById(this.config.app, 'templater-obsidian') as any;
+    if (!templater?.templater) return;
+    try {
+      await templater.templater.overwrite_file_commands(file, false);
+      logger.log('[NewEventService] Templater processed:', file.path);
+    } catch (e) {
+      logger.warn('[NewEventService] Templater failed to process file (non-fatal):', file.path, e);
     }
   }
 

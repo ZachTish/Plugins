@@ -9,8 +9,9 @@ import type { PropertyReminder, AlertState, TPSControllerSettings } from "../typ
 import {
     parseDate, parseTimeRange, parseDuration, getEffectiveEndTime,
     formatTemplate, formatRemaining, checkStopCondition,
-    normalizeStatus, getStatuses, hasRequiredStatus, shouldIgnoreForReminder
-} from "./time-calculation-service";
+    normalizeStatus, getStatuses, hasRequiredStatus, shouldIgnoreForReminder,
+    isAllDayEvent
+} from "../utils/time-calculation-service";
 
 export interface PendingNotification {
     title: string;
@@ -96,7 +97,7 @@ export class ReminderEngine {
                         finalTriggerBase = effectiveEndTime;
                     }
 
-                    const isAllDaySafe = fm['allDay'] === true || String(fm['allDay']).toLowerCase() === 'true';
+                    const isAllDaySafe = isAllDayEvent(propValue, fm);
 
                     if (!reminder.triggerAtEnd && isAllDaySafe && reminder.allDayBaseTime) {
                         const match = reminder.allDayBaseTime.match(/^(\d{1,2}):(\d{2})$/);
@@ -249,6 +250,10 @@ export class ReminderEngine {
                         state.lastSent = now;
                         stateChanged = true;
 
+                        if (settings.enableLogging) {
+                            logger.log(`[ReminderEngine] Firing notification: "${title}" for ${file.basename} (rule: "${reminder.label || reminder.id}")`);
+                        }
+
                         // Break after first trigger for this file to prevent redundancy
                         break;
                     }
@@ -257,6 +262,14 @@ export class ReminderEngine {
             } catch (err) {
                 logger.error(`[ReminderEngine] Error processing reminders for ${file.path}:`, err);
             }
+        }
+
+        if (settings.enableLogging) {
+            const notifSummary = pendingNotifications.length > 0
+                ? `${pendingNotifications.length} notification(s) queued`
+                : 'no notifications triggered';
+            const activeRules = settings.reminders.filter(r => r.enabled).length;
+            logger.log(`[ReminderEngine] Scan complete: ${notifSummary} (${files.length} files, ${activeRules} active rule(s))`);
         }
 
         return { notifications: pendingNotifications, stateChanged };

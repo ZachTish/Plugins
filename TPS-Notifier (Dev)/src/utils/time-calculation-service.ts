@@ -1,6 +1,35 @@
 import { moment, getAllTags, TFile } from 'obsidian';
-import type { PropertyReminder } from '../types';
-import { matchesExclusionPattern, normalizeComparablePath } from '../utils';
+import type { TPSNotifierSettings } from '../types';
+
+// ============================================================================
+// PropertyReminder — schema received from TPS-Controller (canonical definition
+// lives in Controller; this is a local copy for Notifier's evaluation logic).
+// ============================================================================
+
+export interface PropertyReminder {
+    id: string;
+    label?: string;
+    property: string;
+    enabled: boolean;
+    offsetMinutes: number;
+    mode?: 'task' | 'timeblock';
+    repeatUntilComplete: boolean;
+    repeatIntervalMinutes: number;
+    maxRepeats: number;
+    stopConditions: string[];
+    title: string;
+    body: string;
+    ignorePaths?: string[];
+    ignoreTags?: string[];
+    ignoreStatuses?: string[];
+    useSmartOffset?: boolean;
+    smartOffsetProperty?: string;
+    smartOffsetOperator?: 'add' | 'subtract';
+    requiredStatuses?: string[];
+    allDayFilter?: 'any' | 'true' | 'false';
+    allDayBaseTime?: string;
+    triggerAtEnd?: boolean;
+}
 
 // ============================================================================
 // Date/Time Parsing
@@ -250,16 +279,7 @@ export function shouldIgnoreForReminder(
     const ignoreStatuses =
         Array.isArray(reminder.ignoreStatuses) ? reminder.ignoreStatuses : globalIgnoreStatuses;
 
-    const normPath = normalizeComparablePath(file.path);
-    const normBase = normalizeComparablePath(file.basename);
-
-    if (ignorePaths.some(p => p && matchesExclusionPattern(normPath, normBase, p))) {
-        return true;
-    }
-
-    // Required paths: if specified, file must be inside at least one of these folders (using startsWith for simple folder containment)
-    const requiredPaths = Array.isArray(reminder.requiredPaths) ? reminder.requiredPaths.filter(Boolean) : [];
-    if (requiredPaths.length > 0 && !requiredPaths.some(p => file.path.startsWith(p))) {
+    if (ignorePaths.some(p => p && file.path.startsWith(p))) {
         return true;
     }
 
@@ -283,4 +303,33 @@ export function shouldIgnoreForReminder(
     }
 
     return false;
+}
+
+// ============================================================================
+// All-Day Detection
+// ============================================================================
+
+/**
+ * Returns true if a reminder property value represents an all-day event.
+ *
+ * An event is treated as all-day if EITHER:
+ *   1. The note has `allDay: true` in its frontmatter, OR
+ *   2. The raw property value is a date-only string with no time component (YYYY-MM-DD).
+ *
+ * This ensures reminders with an `allDayBaseTime` are anchored to that time
+ * instead of defaulting to midnight (00:00), which would fire them immediately.
+ */
+export function isAllDayEvent(rawPropertyValue: any, fm: any): boolean {
+    // 1. Explicit frontmatter flag
+    const allDayFm = fm['allDay'];
+    if (allDayFm === true || String(allDayFm ?? '').toLowerCase() === 'true') {
+        return true;
+    }
+
+    // 2. Date-only property value: matches YYYY-MM-DD exactly (no time, no T, no offset)
+    if (!rawPropertyValue) return false;
+    const raw = String(Array.isArray(rawPropertyValue) ? rawPropertyValue[0] : rawPropertyValue)
+        .replace(/[\[\]]/g, '')
+        .trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(raw);
 }

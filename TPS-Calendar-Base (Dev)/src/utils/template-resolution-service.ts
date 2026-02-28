@@ -1,5 +1,6 @@
 import { App, TFile, normalizePath } from "obsidian";
 import * as logger from "../logger";
+import { getPluginById } from "../core";
 
 export interface TemplateResolutionOptions {
   allowBasenameMatchInTemplaterRoot?: boolean;
@@ -15,7 +16,7 @@ function normalizeInputPath(path: string): string {
 }
 
 export function getTemplaterRoot(app: App): string | null {
-  const templater = (app as any)?.plugins?.plugins?.["templater-obsidian"];
+  const templater = getPluginById(app, 'templater-obsidian') as any;
   const folder = templater?.settings?.templates_folder;
   if (typeof folder === "string" && folder.trim()) {
     return normalizePath(folder.trim());

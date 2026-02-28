@@ -1,14 +1,3 @@
-export function installConsoleErrorFilter(): () => void {
-  const originalConsoleError = console.error;
-  console.error = (...args: unknown[]) => {
-    originalConsoleError(...args);
-  };
-
-  return () => {
-    console.error = originalConsoleError;
-  };
-}
-
 export function installDateContainsPolyfill(): void {
   if (typeof (Date.prototype as any).contains === 'function') return;
 

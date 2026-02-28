@@ -1,7 +1,8 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
+import { App, PluginSettingTab, Setting, debounce } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from './main';
 import type { AppearanceSettingKey, ViewModeConditionOperator, ViewModeConditionType, ViewModeRule, ViewModeRuleCondition } from './types';
 import { PropertyProfilesModal } from './modals/property-profile-modal';
+import { createCollapsibleSection } from './utils/section-helpers';
 
 /**
  * Settings tab for the plugin
@@ -19,6 +20,8 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
 
     containerEl.empty();
 
+    const debouncedSave = debounce(() => this.plugin.saveSettings(), 300);
+
     const saveAppearance = async () => {
       await this.plugin.saveSettings();
     };
@@ -32,40 +35,11 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     const getAppearanceModeText = (_key: AppearanceSettingKey): string => 'Sync handled by TPS-Controller.';
     const attachAppearanceSyncToggle = (_setting: Setting, _key: AppearanceSettingKey) => {};
 
-    const createSection = (title: string, open = false) => {
-      const details = containerEl.createEl('details', { cls: 'tps-gcm-settings-group' });
-      // Add basic styling inline if CSS is missing, or rely on plugin class
-      details.style.border = '1px solid var(--background-modifier-border)';
-      details.style.borderRadius = '6px';
-      details.style.padding = '10px';
-      details.style.marginBottom = '10px';
-      if (open) details.setAttr('open', '');
-      const summary = details.createEl('summary', { text: title });
-      summary.style.fontWeight = 'bold';
-      summary.style.cursor = 'pointer';
-      summary.style.marginBottom = '10px';
-      return details.createDiv({ cls: 'tps-gcm-settings-group-content' });
-    };
+    const createSection = (title: string) =>
+      createCollapsibleSection(containerEl, { title, defaultOpen: false });
 
-    const createPopout = (parent: HTMLElement, title: string, description?: string, open = false) => {
-      const details = parent.createEl('details', { cls: 'tps-gcm-settings-popout' });
-      details.style.border = '1px solid var(--background-modifier-border)';
-      details.style.borderRadius = '6px';
-      details.style.padding = '8px 10px';
-      details.style.marginBottom = '10px';
-      if (open) details.setAttr('open', '');
-
-      const summary = details.createEl('summary', { text: title });
-      summary.style.fontWeight = '600';
-      summary.style.cursor = 'pointer';
-
-      if (description) {
-        const desc = details.createDiv({ text: description, cls: 'setting-item-description' });
-        desc.style.margin = '6px 0 10px 0';
-      }
-
-      return details.createDiv({ cls: 'tps-gcm-settings-popout-content' });
-    };
+    const createPopout = (parent: HTMLElement, title: string, description?: string) =>
+      createCollapsibleSection(parent, { title, description, cssClass: 'tps-collapsible-subsection', defaultOpen: false });
 
     containerEl.createEl('h2', { text: 'TPS Global Context Menu' });
 
@@ -74,7 +48,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     });
 
     // --- General Settings ---
-    const general = createSection('General Settings', true);
+    const general = createSection('General Settings');
 
     new Setting(general)
       .setName('Enable console logging')
@@ -103,9 +77,9 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         text
           .setPlaceholder('archive')
           .setValue(this.plugin.settings.archiveTag)
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.archiveTag = value.trim() || 'archive';
-            await this.plugin.saveSettings();
+            void debouncedSave();
           })
       );
 
@@ -116,9 +90,9 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         text
           .setPlaceholder('System/Archive')
           .setValue(this.plugin.settings.archiveFolderPath)
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.archiveFolderPath = value.trim();
-            await this.plugin.saveSettings();
+            void debouncedSave();
           })
       );
 
@@ -142,9 +116,9 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         text
           .setPlaceholder('e.g., Attachments or Notes/Attachments')
           .setValue(this.plugin.settings.defaultAttachmentsPath)
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.defaultAttachmentsPath = value.trim();
-            await this.plugin.saveSettings();
+            void debouncedSave();
           })
       );
 
@@ -155,9 +129,9 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         text
           .setPlaceholder('e.g., Tasks or Work/Tasks')
           .setValue(this.plugin.settings.defaultSubitemsPath)
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.defaultSubitemsPath = value.trim();
-            await this.plugin.saveSettings();
+            void debouncedSave();
           })
       );
 
@@ -192,7 +166,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.enableInSidePanels)
         .onChange(async v => { this.plugin.settings.enableInSidePanels = v; await this.plugin.saveSettings(); }));
 
-    const inlineUi = createSection('Inline UI', true);
+    const inlineUi = createSection('Inline UI');
 
     new Setting(inlineUi)
       .setName('Show inline context menu')
@@ -255,7 +229,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
 
     // --- Appearance Settings ---
-    const appearance = createSection('Appearance', false);
+    const appearance = createSection('Appearance');
     appearance.createEl('p', {
       text: 'Use the cloud/monitor button on each row to switch between synced and this-device-only behavior.',
       cls: 'setting-item-description',
@@ -493,7 +467,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
 
 
     // --- View Mode Settings ---
-    const viewMode = createSection('View Mode Settings', false);
+    const viewMode = createSection('View Mode Settings');
 
     new Setting(viewMode)
       .setName('Enable View Mode Switching')
@@ -550,8 +524,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     const viewRulesPopout = createPopout(
       viewMode,
       'View Mode Rules',
-      'Define condition rules with AND/OR matching (path contains, scheduled past, daily-note date rules, etc).',
-      false
+      'Define condition rules with AND/OR matching (path contains, scheduled past, daily-note date rules, etc).'
     );
 
     const ensureViewModeRules = (): ViewModeRule[] => {
@@ -870,7 +843,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     }
 
     // --- Overlay Ignore Rules ---
-    const overlayIgnore = createSection('Overlay Ignore Rules', false);
+    const overlayIgnore = createSection('Overlay Ignore Rules');
     overlayIgnore.createEl('p', {
       text: 'Define rules to hide the context menu/subitems overlay for notes that match certain conditions.',
       cls: 'setting-item-description'
@@ -1016,8 +989,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     const subitemIgnorePopout = createPopout(
       overlayIgnore,
       'Subitems Overlay Ignore Rules',
-      'Rules to hide the subitems section for matching notes',
-      false
+      'Rules to hide the subitems section for matching notes'
     );
     if (!Array.isArray(this.plugin.settings.subitems_IgnoreRules)) {
       this.plugin.settings.subitems_IgnoreRules = [];
@@ -1027,8 +999,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     const inlineMenuIgnorePopout = createPopout(
       overlayIgnore,
       'Inline Menu Overlay Ignore Rules',
-      'Rules to hide the inline context menu for matching notes',
-      false
+      'Rules to hide the inline context menu for matching notes'
     );
     if (!Array.isArray(this.plugin.settings.inlineMenu_IgnoreRules)) {
       this.plugin.settings.inlineMenu_IgnoreRules = [];
@@ -1036,12 +1007,11 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     createIgnoreRulesUI(inlineMenuIgnorePopout, this.plugin.settings.inlineMenu_IgnoreRules as ViewModeRule[]);
 
     // --- Menu Configuration (Consolidated) ---
-    const menuConfig = createSection('Menu Configuration', false);
+    const menuConfig = createSection('Menu Configuration');
     const systemCommandsPopout = createPopout(
       menuConfig,
       'System Commands',
-      'Choose optional file operation buttons. Rename is always shown for single-file targets.',
-      false
+      'Choose optional file operation buttons. Rename is always shown for single-file targets.'
     );
     const systemCommands = [
       { id: 'open-in-new-tab', label: 'New Tab' },
@@ -1081,8 +1051,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     const propertiesPopout = createPopout(
       menuConfig,
       'Custom Properties',
-      'Manage editable frontmatter fields shown by inline/right-click menus.',
-      true
+      'Manage editable frontmatter fields shown by inline/right-click menus.'
     );
     const propertiesContainer = propertiesPopout.createDiv();
     this.renderProperties(propertiesContainer);
@@ -1094,7 +1063,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       }));
 
     // --- Automation Features (Consolidated) ---
-    const automation = createSection('Automation & Features', false);
+    const automation = createSection('Automation & Features');
 
     // Checklists & Tasks
     automation.createEl('h4', { text: 'Checklists & Tasks' });

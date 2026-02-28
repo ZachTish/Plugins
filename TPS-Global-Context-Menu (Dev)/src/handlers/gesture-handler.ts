@@ -1,221 +1,126 @@
-/**
- * Cross-platform swipe detector with direction + intent gating.
+﻿/**
+ * Pinch gesture detector for condense/expand view control.
  *
- * Designed to work across touch + desktop pointer input while only firing on
- * deliberate vertical swipes. Accidental taps, clicks and mostly-horizontal
- * drags are rejected.
+ * Tracks two simultaneous pointer events and fires onPinchIn (condense)
+ * or onPinchOut (expand) when the inter-pointer distance changes
+ * deliberately beyond the threshold.
  */
-export interface SwipeGestureCallbacks {
-  onSwipeUp: () => void;
-  onSwipeDown: () => void;
+
+export interface PinchGestureCallbacks {
+  onPinchIn: () => void;  // Fingers closing â†’ condense view
+  onPinchOut: () => void; // Fingers opening  â†’ expand view
 }
 
-interface PointerSnapshot {
+interface PointerPoint {
   x: number;
   y: number;
-  t: number;
 }
 
-export class SwipeGestureHandler {
+export class PinchGestureHandler {
   private readonly element: HTMLElement;
-  private readonly callbacks: SwipeGestureCallbacks;
-  private readonly usePointerEvents: boolean;
+  private readonly callbacks: PinchGestureCallbacks;
 
-  private readonly onPointerDownBound: (evt: PointerEvent) => void;
-  private readonly onPointerMoveBound: (evt: PointerEvent) => void;
-  private readonly onPointerUpBound: (evt: PointerEvent) => void;
-  private readonly onPointerCancelBound: (evt: PointerEvent) => void;
+  private readonly onPointerDownBound: (e: PointerEvent) => void;
+  private readonly onPointerMoveBound: (e: PointerEvent) => void;
+  private readonly onPointerUpBound: (e: PointerEvent) => void;
+  private readonly onPointerCancelBound: (e: PointerEvent) => void;
 
-  private readonly onTouchStartBound: (evt: TouchEvent) => void;
-  private readonly onTouchMoveBound: (evt: TouchEvent) => void;
-  private readonly onTouchEndBound: (evt: TouchEvent) => void;
-  private readonly onTouchCancelBound: (evt: TouchEvent) => void;
+  private activePointers: Map<number, PointerPoint> = new Map();
+  private startDistance: number | null = null;
+  private fired = false;
 
-  private start: PointerSnapshot | null = null;
-  private last: PointerSnapshot | null = null;
-  private activePointerId: number | null = null;
+  /** Minimum distance change (px) before a condense/expand fires. Prevents accidental triggers. */
+  private readonly minDeltaPx = 40;
 
-  // Thresholds tuned for reliable intent detection across devices.
-  private readonly minVerticalDistancePx = 64;
-  private readonly minVelocityPxPerMs = 0.12;
-  private readonly maxGestureDurationMs = 750;
-  private readonly minVerticalDominanceRatio = 1.25;
-  private readonly maxDirectionSlackPx = 14;
-
-  constructor(element: HTMLElement, callbacks: SwipeGestureCallbacks) {
+  constructor(element: HTMLElement, callbacks: PinchGestureCallbacks) {
     this.element = element;
     this.callbacks = callbacks;
-
-    this.usePointerEvents = typeof window !== 'undefined' && 'PointerEvent' in window;
 
     this.onPointerDownBound = this.onPointerDown.bind(this);
     this.onPointerMoveBound = this.onPointerMove.bind(this);
     this.onPointerUpBound = this.onPointerUp.bind(this);
     this.onPointerCancelBound = this.onPointerCancel.bind(this);
 
-    this.onTouchStartBound = this.onTouchStart.bind(this);
-    this.onTouchMoveBound = this.onTouchMove.bind(this);
-    this.onTouchEndBound = this.onTouchEnd.bind(this);
-    this.onTouchCancelBound = this.onTouchCancel.bind(this);
+    element.addEventListener('pointerdown', this.onPointerDownBound);
+    element.addEventListener('pointermove', this.onPointerMoveBound, { passive: true });
+    element.addEventListener('pointerup', this.onPointerUpBound);
+    element.addEventListener('pointercancel', this.onPointerCancelBound);
+  }
 
-    if (this.usePointerEvents) {
-      this.element.addEventListener('pointerdown', this.onPointerDownBound, { passive: true, capture: true });
-      this.element.addEventListener('pointermove', this.onPointerMoveBound, { passive: true, capture: true });
-      this.element.addEventListener('pointerup', this.onPointerUpBound, { passive: true, capture: true });
-      this.element.addEventListener('pointercancel', this.onPointerCancelBound, { passive: true, capture: true });
-    } else {
-      this.element.addEventListener('touchstart', this.onTouchStartBound, { passive: true, capture: true });
-      this.element.addEventListener('touchmove', this.onTouchMoveBound, { passive: true, capture: true });
-      this.element.addEventListener('touchend', this.onTouchEndBound, { passive: true, capture: true });
-      this.element.addEventListener('touchcancel', this.onTouchCancelBound, { passive: true, capture: true });
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
+
+  private getDistance(): number | null {
+    const pts = [...this.activePointers.values()];
+    if (pts.length < 2) return null;
+    const dx = pts[0].x - pts[1].x;
+    const dy = pts[0].y - pts[1].y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  private onPointerDown(e: PointerEvent): void {
+    this.element.setPointerCapture(e.pointerId);
+    this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (this.activePointers.size === 2) {
+      // Second finger landed â€” record starting spread
+      this.startDistance = this.getDistance();
+      this.fired = false;
+    } else if (this.activePointers.size > 2) {
+      // Three or more fingers â€” cancel to avoid misfire
+      this.reset();
     }
   }
 
-  destroy(): void {
-    if (this.usePointerEvents) {
-      this.element.removeEventListener('pointerdown', this.onPointerDownBound, true);
-      this.element.removeEventListener('pointermove', this.onPointerMoveBound, true);
-      this.element.removeEventListener('pointerup', this.onPointerUpBound, true);
-      this.element.removeEventListener('pointercancel', this.onPointerCancelBound, true);
-    } else {
-      this.element.removeEventListener('touchstart', this.onTouchStartBound, true);
-      this.element.removeEventListener('touchmove', this.onTouchMoveBound, true);
-      this.element.removeEventListener('touchend', this.onTouchEndBound, true);
-      this.element.removeEventListener('touchcancel', this.onTouchCancelBound, true);
-    }
+  private onPointerMove(e: PointerEvent): void {
+    if (!this.activePointers.has(e.pointerId)) return;
+    this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-    this.activePointerId = null;
-    this.start = null;
-    this.last = null;
-  }
+    if (this.activePointers.size !== 2 || this.startDistance === null || this.fired) return;
 
-  private beginTracking(x: number, y: number): void {
-    const now = performance.now();
-    const point = { x, y, t: now };
-    this.start = point;
-    this.last = point;
-  }
+    const current = this.getDistance();
+    if (current === null) return;
 
-  private updateTracking(x: number, y: number): void {
-    if (!this.start) return;
-    this.last = { x, y, t: performance.now() };
-  }
-
-  private clearTracking(): void {
-    this.start = null;
-    this.last = null;
-    this.activePointerId = null;
-  }
-
-  private finalizeGesture(endX: number, endY: number, endT: number): void {
-    if (!this.start) return;
-
-    const dx = endX - this.start.x;
-    const dy = endY - this.start.y;
-    const dt = Math.max(1, endT - this.start.t);
-    const absDx = Math.abs(dx);
-    const absDy = Math.abs(dy);
-    const velocityY = dy / dt;
-    const absVelocityY = Math.abs(velocityY);
-
-    this.clearTracking();
-
-    if (absDy < this.minVerticalDistancePx) return;
-    if (dt > this.maxGestureDurationMs && absVelocityY < this.minVelocityPxPerMs) return;
-    if (absDy < absDx * this.minVerticalDominanceRatio) return;
-    if (absDy - absDx < this.maxDirectionSlackPx) return;
-
-    if (dy < 0) {
-      this.callbacks.onSwipeUp();
-      return;
-    }
-
-    this.callbacks.onSwipeDown();
-  }
-
-  private onPointerDown(evt: PointerEvent): void {
-    // Left mouse button only; touch/pen accepted.
-    if (evt.pointerType === 'mouse' && evt.button !== 0) {
-      this.clearTracking();
-      return;
-    }
-
-    // Ignore secondary pointers.
-    if (!evt.isPrimary) {
-      this.clearTracking();
-      return;
-    }
-
-    this.activePointerId = evt.pointerId;
-    this.beginTracking(evt.clientX, evt.clientY);
-
-    if (typeof this.element.setPointerCapture === 'function') {
-      try {
-        this.element.setPointerCapture(evt.pointerId);
-      } catch {
-        // Best-effort only.
+    const delta = current - this.startDistance;
+    if (Math.abs(delta) >= this.minDeltaPx) {
+      this.fired = true;
+      if (delta < 0) {
+        this.callbacks.onPinchIn();  // Distance decreasing â†’ condense
+      } else {
+        this.callbacks.onPinchOut(); // Distance increasing â†’ expand
       }
     }
   }
 
-  private onPointerMove(evt: PointerEvent): void {
-    if (this.activePointerId == null || evt.pointerId !== this.activePointerId) return;
-    this.updateTracking(evt.clientX, evt.clientY);
-  }
-
-  private onPointerUp(evt: PointerEvent): void {
-    if (this.activePointerId == null || evt.pointerId !== this.activePointerId) return;
-    const end = this.last ?? { x: evt.clientX, y: evt.clientY, t: performance.now() };
-    this.finalizeGesture(end.x, end.y, end.t);
-  }
-
-  private onPointerCancel(evt: PointerEvent): void {
-    if (this.activePointerId == null || evt.pointerId !== this.activePointerId) return;
-    this.clearTracking();
-  }
-
-  private onTouchStart(evt: TouchEvent): void {
-    if (evt.touches.length !== 1) {
-      this.clearTracking();
-      return;
+  private onPointerUp(e: PointerEvent): void {
+    this.activePointers.delete(e.pointerId);
+    if (this.activePointers.size < 2) {
+      this.startDistance = null;
+      this.fired = false;
     }
-
-    const touch = evt.touches[0];
-    if (!touch) {
-      this.clearTracking();
-      return;
-    }
-
-    this.beginTracking(touch.clientX, touch.clientY);
   }
 
-  private onTouchMove(evt: TouchEvent): void {
-    if (!this.start) return;
-
-    if (evt.touches.length !== 1) {
-      this.clearTracking();
-      return;
-    }
-
-    const touch = evt.touches[0];
-    if (!touch) return;
-    this.updateTracking(touch.clientX, touch.clientY);
+  private onPointerCancel(e: PointerEvent): void {
+    this.onPointerUp(e);
   }
 
-  private onTouchEnd(evt: TouchEvent): void {
-    if (!this.start) return;
-
-    const touch = evt.changedTouches[0] ?? evt.touches[0];
-    if (!touch) {
-      this.clearTracking();
-      return;
-    }
-
-    const end = this.last ?? { x: touch.clientX, y: touch.clientY, t: performance.now() };
-    this.finalizeGesture(end.x, end.y, end.t);
+  private reset(): void {
+    this.activePointers.clear();
+    this.startDistance = null;
+    this.fired = false;
   }
 
-  private onTouchCancel(): void {
-    this.clearTracking();
+  // ---------------------------------------------------------------------------
+  // Public API
+  // ---------------------------------------------------------------------------
+
+  destroy(): void {
+    this.element.removeEventListener('pointerdown', this.onPointerDownBound);
+    this.element.removeEventListener('pointermove', this.onPointerMoveBound);
+    this.element.removeEventListener('pointerup', this.onPointerUpBound);
+    this.element.removeEventListener('pointercancel', this.onPointerCancelBound);
+    this.activePointers.clear();
   }
 }
+

@@ -1,4 +1,5 @@
 import { FileView, Notice, normalizePath, Plugin, TAbstractFile, TFile } from "obsidian";
+import { getPluginById } from "./core";
 import { NotebookNavigatorCompanionSettingTab } from "./settings-tab";
 import {
   createDefaultRule,
@@ -66,7 +67,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     // Get device role from Controller plugin if available
     // This allows us to skip processing on Controller (which handles vault-wide scans)
     try {
-      const controllerPlugin = (this.app as any).plugins?.getPlugin?.("tps-controller");
+      const controllerPlugin = getPluginById(this.app, "tps-controller") as any;
       if (controllerPlugin?.api) {
         this.deviceRoleManager = {
           isController: () => controllerPlugin.api.getRole() === "controller"
@@ -327,6 +328,13 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   }
 
   async applyRulesToActiveFile(showNotice: boolean): Promise<boolean> {
+    if (!this.isNotebookNavigatorEnabled()) {
+      if (showNotice) {
+        new Notice("Notebook Navigator is not enabled. Rules will not be applied.");
+      }
+      return false;
+    }
+
     const active = this.app.workspace.getActiveFile();
     if (!active) {
       if (showNotice) {
@@ -358,6 +366,13 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   }
 
   async applyRulesToAllFiles(showNotice: boolean, reason = "manual-all"): Promise<number> {
+    if (!this.isNotebookNavigatorEnabled()) {
+      if (showNotice) {
+        new Notice("Notebook Navigator is not enabled. Rules will not be applied.");
+      }
+      return 0;
+    }
+
     const files = this.app.vault.getMarkdownFiles();
     if (files.length === 0) {
       if (showNotice) {
@@ -403,6 +418,10 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     }
   ): Promise<boolean> {
     if (!this.settings.enabled) {
+      return false;
+    }
+
+    if (!this.isNotebookNavigatorEnabled()) {
       return false;
     }
 
@@ -739,6 +758,10 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   }
 
   // isController() removed — role managed by TPS-Controller.
+
+  private isNotebookNavigatorEnabled(): boolean {
+    return !!getPluginById(this.app, "notebook-navigator");
+  }
 
   private isMarkdownFile(file: TAbstractFile): file is TFile {
     return file instanceof TFile && file.extension === "md";

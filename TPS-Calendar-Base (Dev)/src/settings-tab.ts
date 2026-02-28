@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, Setting } from "obsidian";
+import { Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
 import ObsidianCalendarPlugin from "./main";
 import {
   CalendarStyleRule,
@@ -13,8 +13,9 @@ import {
   createDefaultCondition,
 } from "./services/style-rule-service";
 import { normalizeCalendarUrl } from "./utils";
-import { createCollapsibleSection } from "./ui/section-helpers";
-import { renderListWithControls } from "./ui/list-renderer";
+import { getPluginById } from "./core";
+import { createCollapsibleSection } from "./utils/section-helpers";
+import { renderListWithControls } from "./utils/list-renderer";
 
 const createRuleId = () =>
   `${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
@@ -41,18 +42,15 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+
+    const debouncedSave = debounce(() => this.plugin.saveSettings(), 300);
+
     containerEl.createEl("h2", { text: "TPS Calendar Settings" });
 
     // Check for Controller override
-    const controller = (this.app as any).plugins?.getPlugin("tps-controller");
+    const controller = getPluginById(this.app, "tps-controller") as any;
     if (controller?.settings?.externalCalendars?.length) {
-      const warning = containerEl.createDiv();
-      // warning.addClass("mod-warning"); // OptionalObsidian class
-      warning.style.padding = "10px";
-      warning.style.marginBottom = "15px";
-      warning.style.border = "1px solid var(--text-warning)";
-      warning.style.borderRadius = "5px";
-      warning.style.backgroundColor = "rgba(var(--color-orange-rgb), 0.1)";
+      const warning = containerEl.createDiv({ cls: 'tps-settings-warning' });
       warning.createEl("strong", { text: "⚠️ Managed by TPS Controller" });
       warning.createEl("p", {
         text: "External calendars are currently being managed by the TPS Controller plugin. The settings below are being overridden.",
@@ -63,7 +61,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
     // 1. Calendars Section (Top Priority)
     const calendarsSection = createCollapsibleSection(containerEl, {
       title: "📅 Calendars & Sources",
-      defaultOpen: true
+      defaultOpen: false
     });
     const calendarsContainer = calendarsSection.createDiv();
     this.renderExternalCalendars(calendarsContainer);
@@ -163,9 +161,9 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
         text
           .setPlaceholder("Canceled, Tentative")
           .setValue(this.plugin.settings.externalCalendarFilter || "")
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.externalCalendarFilter = value;
-            await this.plugin.saveSettings();
+            void debouncedSave();
           }),
       );
 
@@ -196,9 +194,9 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
         text
           .setPlaceholder("01 Action Items/Calendar.md")
           .setValue(this.plugin.settings.sidebarBasePath ?? "")
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.sidebarBasePath = value.trim();
-            await this.plugin.saveSettings();
+            void debouncedSave();
           }),
       );
 
@@ -342,6 +340,8 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       defaultOpen: false
     });
 
+    let linkDetails: HTMLElement;
+
     new Setting(handlingSection)
       .setName("Parent-Child Linking")
       .setDesc("Enable bidirectional linking between calendar events and parent projects/notes.")
@@ -351,41 +351,38 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.parentLinkEnabled = value;
             await this.plugin.saveSettings();
-            this.display();
+            if (linkDetails) linkDetails.style.display = value ? '' : 'none';
           }),
       );
 
-    if (this.plugin.settings.parentLinkEnabled) {
-      const linkDetails = handlingSection.createDiv();
-      linkDetails.style.paddingLeft = "1em";
-      linkDetails.style.borderLeft = "2px solid var(--background-modifier-border)";
+    linkDetails = handlingSection.createDiv({ cls: 'tps-settings-indent' });
+    linkDetails.style.display = this.plugin.settings.parentLinkEnabled ? '' : 'none';
 
-      new Setting(linkDetails)
-        .setName("Parent Link Key")
-        .setDesc("Key in Child Note pointing to Parent (e.g. 'project').")
-        .addText((text) =>
-          text
-            .setPlaceholder("parent")
-            .setValue(this.plugin.settings.parentLinkKey || "parent")
-            .onChange(async (value) => {
-              this.plugin.settings.parentLinkKey = value.trim() || "parent";
-              await this.plugin.saveSettings();
-            }),
-        );
+    new Setting(linkDetails)
+      .setName("Parent Link Key")
+      .setDesc("Key in Child Note pointing to Parent (e.g. 'project').")
+      .addText((text) =>
+        text
+          .setPlaceholder("parent")
+          .setValue(this.plugin.settings.parentLinkKey || "parent")
+          .onChange(async (value) => {
+            this.plugin.settings.parentLinkKey = value.trim() || "parent";
+            await this.plugin.saveSettings();
+          }),
+      );
 
-      new Setting(linkDetails)
-        .setName("Child Link Key")
-        .setDesc("Key in Parent Note pointing to Children (e.g. 'meetings').")
-        .addText((text) =>
-          text
-            .setPlaceholder("meetings")
-            .setValue(this.plugin.settings.childLinkKey || "meetings")
-            .onChange(async (value) => {
-              this.plugin.settings.childLinkKey = value.trim() || "meetings";
-              await this.plugin.saveSettings();
-            }),
-        );
-    }
+    new Setting(linkDetails)
+      .setName("Child Link Key")
+      .setDesc("Key in Parent Note pointing to Children (e.g. 'meetings').")
+      .addText((text) =>
+        text
+          .setPlaceholder("meetings")
+          .setValue(this.plugin.settings.childLinkKey || "meetings")
+          .onChange(async (value) => {
+            this.plugin.settings.childLinkKey = value.trim() || "meetings";
+            await this.plugin.saveSettings();
+          }),
+      );
 
     new Setting(handlingSection)
       .setName("Status: In-Progress")
@@ -562,6 +559,22 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           })
         );
     });
+
+    // 6. Debug
+    const debugSection = createCollapsibleSection(containerEl, {
+      title: "🐛 Debug",
+      defaultOpen: false,
+    });
+
+    new Setting(debugSection)
+      .setName("Enable logging")
+      .setDesc("Print detailed debug logs to the developer console (Ctrl+Shift+I). Disable when not needed.")
+      .addToggle(toggle =>
+        toggle.setValue(this.plugin.settings.enableLogging).onChange(async (value) => {
+          this.plugin.settings.enableLogging = value;
+          await this.plugin.saveSettings();
+        })
+      );
   }
 
   renderExternalCalendars(container: HTMLElement) {

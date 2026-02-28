@@ -1,5 +1,6 @@
 import { Notice, Plugin, TFile, moment, WorkspaceLeaf, Modal, App } from 'obsidian';
 import * as logger from "./logger";
+import { getPluginById } from './core';
 import { NotificationView, NOTIFICATION_VIEW_TYPE } from './notification-view';
 import { OverdueItemsModal } from './modals/overdue-modal';
 import { TPSNotifierSettings, PropertyReminder, OverdueItem } from './types';
@@ -7,8 +8,9 @@ import { TPSNotifierSettingTab } from './settings-tab';
 import {
     parseDate, parseTimeRange, parseDuration, getEffectiveEndTime,
     formatTemplate, formatRemaining, checkStopCondition,
-    normalizeStatus, getStatuses, hasRequiredStatus, shouldIgnoreForReminder
-} from './services/time-calculation-service';
+    normalizeStatus, getStatuses, hasRequiredStatus, shouldIgnoreForReminder,
+    isAllDayEvent
+} from './utils/time-calculation-service';
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -250,17 +252,14 @@ export default class TPSNotifier extends Plugin {
         const now = Date.now();
         const overdueItems: OverdueItem[] = [];
 
-        // Read reminders from Controller API (source of truth) or legacy settings
+        // Read reminders from Controller API (source of truth)
         let reminders: PropertyReminder[] = [];
         try {
-            const controllerPlugin = (this.app as any).plugins.getPlugin('tps-controller');
+            const controllerPlugin = getPluginById(this.app, 'tps-controller') as any;
             if (controllerPlugin?.api?.getReminders) {
                 reminders = controllerPlugin.api.getReminders() || [];
             }
         } catch { /* ignore */ }
-        if (!reminders.length && this.settings.reminders) {
-            reminders = this.settings.reminders;
-        }
         if (!reminders.length) return overdueItems;
 
         const files = this.app.vault.getMarkdownFiles();
@@ -318,7 +317,7 @@ export default class TPSNotifier extends Plugin {
                     finalTriggerBase = effectiveEndTime;
                 }
 
-                const isAllDaySafe = fm['allDay'] === true || String(fm['allDay']).toLowerCase() === 'true';
+                const isAllDaySafe = isAllDayEvent(propertyValue, fm);
 
                 if (isAllDaySafe && reminder.allDayBaseTime) {
                     const match = reminder.allDayBaseTime.match(/^(\d{1,2}):(\d{2})$/);
@@ -417,6 +416,7 @@ export default class TPSNotifier extends Plugin {
             }
         }
 
+        logger.log(`[OverdueItems] Scan complete: ${deduplicatedItems.length} overdue item(s) found (${files.length} files scanned, ${reminders.length} reminder rule(s))`);
         return deduplicatedItems;
     }
 

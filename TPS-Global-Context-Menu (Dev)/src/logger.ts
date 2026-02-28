@@ -8,6 +8,9 @@ const DUPLICATE_WINDOW_MS = 3000;
 
 export function setLoggingEnabled(value: boolean): void {
   loggingEnabled = !!value;
+  if (value) {
+    console.log(`[Global Context Menu] [Logger] Debug logging enabled — ${new Date().toISOString()}`);
+  }
 }
 
 function shouldLog(level: "log" | "warn" | "error", message?: any, optionalParams: any[] = []): boolean {
@@ -56,4 +59,25 @@ export function error(message?: any, ...optionalParams: any[]): void {
   // Always log errors, even when logging is disabled
   if (!shouldLog("error", message, optionalParams)) return;
   console.error(`[Global Context Menu] ${message}`, ...optionalParams);
+}
+
+export const debug = log;
+export const info = log;
+
+export interface ScopedLogger {
+  log(message?: any, ...rest: any[]): void;
+  debug(message?: any, ...rest: any[]): void;
+  info(message?: any, ...rest: any[]): void;
+  warn(message?: any, ...rest: any[]): void;
+  error(message?: any, ...rest: any[]): void;
+}
+
+export function createScoped(scope: string): ScopedLogger {
+  return {
+    log:   (msg?: any, ...r: any[]) => log(`[${scope}] ${msg ?? ""}`, ...r),
+    debug: (msg?: any, ...r: any[]) => log(`[${scope}] ${msg ?? ""}`, ...r),
+    info:  (msg?: any, ...r: any[]) => log(`[${scope}] ${msg ?? ""}`, ...r),
+    warn:  (msg?: any, ...r: any[]) => warn(`[${scope}] ${msg ?? ""}`, ...r),
+    error: (msg?: any, ...r: any[]) => error(`[${scope}] ${msg ?? ""}`, ...r),
+  };
 }

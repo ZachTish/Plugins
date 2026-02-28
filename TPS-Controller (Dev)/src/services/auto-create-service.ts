@@ -4,7 +4,7 @@ import { ExternalCalendarService } from "./external-calendar-service";
 import { ExternalCalendarEvent } from "../types";
 import { createMeetingNoteFromExternalEvent } from "./external-event-modal";
 import { formatDateTimeForFrontmatter, parseFrontmatterDate, matchesExclusionPattern, normalizeCalendarUrl, normalizeComparablePath } from "../utils";
-import { mergeTagInputs, normalizeTagValue, parseTagInput } from "./tag-utils";
+import { mergeTagInputs, normalizeTagValue, parseTagInput } from "../utils/tag-utils";
 
 interface CalendarAutoCreateConfig {
     typeFolder?: string | null;
@@ -250,17 +250,16 @@ export class AutoCreateService {
                 }
             }
 
+            const summary = [
+                `${created} created`,
+                `${updated} updated`,
+                `${deleted} archived/deleted`,
+            ];
+            if (quarantined > 0) summary.push(`${quarantined} quarantined`);
+            if (restored > 0) summary.push(`${restored} restored`);
+            logger.log(`[AutoCreateService] Sync complete: ${summary.join(', ')} (${remoteEvents.length} remote events processed)`);
             if (created + updated + deleted + quarantined + restored > 0) {
-                const summary = [
-                    `${created} created`,
-                    `${updated} updated`,
-                    `${deleted} archived/deleted`,
-                ];
-                if (quarantined > 0) summary.push(`${quarantined} quarantined`);
-                if (restored > 0) summary.push(`${restored} restored`);
                 new Notice(`Calendar Sync: ${summary.join(", ")}`);
-            } else {
-                logger.log('[AutoCreateService] No changes.');
             }
 
         } catch (e) {

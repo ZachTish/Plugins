@@ -74,6 +74,7 @@ export class NoteOperationService {
 
             const existing = await this.app.vault.read(picker);
             const spacer = existing.endsWith("\n") ? "\n" : "\n\n";
+            logger.log(`[NoteOperationService] Appending ${sections.length} note(s) → "${picker.basename}"`);
             await this.app.vault.modify(picker, `${existing}${spacer}${sections.join("\n")}`);
 
             const archiveResult = await this.archiveSourceNotes(appendedSources, new Set([picker.path]));
@@ -356,6 +357,11 @@ export class NoteOperationService {
         }
 
         const created = await this.app.vault.create(path, content);
+
+        // Run Templater explicitly so <% tp.* %> expressions are evaluated.
+        // This is safe to call even when Templater is not installed.
+        await this.runTemplaterOnFile(created);
+
         if (shouldWriteTitleViaFrontmatterApi) {
             try {
                 await this.app.fileManager.processFrontMatter(created, (fm: any) => {
@@ -367,6 +373,24 @@ export class NoteOperationService {
         }
 
         return created;
+    }
+
+    /**
+     * Explicitly invoke Templater's "Replace templates in file" on a newly-created
+     * file so <% tp.* %> expressions are evaluated in-place.
+     * Safe no-op when Templater is not installed.
+     *
+     * Uses overwrite_file_commands(file, false) — same code path as "Replace templates
+     * in the active file" but works on any file object without an active editor view.
+     */
+    private async runTemplaterOnFile(file: TFile): Promise<void> {
+        const templater = (this.app as any)?.plugins?.plugins?.['templater-obsidian'];
+        if (!templater?.templater) return;
+        try {
+            await templater.templater.overwrite_file_commands(file, false);
+        } catch (e) {
+            logger.warn('[NoteOperationService] Templater failed to process file (non-fatal):', file.path, e);
+        }
     }
 
     private hasKeys(value: unknown): boolean {
@@ -487,6 +511,7 @@ export class NoteOperationService {
             }
         });
 
+        logger.log(`[NoteOperationService] Archive complete: ${archived}/${files.length} file(s) moved to "${archiveFolder}"`);
         return { archived };
     }
 }

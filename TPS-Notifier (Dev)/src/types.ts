@@ -1,29 +1,9 @@
 import { TFile } from "obsidian";
+import type { PropertyReminder } from './utils/time-calculation-service';
 
-export interface PropertyReminder {
-    id: string;
-    label?: string; // Optional display label for UI organization
-    property: string;
-    enabled: boolean;
-    offsetMinutes: number;
-    mode?: 'task' | 'timeblock';
-    repeatUntilComplete: boolean;
-    repeatIntervalMinutes: number;
-    maxRepeats: number;
-    stopConditions: string[];
-    title: string;
-    body: string;
-    ignorePaths?: string[];
-    ignoreTags?: string[];
-    ignoreStatuses?: string[];
-    useSmartOffset?: boolean;
-    smartOffsetProperty?: string;
-    smartOffsetOperator?: 'add' | 'subtract';
-    requiredStatuses?: string[];
-    allDayFilter?: 'any' | 'true' | 'false'; // 'true' = must be allDay, 'false' = must NOT be allDay
-    allDayBaseTime?: string; // e.g. "09:00"
-    triggerAtEnd?: boolean; // Calculate trigger from the end of the event (start + duration)
-}
+// PropertyReminder is defined in utils/time-calculation-service.ts.
+// Re-exported here so other modules can import it from this central types file.
+export type { PropertyReminder };
 
 export interface TPSNotifierSettings {
     ntfyServer: string;
@@ -32,10 +12,9 @@ export interface TPSNotifierSettings {
     enableLogging: boolean;
     snoozeProperty: string;
     snoozeOptions: { label: string; minutes: number }[];
-    // Legacy fields kept for data.json backward compat (ignored at runtime):
+    // Legacy fields kept for data.json backward compat — not used at runtime:
     deviceRole?: string;
     pollMinutes?: number;
-    reminders?: PropertyReminder[];
     alertState?: Record<string, any>;
     ignorePaths?: string[];
     ignoreTags?: string[];

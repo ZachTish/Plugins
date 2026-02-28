@@ -12,9 +12,11 @@ import { ViewModeManager } from './handlers/view-mode-manager';
 import { ContextTargetService } from './services/context-target-service';
 import { NoteOperationService } from './services/note-operation-service';
 import { FieldInitializationService } from './services/field-initialization-service';
-import { installConsoleErrorFilter, installDateContainsPolyfill } from './compat';
+import { installDateContainsPolyfill } from './compat';
 import * as logger from "./logger";
-import { CommandQueueService, getErrorMessage } from "./core";
+import { CommandQueueService, getErrorMessage, getPluginById } from "./core";
+import { VaultQueryService } from './services/vault-query-service';
+import { TaskIdentityService } from './services/task-identity-service';
 
 
 export default class TPSGlobalContextMenuPlugin extends Plugin {
@@ -29,10 +31,11 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
   noteOperationService: NoteOperationService;
   fieldInitializationService: FieldInitializationService;
   commandQueueService: CommandQueueService;
+  vaultQueryService: VaultQueryService;
+  taskIdentityService: TaskIdentityService;
   styleEl: HTMLStyleElement | null = null;
   ignoreNextContext = false;
   keyboardVisible = false;
-  private restoreConsoleError: (() => void) | null = null;
   private restoreMenuPatch: (() => void) | null = null;
   private viewModeSuppressedPaths: Set<string> = new Set();
   private recentTaskCycleClicks: Map<string, number> = new Map();
@@ -51,7 +54,6 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     logger.setLoggingEnabled(this.settings.enableLogging);
 
     installDateContainsPolyfill();
-    this.restoreConsoleError = installConsoleErrorFilter();
 
     this.contextTargetService = new ContextTargetService(this);
     this.bulkEditService = new BulkEditService(this);
@@ -60,6 +62,8 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.noteOperationService = new NoteOperationService(this);
     this.fieldInitializationService = new FieldInitializationService(this);
     this.commandQueueService = new CommandQueueService();
+    this.vaultQueryService = new VaultQueryService(this.app);
+    this.taskIdentityService = new TaskIdentityService();
 
     this.menuController = new MenuController(this);
     this.persistentMenuManager = new PersistentMenuManager(this);
@@ -209,6 +213,49 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     ensureMenus();
 
     // Mobile keyboard handling delegated to PersistentMenuManager
+
+    // Expose inter-plugin API
+    (this as any).api = {
+      // ── Vault querying ────────────────────────────────────────────────────
+      /** Synchronously query vault files by structured criteria. */
+      queryFiles: (criteria: Parameters<VaultQueryService['query']>[0]) =>
+        this.vaultQueryService.query(criteria),
+      /** Async batched vault query — yields to event loop between batches. */
+      queryFilesAsync: (criteria: Parameters<VaultQueryService['queryAsync']>[0]) =>
+        this.vaultQueryService.queryAsync(criteria),
+      /** Return the first matching file, or null. */
+      queryOneFile: (criteria: Parameters<VaultQueryService['queryOne']>[0]) =>
+        this.vaultQueryService.queryOne(criteria),
+      /** Count matching files without building a result set. */
+      countFiles: (criteria: Parameters<VaultQueryService['count']>[0]) =>
+        this.vaultQueryService.count(criteria),
+      /** Resolve a single file by vault path with pre-fetched frontmatter. */
+      getFile: (path: string) =>
+        this.vaultQueryService.getFile(path),
+
+      // ── Task identity ─────────────────────────────────────────────────────
+      /** Classify a file and return a full ItemIdentity. */
+      identifyItem: (
+        file: Parameters<TaskIdentityService['identify']>[0],
+        fm: Parameters<TaskIdentityService['identify']>[1],
+        settings?: Parameters<TaskIdentityService['identify']>[2],
+      ) => this.taskIdentityService.identify(file, fm, settings),
+      /** Normalize a raw status value to lowercase-trimmed form. */
+      normalizeStatus: (raw: unknown) => this.taskIdentityService.normalizeStatus(raw),
+      /** Extract all normalized status strings from a frontmatter record. */
+      getStatuses: (fm: Record<string, unknown>, property?: string) =>
+        this.taskIdentityService.getStatuses(fm, property),
+      /** True if a value represents an all-day (date-only) event. */
+      isAllDayValue: (value: unknown, fm?: Record<string, unknown>) =>
+        this.taskIdentityService.isAllDayValue(value, fm),
+
+      // ── Frontmatter mutations ─────────────────────────────────────────────
+      /** Bulk-update frontmatter on one or more files. */
+      updateFrontmatter: (
+        files: TFile[],
+        updates: Record<string, unknown>,
+      ) => this.bulkEditService.updateFrontmatter(files, updates),
+    };
 
     // Check for missing recurrences on startup
     this.app.workspace.onLayoutReady(async () => {
@@ -452,12 +499,11 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
   }
 
   onunload(): void {
+    delete (this as any).api;
     if (this.restoreMenuPatch) {
       this.restoreMenuPatch();
       this.restoreMenuPatch = null;
     }
-    this.restoreConsoleError?.();
-    this.restoreConsoleError = null;
     this.menuController?.detach();
     this.removeStyles();
     this.persistentMenuManager?.detach();
@@ -490,7 +536,7 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
   }
 
   private getControllerArchiveFolderPath(): string {
-    const plugin = (this.app as any)?.plugins?.getPlugin?.('tps-controller');
+    const plugin = getPluginById(this.app, 'tps-controller') as any;
     const raw = typeof plugin?.settings?.archiveFolder === 'string' ? plugin.settings.archiveFolder : '';
     return raw.trim();
   }

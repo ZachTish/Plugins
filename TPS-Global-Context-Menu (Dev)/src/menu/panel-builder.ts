@@ -2907,7 +2907,9 @@ export class PanelBuilder {
   private async mergeParentTagsIntoSubitem(file: TFile, parentTags: string[]): Promise<void> {
     if (parentTags.length === 0) return;
 
-    // Wait a moment for templater to potentially process the file
+    // Brief pause to let the metadata cache index the newly-created file.
+    // Templater folder-templates may also fire during this window; we merge
+    // parent tags on top of whatever frontmatter exists after the pause.
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     try {

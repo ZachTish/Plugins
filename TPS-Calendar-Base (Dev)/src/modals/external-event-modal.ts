@@ -7,11 +7,30 @@ import {
   applyTemplateVars,
   buildExternalEventTemplateVars,
   type TemplateVars,
-} from "../services/template-variable-service";
-import { resolveTemplateFile as resolveTemplateFilePath } from "../services/template-resolution-service";
-import { mergeTagInputs, normalizeTagValue } from "../services/tag-utils";
+} from "../utils/template-variable-service";
+import { resolveTemplateFile as resolveTemplateFilePath } from "../utils/template-resolution-service";
+import { mergeTagInputs, normalizeTagValue } from "../utils/tag-utils";
+import { getPluginById } from "../core";
 
 const malformedFrontmatterWarnedPaths = new Set<string>();
+
+/**
+ * Explicitly invoke Templater's "Replace templates in file" on a newly-created
+ * file so <% tp.* %> expressions are evaluated in-place.
+ * Safe no-op when Templater is not installed.
+ *
+ * Uses overwrite_file_commands(file, false) — same code path as "Replace templates
+ * in the active file" but works on any file object without an active editor view.
+ */
+async function runTemplaterOnFile(app: App, file: TFile): Promise<void> {
+  const templater = getPluginById(app, 'templater-obsidian') as any;
+  if (!templater?.templater) return;
+  try {
+    await templater.templater.overwrite_file_commands(file, false);
+  } catch (e) {
+    logger.warn('[ExternalEventModal] Templater failed to process file (non-fatal):', file.path, e);
+  }
+}
 
 export class ExternalEventModal extends Modal {
   private event: ExternalCalendarEvent;
@@ -290,12 +309,19 @@ export async function createMeetingNoteFromExternalEvent(
       counter++;
     }
 
-    // Create the file with template content first (preserves original formatting)
+    // Create the file with template content first (preserves original formatting).
+    // Never create blank: a blank file syncs to other devices as an empty stub and
+    // triggers Templater folder-templates there before the real content arrives.
     file = await app.vault.create(path, noteContent);
+    logger.log(`[CreateMeetingNote] Created note: "${file.basename}" at ${file.path}`);
+
+    // Run Templater explicitly so any <% tp.* %> tags in the template are evaluated.
+    // Runs before processFrontMatter so TPS fields are applied last (additive merge).
+    await runTemplaterOnFile(app, file);
   }
 
-  // Apply event frontmatter. Templater's global "Trigger on new file creation"
-  // handles <% tp.* %> directives automatically — no explicit call needed.
+  // Apply event frontmatter additively (merge, never overwrite existing values).
+  // TPS fields are stamped on top of whatever Templater produced.
   await processFrontmatterSafely(app, file, "external-event-create", (fm) => {
     const normalizedCalendarTag = normalizeTagValue(calendarTag);
     if (normalizedCalendarTag) {
