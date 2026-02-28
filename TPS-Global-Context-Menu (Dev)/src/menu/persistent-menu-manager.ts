@@ -1,9 +1,20 @@
-import { MarkdownView, TFile, WorkspaceLeaf, Platform, debounce, setIcon, Menu, normalizePath } from 'obsidian';
+﻿import { MarkdownView, TFile, WorkspaceLeaf, Platform, debounce, setIcon, Menu, normalizePath } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from '../main';
+import {
+  isCompatibleMarkdownView,
+  getViewMode,
+  getCompatibleMarkdownViewFromLeaf,
+  resolvePrimaryMarkdownView,
+  pickBestMarkdownLeaf,
+  scoreMarkdownLeaf,
+  isLeafActiveInDom,
+  isLeafVisible,
+  isSideDockLeaf,
+} from '../services/leaf-resolver';
 import { MenuController, addSafeClickListener } from './menu-controller';
 import { MenuInstances } from '../types';
 import * as logger from '../logger';
-// scroll-direction hide/reveal is handled inline — no gesture-handler import needed.
+// scroll-direction hide/reveal is handled inline â€” no gesture-handler import needed.
 
 // Get the LIVE mode constant if available
 
@@ -190,9 +201,9 @@ export class PersistentMenuManager {
     }
 
     const activeViews = new Set<MarkdownView>();
-    const targetView = this.resolvePrimaryMarkdownView();
+    const targetView = resolvePrimaryMarkdownView(this.plugin.app);
 
-    if (targetView && this.isCompatibleMarkdownView(targetView)) {
+    if (targetView && isCompatibleMarkdownView(targetView)) {
       activeViews.add(targetView);
       try {
         this.ensureReadingMenu(targetView);
@@ -251,157 +262,10 @@ export class PersistentMenuManager {
     }
   }
 
-  private isCompatibleMarkdownView(view: unknown): view is MarkdownView {
-    if (!view || typeof view !== 'object') return false;
-    const candidate = view as MarkdownView;
-    const viewType =
-      typeof (candidate as any).getViewType === 'function'
-        ? (candidate as any).getViewType()
-        : (candidate as any).viewType;
-    return (
-      viewType === 'markdown' &&
-      !!(candidate as any).contentEl &&
-      typeof (candidate as any).contentEl.querySelector === 'function'
-    );
-  }
-
-  private getViewMode(view: MarkdownView): 'preview' | 'source' | null {
-    const anyView = view as any;
-
-    try {
-      if (typeof anyView.getMode === 'function') {
-        const mode = anyView.getMode();
-        if (mode === 'preview' || mode === 'source') return mode;
-      }
-    } catch {
-      // ignore and continue with structural detection
-    }
-
-    if (typeof anyView.mode === 'string') {
-      if (anyView.mode === 'preview' || anyView.mode === 'source') return anyView.mode;
-    }
-
-    if (typeof anyView.currentMode === 'string') {
-      if (anyView.currentMode === 'preview' || anyView.currentMode === 'source') return anyView.currentMode;
-    }
-
-    const root = anyView.contentEl as HTMLElement | undefined;
-    if (root?.querySelector('.markdown-source-view')) return 'source';
-    if (root?.querySelector('.markdown-preview-view')) return 'preview';
-    return null;
-  }
-
-  private getCompatibleMarkdownViewFromLeaf(leaf: WorkspaceLeaf | null | undefined): MarkdownView | null {
-    if (!leaf) return null;
-    const view = (leaf as any).view;
-    if (!this.isCompatibleMarkdownView(view)) return null;
-    return view;
-  }
-
-  private resolvePrimaryMarkdownView(): MarkdownView | null {
-    const activeMarkdownView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-    if (this.isCompatibleMarkdownView(activeMarkdownView) && activeMarkdownView.file) {
-      return activeMarkdownView;
-    }
-
-    const allLeaves = this.plugin.app.workspace.getLeavesOfType('markdown');
-    const leaves = allLeaves.filter((leaf) => !!this.getCompatibleMarkdownViewFromLeaf(leaf));
-    if (!leaves.length) return null;
-
-    const activeLeaf = this.plugin.app.workspace.activeLeaf;
-    const activeView = this.getCompatibleMarkdownViewFromLeaf(activeLeaf);
-    if (activeView && activeView.file && this.isLeafVisible(activeLeaf as WorkspaceLeaf)) {
-      return activeView;
-    }
-
-    const activeFile = this.plugin.app.workspace.getActiveFile();
-    if (activeFile) {
-      const matchingLeaves = leaves.filter((leaf) => {
-        const view = this.getCompatibleMarkdownViewFromLeaf(leaf);
-        if (!view) return false;
-        return !!view?.file && view.file.path === activeFile.path;
-      });
-      const preferred = this.pickBestMarkdownLeaf(matchingLeaves, activeLeaf) ?? this.pickBestMarkdownLeaf(leaves, activeLeaf);
-      const preferredView = this.getCompatibleMarkdownViewFromLeaf(preferred);
-      if (preferredView) return preferredView;
-    }
-
-    const fallback = this.pickBestMarkdownLeaf(leaves, activeLeaf);
-    return this.getCompatibleMarkdownViewFromLeaf(fallback);
-  }
-
-  private pickBestMarkdownLeaf(
-    candidates: WorkspaceLeaf[],
-    activeLeaf: WorkspaceLeaf | null
-  ): WorkspaceLeaf | null {
-    if (!candidates.length) return null;
-
-    const scored = candidates.map((leaf, index) => ({
-      leaf,
-      index,
-      score: this.scoreMarkdownLeaf(leaf, activeLeaf),
-    }));
-
-    scored.sort((a, b) => {
-      if (a.score !== b.score) return b.score - a.score;
-      return a.index - b.index;
-    });
-
-    return scored[0]?.leaf ?? null;
-  }
-
-  private scoreMarkdownLeaf(leaf: WorkspaceLeaf, activeLeaf: WorkspaceLeaf | null): number {
-    let score = 0;
-
-    if (leaf === activeLeaf) score += 1000;
-    if (this.isLeafActiveInDom(leaf)) score += 500;
-    if (!this.isSideDockLeaf(leaf)) score += 250;
-    if (this.isLeafVisible(leaf)) score += 150;
-
-    const view = this.getCompatibleMarkdownViewFromLeaf(leaf);
-    if (!view) return -1;
-    if (view?.file) score += 25;
-    if (this.getViewMode(view) === 'preview') score += 10;
-
-    return score;
-  }
-
-  private isLeafActiveInDom(leaf: WorkspaceLeaf): boolean {
-    const container = (leaf as any)?.containerEl as HTMLElement | undefined;
-    if (!container || !container.isConnected) return false;
-
-    if (container.classList.contains('mod-active')) return true;
-
-    const workspaceLeaf = container.closest<HTMLElement>('.workspace-leaf');
-    if (workspaceLeaf?.classList.contains('mod-active')) return true;
-
-    const activeElement = document.activeElement as HTMLElement | null;
-    return !!activeElement && container.contains(activeElement);
-  }
-
-  private isLeafVisible(leaf: WorkspaceLeaf): boolean {
-    const container = (leaf as any)?.containerEl as HTMLElement | undefined;
-    if (!container || !container.isConnected) return false;
-
-    const rect = container.getBoundingClientRect();
-    if (rect.width < 40 || rect.height < 40) return false;
-
-    const style = window.getComputedStyle(container);
-    if (style.display === 'none' || style.visibility === 'hidden') return false;
-
-    return true;
-  }
-
-  private isSideDockLeaf(leaf: WorkspaceLeaf): boolean {
-    const container = (leaf as any)?.containerEl as HTMLElement | undefined;
-    if (!container) return false;
-    return !!container.closest('.workspace-sidedock, .workspace-split.mod-left-split, .workspace-split.mod-right-split');
-  }
-
   private removeGlobalStraysOutsideTarget(targetView: MarkdownView | null): void {
     const targetRoot = targetView?.contentEl || null;
     const targetContainer = ((targetView as any)?.containerEl as HTMLElement | undefined) || null;
-    // Live preview panels live in document.body — keep the one owned by the target view
+    // Live preview panels live in document.body â€” keep the one owned by the target view
     const ownedBodyPanel = targetView ? (this.inlineSubitemsPanels.get(targetView) ?? null) : null;
 
     const removeIfOutsideTarget = (selector: string) => {
@@ -449,7 +313,7 @@ export class PersistentMenuManager {
    * Ensure reading mode menu exists
    */
   ensureReadingMenu(view: MarkdownView): void {
-    if (!this.isCompatibleMarkdownView(view)) return;
+    if (!isCompatibleMarkdownView(view)) return;
 
     const file = view.file;
     if (file instanceof TFile && this.fileMatchesIgnoreRules(file, this.plugin.settings.inlineMenu_IgnoreRules)) {
@@ -457,7 +321,7 @@ export class PersistentMenuManager {
       return;
     }
 
-    const mode = this.getViewMode(view);
+    const mode = getViewMode(view);
     // Strict mode check: Only show in Preview mode
     if (mode !== 'preview') {
       this.removeReadingMenu(view);
@@ -509,7 +373,7 @@ export class PersistentMenuManager {
    * Ensure live preview menu exists
    */
   ensureLiveMenu(view: MarkdownView): void {
-    if (!this.isCompatibleMarkdownView(view)) return;
+    if (!isCompatibleMarkdownView(view)) return;
 
     const file = view.file;
     if (file instanceof TFile && this.fileMatchesIgnoreRules(file, this.plugin.settings.inlineMenu_IgnoreRules)) {
@@ -517,7 +381,7 @@ export class PersistentMenuManager {
       return;
     }
 
-    const mode = this.getViewMode(view);
+    const mode = getViewMode(view);
     // Strict mode check: Only show in Source mode (Live Preview is a type of Source mode)
     if (mode !== 'source') {
       this.removeLiveMenu(view);
@@ -627,7 +491,7 @@ export class PersistentMenuManager {
       return false;
     }
 
-    const mode = this.getViewMode(view);
+    const mode = getViewMode(view);
     // Show in both preview and source (live preview) modes
     return mode === 'preview' || mode === 'source';
   }
@@ -636,7 +500,7 @@ export class PersistentMenuManager {
     const contentRoot = view.contentEl;
     if (!contentRoot) return null;
 
-    const mode = this.getViewMode(view);
+    const mode = getViewMode(view);
     if (!mode) return null;
 
     if (mode === 'preview') {
@@ -778,7 +642,7 @@ export class PersistentMenuManager {
     // Apply vertical offset to both reading + live persistent bars.
     let offsetY = Math.round(this.plugin.settings?.liveMenuOffsetY ?? 0);
 
-    // Note: the subitems panel sits BELOW the context menu bar via flexbox order — no offsetY adjustment needed here.
+    // Note: the subitems panel sits BELOW the context menu bar via flexbox order â€” no offsetY adjustment needed here.
     const position = isReadingMenu ? 'center' : (this.plugin.settings?.liveMenuPosition || 'center');
 
     // Only set visibility if not gesture-collapsed (don't override gesture state)
@@ -842,7 +706,7 @@ export class PersistentMenuManager {
     const contentRoot = view.contentEl;
     if (!contentRoot) return null;
 
-    const mode = this.getViewMode(view);
+    const mode = getViewMode(view);
     if (!mode) return null;
     if (mode === 'preview') {
       const previewView = contentRoot.querySelector<HTMLElement>('.markdown-preview-view');
@@ -1326,7 +1190,7 @@ export class PersistentMenuManager {
   }
 
   private getScrollerForView(view: MarkdownView): HTMLElement {
-    const mode = this.getViewMode(view);
+    const mode = getViewMode(view);
     if (mode === 'preview') {
       // In Reading Mode, the .markdown-preview-view is often the scroll container
       // Try finding it within contentEl if previewMode container isn't reliable
@@ -1544,7 +1408,7 @@ export class PersistentMenuManager {
       const delta = top - state.lastTop;
       state.lastTop = top;
 
-      // Direction changed — reset accumulator.
+      // Direction changed â€” reset accumulator.
       if ((delta > 0 && state.accum < 0) || (delta < 0 && state.accum > 0)) {
         state.accum = 0;
       }
@@ -1573,7 +1437,7 @@ export class PersistentMenuManager {
   }
 
   private resolveScrollContainer(view: MarkdownView): HTMLElement | null {
-    const mode = this.getViewMode(view);
+    const mode = getViewMode(view);
     if (mode === 'preview') {
       return view.contentEl?.querySelector<HTMLElement>('.markdown-preview-view') ?? null;
     }

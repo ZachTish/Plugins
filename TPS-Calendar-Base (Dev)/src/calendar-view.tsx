@@ -1,4 +1,4 @@
-import {
+﻿import {
   App,
   BasesEntry,
   BasesPropertyId,
@@ -11,7 +11,6 @@ import {
   normalizePath,
   parsePropertyId,
   QueryController,
-  SuggestModal,
   setIcon,
   TFile,
   ViewOption,
@@ -36,6 +35,26 @@ import { ExternalCalendarService } from "./services/external-calendar-service";
 import { CalendarViewMode, ExternalCalendarEvent } from "./types";
 import { ExternalEventModal, createMeetingNoteFromExternalEvent } from "./modals/external-event-modal";
 import { applyParentLinkToChild, createBidirectionalLink } from "./services/parent-child-link";
+import { FileSelectionModal } from "./modals/file-selection-modal";
+import { HeaderSelectionModal } from "./modals/header-selection-modal";
+import {
+  isLowerBoundOperator,
+  isUpperBoundOperator,
+  stripOuterQuotes,
+  normalizeFilterValue,
+  parseRelativeDurationMs,
+  resolveFilterDateAtom,
+  resolveFilterDateExpression,
+  getAutoRangeViewDayCount,
+} from "./utils/filter-date-utils";
+import {
+  extractDate,
+  extractDuration,
+  resolveDateValue,
+  valueToString,
+  tryParseDate,
+  resolveFromPotentialDate,
+} from "./utils/date-value-utils";
 import * as logger from "./logger";
 
 export const CalendarViewType = "calendar";
@@ -712,7 +731,7 @@ export class CalendarView extends BasesView {
 
     for (const entry of queryData.data) {
       const entryFile = entry.file;
-      let startDate = this.extractDate(entry, this.startDateProp);
+      let startDate = extractDate(entry, this.startDateProp);
       if (startDate) {
         // Read status and priority directly from cache for freshness
         let statusValue: any = null;
@@ -743,7 +762,7 @@ export class CalendarView extends BasesView {
         }
 
         let baseTitle = this.titleProp
-          ? (this.valueToString(entry.getValue(this.titleProp)) as string | undefined)
+          ? (valueToString(entry.getValue(this.titleProp)) as string | undefined)
           : undefined;
 
         // [Fix] If no title property is explicitly set, check if this is a task/list item with "text".
@@ -763,16 +782,16 @@ export class CalendarView extends BasesView {
           // console.log(`[CalendarView Debug] Alternatives: content=${contentVal}, name=${nameVal}, task=${taskVal}`);
 
           if (textVal) {
-            const str = this.valueToString(textVal);
+            const str = valueToString(textVal);
             if (str) baseTitle = str;
           } else if (contentVal) {
-            const str = this.valueToString(contentVal);
+            const str = valueToString(contentVal);
             if (str) baseTitle = str;
           } else if (nameVal) {
-            const str = this.valueToString(nameVal);
+            const str = valueToString(nameVal);
             if (str) baseTitle = str;
           } else if (taskVal) {
-            const str = this.valueToString(taskVal);
+            const str = valueToString(taskVal);
             if (str) baseTitle = str;
           }
         }
@@ -922,13 +941,13 @@ export class CalendarView extends BasesView {
         if (this.endDateProp) {
           if (this.useEndDuration) {
             // Duration mode: compute end from start + duration (in minutes)
-            const durationMinutes = this.extractDuration(entry, this.endDateProp);
+            const durationMinutes = extractDuration(entry, this.endDateProp);
             if (durationMinutes !== null && durationMinutes > 0) {
               endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
             }
           } else {
             // End datetime mode: extract end date directly
-            endDate = this.extractDate(entry, this.endDateProp) ?? undefined;
+            endDate = extractDate(entry, this.endDateProp) ?? undefined;
           }
         }
 
@@ -1153,14 +1172,14 @@ export class CalendarView extends BasesView {
           continue;
         }
 
-        const boundaryDate = this.resolveFilterDateExpression(condition.value);
+        const boundaryDate = resolveFilterDateExpression(condition.value);
         if (!boundaryDate) continue;
 
-        if (this.isLowerBoundOperator(condition.operator)) {
+        if (isLowerBoundOperator(condition.operator)) {
           if (!lowerBound || boundaryDate.getTime() > lowerBound.getTime()) {
             lowerBound = boundaryDate;
           }
-        } else if (this.isUpperBoundOperator(condition.operator)) {
+        } else if (isUpperBoundOperator(condition.operator)) {
           if (!upperBound || boundaryDate.getTime() < upperBound.getTime()) {
             upperBound = boundaryDate;
           }
@@ -1207,6 +1226,7 @@ export class CalendarView extends BasesView {
     return aliases;
   }
 
+
   private matchesStartDateFilterProperty(property: string, aliases: Set<string>): boolean {
     const normalized = String(property || "").trim().toLowerCase();
     if (!normalized) return false;
@@ -1214,135 +1234,6 @@ export class CalendarView extends BasesView {
     if (normalized.startsWith("note.") && aliases.has(normalized.slice(5))) return true;
     if (!normalized.startsWith("note.") && aliases.has(`note.${normalized}`)) return true;
     return false;
-  }
-
-  private isLowerBoundOperator(operator: string): boolean {
-    const op = String(operator || "").toLowerCase().replace(/\s+/g, "");
-    return op.includes(">") || op.includes("after") || op.includes("greater");
-  }
-
-  private isUpperBoundOperator(operator: string): boolean {
-    const op = String(operator || "").toLowerCase().replace(/\s+/g, "");
-    return op.includes("<") || op.includes("before") || op.includes("less");
-  }
-
-  private resolveFilterDateExpression(value: unknown): Date | null {
-    if (value instanceof Date) {
-      return new Date(value.getTime());
-    }
-    if (typeof value === "number" && Number.isFinite(value)) {
-      const parsed = new Date(value);
-      return Number.isNaN(parsed.getTime()) ? null : parsed;
-    }
-
-    const normalized = this.normalizeFilterValue(value);
-    if (!normalized) return null;
-
-    const expression = this.stripOuterQuotes(normalized.trim());
-    if (!expression) return null;
-
-    const direct = this.resolveFilterDateAtom(expression);
-    if (direct) return direct;
-
-    const arithmeticMatch = expression.match(/^(.+?)\s*([+-])\s*(.+)$/);
-    if (!arithmeticMatch) return null;
-
-    const [, leftExpr, op, rightExpr] = arithmeticMatch;
-    const baseDate = this.resolveFilterDateExpression(leftExpr.trim());
-    const durationMs = this.parseRelativeDurationMs(rightExpr.trim());
-    if (!baseDate || durationMs === null) return null;
-
-    const result = new Date(baseDate.getTime());
-    result.setTime(result.getTime() + (op === "+" ? durationMs : -durationMs));
-    return result;
-  }
-
-  private resolveFilterDateAtom(expression: string): Date | null {
-    const lowered = expression.toLowerCase();
-    if (lowered === "today()") {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      return today;
-    }
-
-    if (lowered === "now()") {
-      return new Date();
-    }
-
-    const dateFnMatch = expression.match(/^date\((.+)\)$/i);
-    if (dateFnMatch) {
-      const inner = this.stripOuterQuotes(dateFnMatch[1].trim());
-      if (!inner) return null;
-      const relativeMs = this.parseRelativeDurationMs(inner);
-      if (relativeMs !== null) {
-        const base = new Date();
-        base.setHours(0, 0, 0, 0);
-        base.setTime(base.getTime() + relativeMs);
-        return base;
-      }
-      const parsedDate = new Date(inner);
-      return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
-    }
-
-    const absoluteDate = new Date(expression);
-    if (!Number.isNaN(absoluteDate.getTime())) {
-      return absoluteDate;
-    }
-
-    return null;
-  }
-
-  private parseRelativeDurationMs(expression: string): number | null {
-    let normalized = expression.trim();
-    if (!normalized) return null;
-
-    const durationFnMatch = normalized.match(/^(duration|date)\((.+)\)$/i);
-    if (durationFnMatch) {
-      normalized = durationFnMatch[2].trim();
-    }
-    normalized = this.stripOuterQuotes(normalized);
-    if (!normalized) return null;
-
-    const match = normalized.match(/^(-?\d+(?:\.\d+)?)\s*(day|days|d|week|weeks|w|month|months|mo|hour|hours|hr|hrs|minute|minutes|min|mins)$/i);
-    if (!match) return null;
-
-    const amount = Number.parseFloat(match[1]);
-    if (!Number.isFinite(amount)) return null;
-
-    const unit = match[2].toLowerCase();
-    const unitMs =
-      unit === "day" || unit === "days" || unit === "d"
-        ? 24 * 60 * 60 * 1000
-        : unit === "week" || unit === "weeks" || unit === "w"
-          ? 7 * 24 * 60 * 60 * 1000
-          : unit === "month" || unit === "months" || unit === "mo"
-            ? 30 * 24 * 60 * 60 * 1000
-            : unit === "hour" || unit === "hours" || unit === "hr" || unit === "hrs"
-              ? 60 * 60 * 1000
-              : 60 * 1000;
-
-    return amount * unitMs;
-  }
-
-  private stripOuterQuotes(value: string): string {
-    const trimmed = value.trim();
-    if (!trimmed) return "";
-    if (
-      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-      (trimmed.startsWith("'") && trimmed.endsWith("'"))
-    ) {
-      return trimmed.slice(1, -1).trim();
-    }
-    return trimmed;
-  }
-
-  private getAutoRangeViewDayCount(diffDays: number): number {
-    if (diffDays <= 1) return 1;
-    if (diffDays <= 3) return 3;
-    if (diffDays <= 4) return 4;
-    if (diffDays <= 5) return 5;
-    if (diffDays <= 7) return 7;
-    return 30;
   }
 
   /**
@@ -1436,7 +1327,7 @@ export class CalendarView extends BasesView {
     // Anchor currentDate so centered timeline views start at the lower filter bound.
     // Without this, multi-day views clip future days when range auto-mode is active.
     if (this.viewMode !== "month") {
-      const targetDayCount = this.getAutoRangeViewDayCount(diffDays);
+      const targetDayCount = getAutoRangeViewDayCount(diffDays);
       const centerOffset = Math.max(0, Math.floor((targetDayCount - 1) / 2));
       this.currentDate = new Date(startOfMinDay);
       this.currentDate.setDate(this.currentDate.getDate() + centerOffset);
@@ -2726,174 +2617,6 @@ export class CalendarView extends BasesView {
     return true;
   }
 
-  private extractDate(entry: BasesEntry, propId: BasesPropertyId): Date | null {
-    try {
-      const value = entry.getValue(propId);
-      if (!value) return null;
-
-      const parsedDate = this.resolveDateValue(value);
-      if (parsedDate) return parsedDate;
-
-      return null;
-    } catch (error) {
-      logger.error(`Error extracting date for ${entry.file.name}:`, error);
-      return null;
-    }
-  }
-
-  private extractDuration(entry: BasesEntry, propId: BasesPropertyId): number | null {
-    try {
-      const value = entry.getValue(propId);
-      if (!value) return null;
-
-      // Handle numeric values directly
-      if (typeof value === "number") {
-        return value;
-      }
-
-      // Try to get numeric value from Value object
-      const numValue = (value as any).toNumber?.();
-      if (typeof numValue === "number" && !Number.isNaN(numValue)) {
-        return numValue;
-      }
-
-      // Try to parse from string representation
-      const strValue = this.valueToString(value);
-      if (strValue) {
-        // Handle "1h 30m", "1.5h", "90m" formats
-        let minutes = 0;
-        let matched = false;
-
-        const hoursMatch = strValue.match(/(\d+(?:\.\d+)?)h/);
-        if (hoursMatch) {
-          minutes += parseFloat(hoursMatch[1]) * 60;
-          matched = true;
-        }
-
-        const minsMatch = strValue.match(/(\d+(?:\.\d+)?)m/);
-        if (minsMatch) {
-          minutes += parseFloat(minsMatch[1]);
-          matched = true;
-        }
-
-        if (matched) {
-          return minutes;
-        }
-
-        // Fallback for plain numbers
-        const parsed = parseFloat(strValue);
-        if (!Number.isNaN(parsed)) {
-          return parsed;
-        }
-      }
-
-      return null;
-    } catch (error) {
-      logger.error(`Error extracting duration for ${entry.file.name}:`, error);
-      return null;
-    }
-  }
-
-  private resolveDateValue(value: Value | unknown, seen = new Set<unknown>()): Date | null {
-    if (!value) return null;
-
-    if (typeof value === "object" && value !== null) {
-      if (seen.has(value)) return null;
-      seen.add(value);
-
-      const nestedDate = this.resolveFromPotentialDate(value as Record<string, unknown>, seen);
-      if (nestedDate) return nestedDate;
-    }
-
-    if (value instanceof Date) {
-      return value;
-    }
-
-    const asString = this.valueToString(value);
-    if (!asString) {
-      return null;
-    }
-
-    return this.tryParseDate(asString);
-  }
-
-  private valueToString(value: Value | unknown): string | null {
-    if (typeof value === "string") return value;
-    if (typeof value === "number") return String(value);
-    if (typeof value === "object" && value !== null) {
-      try {
-        return (value as { toString: () => string }).toString();
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-
-  private tryParseDate(raw: string): Date | null {
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-    if (/^\d+$/.test(trimmed)) {
-      const numericValue = Number(trimmed);
-      if (!Number.isNaN(numericValue)) {
-        const numericDate = new Date(numericValue);
-        if (!Number.isNaN(numericDate.getTime())) {
-          return numericDate;
-        }
-      }
-    }
-
-    // Important: `new Date("YYYY-MM-DD")` is parsed as UTC and can shift the local day.
-    // Parse common frontmatter formats as local time to keep calendar + daily embeds aligned.
-    const localMatch = trimmed.match(
-      /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/,
-    );
-    if (localMatch) {
-      const year = Number(localMatch[1]);
-      const month = Number(localMatch[2]);
-      const day = Number(localMatch[3]);
-      const hour = localMatch[4] ? Number(localMatch[4]) : 0;
-      const minute = localMatch[5] ? Number(localMatch[5]) : 0;
-      const second = localMatch[6] ? Number(localMatch[6]) : 0;
-      const local = new Date(year, month - 1, day, hour, minute, second);
-      if (!Number.isNaN(local.getTime())) {
-        return local;
-      }
-    }
-
-    const parsed = new Date(trimmed);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-
-  private resolveFromPotentialDate(
-    value: Record<string, unknown>,
-    seen: Set<unknown>,
-  ): Date | null {
-    const candidates = ["date", "value", "timestamp", "start", "end"];
-    for (const key of candidates) {
-      if (key in value) {
-        const candidate = value[key];
-        const resolved = this.resolveDateValue(candidate, seen);
-        if (resolved) return resolved;
-      }
-    }
-
-    const getter = (value as { get?: (key: string) => unknown }).get;
-    if (typeof getter === "function") {
-      for (const key of candidates) {
-        try {
-          const nested = getter.call(value, key);
-          const resolved = this.resolveDateValue(nested, seen);
-          if (resolved) return resolved;
-        } catch {
-          // ignore getter errors
-        }
-      }
-    }
-
-    return null;
-  }
-
   private showEntryContextMenu(evt: MouseEvent, entry: BasesEntry): void {
     const fcEvent = (evt as any).fullCalendarEvent;
     const eventStart = fcEvent?.start ?? null;
@@ -3738,7 +3461,7 @@ export class CalendarView extends BasesView {
     value: unknown;
   }): string | null {
     const property = condition.property.toLowerCase();
-    const value = this.normalizeFilterValue(condition.value);
+    const value = normalizeFilterValue(condition.value);
     if (!value) return null;
 
     // Direct folder equality is the highest-confidence signal.
@@ -3796,7 +3519,7 @@ export class CalendarView extends BasesView {
       }
 
       if (!this.isPositiveEqualityOp(condition.operator)) continue;
-      const value = this.normalizeFilterValue(condition.value);
+      const value = normalizeFilterValue(condition.value);
       if (value === null) continue;
 
       const key = propertyRaw.startsWith("note.")
@@ -3896,7 +3619,7 @@ export class CalendarView extends BasesView {
       return {
         property: negContainsMatch[1],
         operator: "does not contain",
-        value: this.stripOuterQuotes(negContainsMatch[2].trim()),
+        value: stripOuterQuotes(negContainsMatch[2].trim()),
       };
     }
 
@@ -3906,7 +3629,7 @@ export class CalendarView extends BasesView {
       return {
         property: containsMatch[1],
         operator: "contains",
-        value: this.stripOuterQuotes(containsMatch[2].trim()),
+        value: stripOuterQuotes(containsMatch[2].trim()),
       };
     }
 
@@ -3928,44 +3651,6 @@ export class CalendarView extends BasesView {
     if (!op) return true;
     if (op.includes("not") || op.includes("!=") || op.includes("doesnot")) return false;
     return op.includes("is") || op.includes("equals") || op === "=";
-  }
-
-  private normalizeFilterValue(value: unknown): string | null {
-    if (value === undefined || value === null) return null;
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-      return trimmed ? trimmed : null;
-    }
-    if (typeof value === "number" || typeof value === "boolean") {
-      return String(value);
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        const normalized = this.normalizeFilterValue(item);
-        if (normalized !== null) return normalized;
-      }
-      return null;
-    }
-    if (typeof value === "object") {
-      const record = value as Record<string, unknown>;
-      const candidateKeys = [
-        "value",
-        "text",
-        "raw",
-        "expression",
-        "expr",
-        "query",
-        "code",
-        "source",
-        "literal",
-      ];
-      for (const key of candidateKeys) {
-        if (!(key in record)) continue;
-        const normalized = this.normalizeFilterValue(record[key]);
-        if (normalized !== null) return normalized;
-      }
-    }
-    return null;
   }
 
   private toggleFullDay(): void {
@@ -4399,102 +4084,5 @@ export class CalendarView extends BasesView {
       new Notice("Failed to link note.");
     }
   }
-}
 
-
-
-// Helper to get all tags including frontmatter tags
-function getAllTags(cache: any): string[] {
-  if (!cache) return [];
-  let tags = (cache.tags || []).map((t: any) => t.tag);
-  if (cache.frontmatter?.tags) {
-    const fmTags = Array.isArray(cache.frontmatter.tags)
-      ? cache.frontmatter.tags
-      : [cache.frontmatter.tags];
-    tags = [...tags, ...fmTags.map((t: string) => t.startsWith('#') ? t : '#' + t)];
-  }
-  return tags;
-}
-
-interface HeaderInfo {
-  text: string;
-  level: number;
-  line: number;
-}
-
-class HeaderSelectionModal extends SuggestModal<HeaderInfo | string> {
-  headers: HeaderInfo[];
-  onChoose: (result: HeaderInfo | string | null) => void;
-  chosen: boolean = false;
-
-  constructor(app: App, headers: HeaderInfo[], onChoose: (result: HeaderInfo | string | null) => void) {
-    super(app);
-    this.headers = headers;
-    this.onChoose = onChoose;
-    this.setPlaceholder("Select a header in current file to append under...");
-  }
-
-  getSuggestions(query: string): (HeaderInfo | string)[] {
-    const suggestions: (HeaderInfo | string)[] = ["Append to bottom"];
-    const lowerQuery = query.toLowerCase();
-
-    // Filter headers
-    const filteredHeaders = this.headers.filter(h =>
-      h.text.toLowerCase().includes(lowerQuery)
-    );
-
-    return [...suggestions, ...filteredHeaders];
-  }
-
-  renderSuggestion(item: HeaderInfo | string, el: HTMLElement) {
-    if (typeof item === 'string') {
-      el.createDiv({ text: item, cls: "header-selection-special" });
-      el.style.fontWeight = 'bold';
-      el.style.borderBottom = '1px solid var(--background-modifier-border)';
-      el.style.marginBottom = '5px';
-      el.style.paddingBottom = '5px';
-    } else {
-      // Indent based on header level
-      const indent = (item.level - 1) * 15;
-      const div = el.createDiv();
-      div.style.paddingLeft = `${indent}px`;
-      div.innerText = item.text;
-      div.style.color = 'var(--text-normal)';
-    }
-  }
-
-  onChooseSuggestion(item: HeaderInfo | string, evt: MouseEvent | KeyboardEvent) {
-    this.chosen = true;
-    this.onChoose(item);
-  }
-
-  onClose() {
-    if (!this.chosen) {
-      this.onChoose(null);
-    }
-    this.contentEl.empty();
-  }
-}
-
-class FileSelectionModal extends SuggestModal<TFile> {
-  onChoose: (file: TFile) => void;
-
-  constructor(app: App, onChoose: (file: TFile) => void) {
-    super(app);
-    this.onChoose = onChoose;
-    this.setPlaceholder("Select existing note to link...");
-  }
-
-  getSuggestions(query: string): TFile[] {
-    const files = this.app.vault.getMarkdownFiles();
-    return files.filter(f => f.path.toLowerCase().includes(query.toLowerCase()));
-  }
-
-  renderSuggestion(file: TFile, el: HTMLElement) {
-    el.setText(file.path);
-  }
-
-  onChooseSuggestion(file: TFile) {
-    this.onChoose(file);
-  }
 }

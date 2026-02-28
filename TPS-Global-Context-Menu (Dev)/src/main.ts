@@ -1,6 +1,7 @@
 import { Plugin, TFile, WorkspaceLeaf, Menu, Platform, debounce, Notice, MarkdownView, normalizePath } from 'obsidian';
 import { TPSGlobalContextMenuSettings, BuildPanelOptions } from './types';
-import { DEFAULT_SETTINGS, PLUGIN_STYLES } from './constants';
+import { DEFAULT_SETTINGS } from './constants';
+import { PLUGIN_STYLES } from './plugin-styles';
 import { MenuController } from './menu/menu-controller';
 import { PersistentMenuManager } from './menu/persistent-menu-manager';
 import { TPSGlobalContextMenuSettingTab } from './settings-tab';
