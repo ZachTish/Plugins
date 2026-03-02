@@ -71,6 +71,78 @@
   height: auto !important;
 }
 
+/* Canvas embed: constrain calendar to canvas node bounds and prevent overflow */
+.canvas-node-content .bases-calendar-wrapper,
+.canvas-node-content .bases-calendar-scroll,
+.canvas-node-content .bases-calendar-container {
+  max-width: 100% !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+.canvas-node-content .bases-calendar-wrapper .fc,
+.canvas-node-content .bases-calendar-wrapper .fc-view-harness,
+.canvas-node-content .bases-calendar-wrapper .fc-scroller-harness {
+  max-width: 100% !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* The scrollgrid outer <table>: fill the container. */
+.canvas-node-content .bases-calendar-wrapper .fc-scrollgrid {
+  width: 100% !important;
+  max-width: 100% !important;
+  table-layout: fixed !important;
+  box-sizing: border-box !important;
+}
+
+/* ── Canvas inner-table alignment ────────────────────────────────────────────
+   FC's computeScrollerDims() measures harness widths via getBoundingClientRect(),
+   which returns VISUAL (scaled) pixels when the canvas viewport is zoomed.
+   It writes those scaled values as inline style="width: Npx" on inner tables,
+   which render in LAYOUT (unscaled) pixels. Any zoom ≠ 100% breaks widths,
+   and updateSize() re-measures the same wrong values every time.
+
+   Fix: bypass FC's JS width management with CSS !important on inner tables.
+   Hide ALL fc-scroller scrollbar gutters (header + allday + body).
+   When all gutters are 0, 100% of every scroller = the harness width,
+   so header and body tables are identical pixel widths → aligned.
+   Vertical scrolling still works (overflow-y continues to scroll),
+   just without a visible thumb. */
+
+.canvas-node-content .bases-calendar-wrapper .fc .fc-scroller > table,
+.canvas-node-content .bases-calendar-wrapper .fc .fc-scrollgrid-sync-table,
+.canvas-node-content .bases-calendar-wrapper .fc .fc-col-header,
+.canvas-node-content .bases-calendar-wrapper .fc .fc-timegrid-body,
+.canvas-node-content .bases-calendar-wrapper .fc .fc-daygrid-body,
+.canvas-node-content .bases-calendar-wrapper .fc .fc-timegrid-body > table,
+.canvas-node-content .bases-calendar-wrapper .fc .fc-daygrid-body > table,
+.canvas-node-content .bases-calendar-wrapper .fc .fc-timegrid-slots > table,
+.canvas-node-content .bases-calendar-wrapper .fc .fc-timegrid-cols > table {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* Zero-width gutter on ALL fc-scroller sections so every section's content
+   area equals its full harness width (header = allday = body → aligned). */
+.canvas-node-content .bases-calendar-wrapper .fc .fc-scroller {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  overflow-x: hidden !important;
+}
+.canvas-node-content .bases-calendar-wrapper .fc .fc-scroller::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.canvas-node-content .bases-calendar-scroll-surface {
+  overflow-x: hidden !important;
+  max-width: 100% !important;
+}
+
 /* Ensure Bases/Obsidian option panels render above the calendar canvas */
 .workspace-leaf-content[data-type="calendar"] .menu,
 .workspace-leaf-content[data-type="calendar-bases-view"] .menu,
@@ -124,11 +196,14 @@
   width: 100% !important;
 }
 
-/* Force ONLY the actual tables to use fixed layout for even column distribution */
+/* Fallback width for inner tables before FC's first measurement sets inline px values.
+   No !important — FC writes style="width: Npx" as an inline style after computeScrollerDims()
+   and inline styles beat normal CSS rules. Keeping these as fallbacks ensures the calendar
+   looks full-width on the very first render frame before FC has measured anything. */
 .bases-calendar-wrapper .fc .fc-scrollgrid-sync-table,
 .bases-calendar-wrapper .fc .fc-col-header table,
-.bases-calendar-wrapper .fc .fc-timegrid-body>table {
-  width: 100% !important;
+.bases-calendar-wrapper .fc .fc-timegrid-body > table {
+  width: 100%;
 }
 
 
@@ -1940,6 +2015,218 @@ body.is-mobile .bases-calendar-scroll-hours-toggle.is-bottom {
     color: var(--text-muted);
   }
 }
+
+/* =======================================================================
+   MONTH VIEW (dayGridMonth) — Full Redesign
+   =======================================================================
+
+   Design goals:
+     • Days outside the current month are clearly subdued (grayed out)
+     • Today gets a solid accent-colored circle on the day number
+     • Weekend columns are faintly tinted so the 7-column rhythm is clear
+     • Event chips are compact, pill-shaped, and respect priority color
+     • The column header row (Mon–Sun) is clean with a bottom rule
+     • Rows expand to fill available height (expandRows already enabled in JS)
+   ======================================================================= */
+
+/* ── Month grid structural reset ──────────────────────────────────────── */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-scrollgrid,
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-scrollgrid-sync-table {
+  border-collapse: collapse !important;
+}
+
+/* Fill height in the month scroller section */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-body {
+  width: 100% !important;
+}
+
+/* ── Column header (Mon Tue Wed …) ───────────────────────────────────── */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-col-header {
+  background: var(--background-secondary) !important;
+  border-bottom: 1px solid rgba(255,255,255,0.10) !important;
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-col-header-cell {
+  padding: 6px 0 5px !important;
+  border-right: 1px solid rgba(255,255,255,0.06) !important;
+  border-bottom: none !important;
+  text-align: center;
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-col-header-cell-cushion {
+  font-size: 0.7rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  color: var(--text-muted) !important;
+  text-decoration: none !important;
+  padding: 0 !important;
+}
+
+/* Sat / Sun column header accent */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-sat .fc-col-header-cell-cushion,
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-sun .fc-col-header-cell-cushion {
+  color: rgba(148, 163, 184, 0.7) !important;
+}
+
+/* ── Day cell base ────────────────────────────────────────────────────── */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-day {
+  background: transparent !important;
+  border-color: rgba(255,255,255,0.07) !important;
+  vertical-align: top;
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-day-frame {
+  min-height: 80px;
+  padding: 4px 4px 2px 4px !important;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ── Weekend tint ────────────────────────────────────────────────────── */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-sat,
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-sun {
+  background: rgba(255,255,255,0.015) !important;
+}
+
+/* ── Out-of-month days (fc-day-other) ───────────────────────────────── */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-other {
+  background: rgba(0,0,0,0.12) !important;
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-other .fc-daygrid-day-frame {
+  opacity: 0.45;
+}
+
+/* Suppress events that overflow into other-month rows */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-other .fc-daygrid-event {
+  opacity: 0.35 !important;
+}
+
+/* ── Day number ──────────────────────────────────────────────────────── */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-day-top {
+  display: flex !important;
+  justify-content: flex-end !important;
+  padding: 0 2px 4px 2px !important;
+  flex-shrink: 0;
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-day-number {
+  font-size: 0.78rem !important;
+  font-weight: 500 !important;
+  color: var(--text-muted) !important;
+  text-decoration: none !important;
+  width: 24px;
+  height: 24px;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 50% !important;
+  line-height: 1 !important;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-day-number:hover {
+  background: rgba(255,255,255,0.08) !important;
+  color: var(--text-normal) !important;
+}
+
+/* In-month day numbers slightly brighter than out-of-month */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-day:not(.fc-day-other) .fc-daygrid-day-number {
+  color: rgba(248,250,252,0.75) !important;
+}
+
+/* ── Today ───────────────────────────────────────────────────────────── */
+/* Override the existing timegrid-only inset shadow for month today */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-today .fc-daygrid-day-frame {
+  box-shadow: none !important;
+  background: rgba(255, 217, 0, 0.06) !important;
+  border-radius: 0 !important;
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-today .fc-daygrid-day-frame::before {
+  display: none !important;
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-today .fc-daygrid-day-number {
+  background: var(--interactive-accent) !important;
+  color: var(--text-on-accent, #fff) !important;
+  font-weight: 700 !important;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.15);
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-day-today .fc-daygrid-day-number:hover {
+  background: var(--interactive-accent-hover, var(--interactive-accent)) !important;
+}
+
+/* ── Month event chips ───────────────────────────────────────────────── */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-event {
+  border-radius: 3px !important;
+  font-size: 0.72rem !important;
+  font-weight: 500 !important;
+  padding: 1px 5px !important;
+  margin: 1px 2px !important;
+  line-height: 1.5 !important;
+  border: none !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Month view event title color */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-event .fc-event-title,
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-event .bases-calendar-event-title {
+  color: #fff !important;
+  font-size: 0.72rem !important;
+  font-weight: 500 !important;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5) !important;
+}
+
+/* Hide secondary property lines in compact month chips */
+.bases-calendar-wrapper .fc-dayGridMonth-view .bases-calendar-event-properties {
+  display: none !important;
+}
+
+/* External events in month view */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-event.is-external {
+  border-left: 3px solid var(--priority-color, rgba(255,255,255,0.4)) !important;
+  font-style: italic !important;
+}
+
+/* "+ N more" link */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-more-link {
+  font-size: 0.68rem !important;
+  color: var(--text-muted) !important;
+  margin: 1px 2px !important;
+  padding: 0 4px !important;
+  border-radius: 3px !important;
+  line-height: 1.6 !important;
+  background: rgba(255,255,255,0.04) !important;
+  text-decoration: none !important;
+  display: block !important;
+}
+
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-more-link:hover {
+  background: rgba(255,255,255,0.10) !important;
+  color: var(--text-normal) !important;
+}
+
+/* ── Month week row separators ───────────────────────────────────────── */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-daygrid-body tr {
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+
+/* ── Prevent month view from inheriting timegrid today overlay ───────── */
+.bases-calendar-wrapper .fc-dayGridMonth-view .fc-timegrid-col.fc-day-today {
+  box-shadow: none !important;
+}
+
+/* =======================================================================
+   END MONTH VIEW
+   ======================================================================= */
 
 /* =======================================================================
    Settings Tab Styles

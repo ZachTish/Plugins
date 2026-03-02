@@ -100,6 +100,7 @@ export class SettingsManager {
       noteCheckboxIconColor: normalizeOptionalString(record.noteCheckboxIconColor),
       clearIconWhenNoMatch: asBoolean(record.clearIconWhenNoMatch, DEFAULT_SETTINGS.clearIconWhenNoMatch),
       clearColorWhenNoMatch: asBoolean(record.clearColorWhenNoMatch, DEFAULT_SETTINGS.clearColorWhenNoMatch),
+      autoRemoveHiddenWhenNoMatch: asBoolean(record.autoRemoveHiddenWhenNoMatch, DEFAULT_SETTINGS.autoRemoveHiddenWhenNoMatch),
       debugLogging: asBoolean(record.debugLogging, DEFAULT_SETTINGS.debugLogging),
       rules: this.sanitizeRules(record.rules),
       smartSort: this.sanitizeSmartSort(migratedSmartSort),

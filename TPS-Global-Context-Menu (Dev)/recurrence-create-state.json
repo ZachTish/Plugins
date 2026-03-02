@@ -15,6 +15,21 @@
       "state": "complete",
       "targetPath": "Markdown/Action Items/Medication 2026-02-26.md",
       "updatedAt": 1772051102643
+    },
+    "medication|2026-03-01 16:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Events/Medication 2026-03-01.md",
+      "updatedAt": 1772317748606
+    },
+    "medication|2026-03-02 16:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Events/Medication 2026-03-02.md",
+      "updatedAt": 1772387942672
+    },
+    "take out trash|2026-03-09 18:10:00": {
+      "state": "creating",
+      "targetPath": "Take Out Trash 2026-03-09.md",
+      "updatedAt": 1772489305035
     }
   }
 }

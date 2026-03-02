@@ -121,3 +121,20 @@ export function matchesExclusionPattern(
 
     return normalizedBasename === normalizedTarget;
 }
+
+/**
+ * Returns true if `filePath` is inside `requiredFolder`.
+ * Comparison is normalised and case-insensitive, so a value like "Action Items"
+ * correctly matches "Markdown/Action Items/Sub/file.md" regardless of any
+ * leading vault folders in the actual path.
+ */
+export function matchesRequiredPath(filePath: string, requiredFolder: string): boolean {
+    const normFile = normalizeComparablePath(filePath);
+    const normFolder = normalizeComparablePath(requiredFolder);
+    if (!normFolder) return false;
+    return (
+        normFile === normFolder ||
+        normFile.startsWith(`${normFolder}/`) ||
+        normFile.includes(`/${normFolder}/`)
+    );
+}

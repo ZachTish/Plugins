@@ -295,11 +295,21 @@ export class RecurrenceService {
         const fm = cache?.frontmatter;
         if (!fm || (!fm.recurrenceRule && !fm.recurrence)) return;
 
-        // 3. Ignore completed/wont-do items
-        if (fm.status === 'complete' || fm.status === 'wont-do') return;
+        // 3. Skip recurring event templates — they are edited intentionally
+        if (fm.isRecurrenceTemplate) return;
 
-        // 4. Prompt the user
-        await this.promptForContentChange(file);
+        // 4. Ignore completed/wont-do items (next instance will be created by completion handler)
+        const completionStatuses = this.plugin.settings.recurrenceCompletionStatuses?.length
+            ? this.plugin.settings.recurrenceCompletionStatuses
+            : ['complete', 'wont-do'];
+        if (completionStatuses.includes(fm.status)) return;
+
+        // 5. Auto-create next instance immediately when the body of a scheduled
+        //    recurring event is edited (no modal — the next instance is spawned in
+        //    the background so the user can keep editing the current one).
+        logger.log('[RecurrenceService] Body edit detected on recurring event — auto-creating next instance:', file.path);
+        this.sessionTracker.markAsEdited(file.path);
+        await this.splitInstance(file);
     }
 
     /**

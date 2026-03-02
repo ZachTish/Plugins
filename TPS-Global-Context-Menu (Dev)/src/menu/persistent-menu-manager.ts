@@ -1050,7 +1050,7 @@ export class PersistentMenuManager {
   }
 
   private resolveParentFiles(file: TFile): TFile[] {
-    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent';
+    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
     const parentFiles: TFile[] = [];
 
     const cache = this.plugin.app.metadataCache.getFileCache(file);
@@ -1136,6 +1136,7 @@ export class PersistentMenuManager {
 
     // Check for existing collapsed state using our persistent map
     const path = file.path;
+    const hasCollapsedEntry = this.collapsedStateByPath.has(path);
     const wasCollapsed = this.collapsedStateByPath.get(path) ?? false;
 
     this.removeInlineSubitemsPanel(view);
@@ -1146,6 +1147,11 @@ export class PersistentMenuManager {
       // If attaching to menu container, we omit it to let flexbox handle flow
       panel.addClass('tps-gcm-subitems-panel--title-inline');
       if (wasCollapsed) panel.addClass('tps-gcm-subitems-panel--collapsed');
+
+      // Mark for auto-collapse detection on second content render (first open of this file)
+      if (!hasCollapsedEntry && (this.plugin.settings.subitemsPanelAutoCollapse ?? true)) {
+        panel.dataset.autoCollapse = 'pending';
+      }
 
       if (!activeMenu) panel.addClass('tps-gcm-subitems-panel--live');
 
@@ -1161,9 +1167,17 @@ export class PersistentMenuManager {
 
       if (activeMenu) {
         activeMenu.appendChild(panel);
-        // Force order: make sure panel is visually last (below the menu)
-        panel.style.order = '1';
-        panel.style.marginTop = 'var(--tps-gcm-subitems-margin-bottom)';
+        // Position panel above or below the inline menu based on setting
+        const panelPosition = this.plugin.settings.subitemsPanelPosition ?? 'below';
+        if (panelPosition === 'above') {
+          panel.style.order = '-1';
+          panel.style.marginBottom = 'var(--tps-gcm-subitems-margin-bottom)';
+          panel.style.marginTop = '';
+        } else {
+          panel.style.order = '1';
+          panel.style.marginTop = 'var(--tps-gcm-subitems-margin-bottom)';
+          panel.style.marginBottom = '';
+        }
       } else {
         document.body.appendChild(panel);
       }

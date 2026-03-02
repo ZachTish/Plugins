@@ -120,6 +120,7 @@ export interface NotebookNavigatorCompanionSettings {
   noteCheckboxIconColor: string;
   clearIconWhenNoMatch: boolean;
   clearColorWhenNoMatch: boolean;
+  autoRemoveHiddenWhenNoMatch: boolean;
   debugLogging: boolean;
   rules: IconColorRule[];
   smartSort: SmartSortSettings;
@@ -152,11 +153,12 @@ export const DEFAULT_SETTINGS: NotebookNavigatorCompanionSettings = {
   syncFilenameFromTitle: false,
   frontmatterIconField: "icon",
   frontmatterColorField: "color",
-  upstreamLinkKeys: ["parent"],
+  upstreamLinkKeys: ["childOf"],
   frontmatterWriteExclusions: "",
   noteCheckboxIconColor: "",
   clearIconWhenNoMatch: false,
   clearColorWhenNoMatch: false,
+  autoRemoveHiddenWhenNoMatch: true,
   debugLogging: false,
   rules: [],
   smartSort: {

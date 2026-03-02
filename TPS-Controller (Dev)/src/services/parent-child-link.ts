@@ -239,8 +239,8 @@ export async function createBidirectionalLink(
     childLinkKey: string
 ): Promise<void> {
     try {
-        const parentKey = String(parentLinkKey || "parent").trim() || "parent";
-        const childKey = String(childLinkKey || "children").trim() || "children";
+        const parentKey = String(parentLinkKey || "childOf").trim() || "childOf";
+        const childKey = String(childLinkKey || "parentOf").trim() || "parentOf";
         const tagsToAdd = getParentTagOnChildLink(app);
 
         await withFileLock(childFile.path, async () => {

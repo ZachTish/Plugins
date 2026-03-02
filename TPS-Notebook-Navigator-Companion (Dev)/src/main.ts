@@ -96,9 +96,26 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "sync-titles-from-filenames",
+      name: "Sync frontmatter titles from filenames (all files)",
+      callback: async () => {
+        await this.syncAllTitlesFromFilenames();
+      }
+    });
+
+    // Boot scan: apply filename→title sync to every markdown file once the
+    // vault is fully indexed. This catches daily notes that existed before
+    // the setting was enabled and files created while the plugin was off.
+    this.app.workspace.onLayoutReady(() => {
+      if (this.settings.syncTitleFromFilename) {
+        void this.syncAllTitlesFromFilenames();
+      }
+    });
+
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        if (!file || !this.settings.enabled || !this.settings.autoApplyOnFileOpen) {
+        if (!file || !this.settings.enabled) {
           return;
         }
 
@@ -111,6 +128,16 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
         }
 
         if (this.shouldIgnoreFrontmatterWrite(file)) {
+          return;
+        }
+
+        // Sync title from filename on every open so daily notes get titles
+        // even if they were never renamed after the setting was enabled.
+        if (this.settings.syncTitleFromFilename) {
+          void this.handleFilenameUpdate(file);
+        }
+
+        if (!this.settings.autoApplyOnFileOpen) {
           return;
         }
 
@@ -155,6 +182,16 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
             return;
           }
 
+          // Title -> filename sync runs on ALL device roles for the active file.
+          // This is a direct user action (editing frontmatter title) so it should
+          // always be responsive regardless of controller/user role.
+          if (this.settings.syncFilenameFromTitle) {
+            const isActive = latest === this.app.workspace.getActiveFile();
+            if (isActive) {
+              await this.handleTitleSync(latest);
+            }
+          }
+
           // Process ALL metadata changes on User devices to support bulk edits (GCM, NN drag-drop).
           // Safety: MetadataManager's selfWrites tracking prevents infinite loops (600ms)
           // Safety: Debouncing coalesces rapid changes (350ms default)
@@ -174,14 +211,8 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
 
           // upstream updates removed — handled by TPS-Controller.
 
-          // New: Handle title -> filename sync
-          if (this.settings.syncFilenameFromTitle) {
-            await this.handleTitleSync(latest);
-          }
-
           // Update inline styles for the active view (only if this is the active file)
-          const isActive = latest === this.app.workspace.getActiveFile();
-          if (isActive) {
+          if (latest === this.app.workspace.getActiveFile()) {
             this.updateActiveViewStyle(latest);
           }
         });
@@ -197,10 +228,10 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
           return;
         }
 
-        // New: Handle filename -> title sync
-        // If the filename changes, update the 'title' frontmatter (stripping date suffix)
+        // Handle filename -> title sync on ALL device roles.
+        // Renames are intentional user actions, so we always sync.
         if (this.settings.syncTitleFromFilename) {
-          void this.handleFilenameUpdate(file);
+          void this.handleFilenameUpdate(file as TFile);
         }
       })
     );
@@ -997,13 +1028,27 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     const toAdd = new Set<string>();
     const toRemove = new Set<string>();
 
-    for (const rule of this.settings.hideRules) {
-      if (!rule.enabled) continue;
-      if (this.ruleEngine.matchesRule(rule, context)) {
-        const tag = this.normalizeTag(rule.tagName);
-        if (!tag) continue;
+    // Track coverage for autoRemoveHiddenWhenNoMatch:
+    // - addRuleDefined: tags that have at least one enabled "add" mode rule
+    // - addRuleMatched: tags where at least one enabled "add" mode rule matched
+    const addRuleDefined = new Set<string>();
+    const addRuleMatched = new Set<string>();
 
+    for (const rule of this.settings.hideRules) {
+      const tag = this.normalizeTag(rule.tagName);
+      if (!tag) continue;
+
+      // Register "add"-mode tags regardless of enabled state so auto-remove
+      // knows which tags this rule system manages even when rules are disabled.
+      if (rule.mode === "add") {
+        addRuleDefined.add(tag);
+      }
+
+      if (!rule.enabled) continue;
+
+      if (this.ruleEngine.matchesRule(rule, context)) {
         if (rule.mode === "add") {
+          addRuleMatched.add(tag);
           toAdd.add(tag);
           toRemove.delete(tag);
         } else {
@@ -1012,6 +1057,18 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
         }
       }
     }
+
+    // Auto-remove tags for which no "add" rule matched.
+    // This clears tags that were previously added by the rule system but whose
+    // conditions no longer hold, without requiring an explicit "remove" rule.
+    if (this.settings.autoRemoveHiddenWhenNoMatch) {
+      for (const tag of addRuleDefined) {
+        if (!addRuleMatched.has(tag) && !toAdd.has(tag)) {
+          toRemove.add(tag);
+        }
+      }
+    }
+
     return { add: Array.from(toAdd), remove: Array.from(toRemove) };
   }
 
@@ -1080,6 +1137,36 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   // triggerUpstreamUpdates() removed — handled by TPS-Controller.
 
   /*
+   * Bulk Filename -> Title Sync
+   * Walks every markdown file and updates its frontmatter title where needed.
+   */
+  private async syncAllTitlesFromFilenames(): Promise<void> {
+    const files = this.app.vault.getMarkdownFiles();
+    let count = 0;
+    for (const file of files) {
+      if (this.shouldIgnoreFrontmatterWrite(file)) continue;
+      const { cleanTitle, dateSuffix } = this.parseFilenameComponents(file.basename);
+      let resolvedTitle = cleanTitle;
+      if (!resolvedTitle && dateSuffix) {
+        const m = (window as any).moment;
+        const dateObj = m(dateSuffix, ['YYYY-MM-DD', 'YYYYMMDD'], true);
+        if (dateObj.isValid()) resolvedTitle = dateObj.format('ddd, MMM D YYYY');
+      }
+      if (!resolvedTitle) continue;
+      const cache = this.app.metadataCache.getFileCache(file);
+      const currentTitle = String(cache?.frontmatter?.title ?? '').trim();
+      if (currentTitle === resolvedTitle) continue;
+      await this.metadataManager.queueFrontmatterUpdate(file, 'filename-sync', (fm) => {
+        if (String(fm.title ?? '').trim() === resolvedTitle) return false;
+        fm.title = resolvedTitle;
+        return true;
+      });
+      count++;
+    }
+    this.logger.info(`syncAllTitlesFromFilenames: queued updates for ${count} files`);
+  }
+
+  /*
    * Filename -> Title Sync
    * Extract "clean" title from filename (remove date suffix) and update frontmatter.
    */
@@ -1091,14 +1178,25 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       return;
     }
 
-    const { cleanTitle } = this.parseFilenameComponents(file.basename);
+    const { cleanTitle, dateSuffix } = this.parseFilenameComponents(file.basename);
+
+    // If the entire filename was a date (cleanTitle is empty), format it nicely
+    // e.g. "2025-09-10" → "Wed, Sep 10 2025"
+    let resolvedTitle = cleanTitle;
+    if (!resolvedTitle && dateSuffix) {
+      const m = (window as any).moment;
+      const dateObj = m(dateSuffix, ['YYYY-MM-DD', 'YYYYMMDD'], true);
+      if (dateObj.isValid()) {
+        resolvedTitle = dateObj.format('ddd, MMM D YYYY');
+      }
+    }
 
     await this.metadataManager.queueFrontmatterUpdate(file, "filename-sync", (frontmatter) => {
       const currentTitle = String(frontmatter.title || "").trim();
-      if (currentTitle === cleanTitle) {
+      if (currentTitle === resolvedTitle) {
         return false;
       }
-      frontmatter.title = cleanTitle;
+      frontmatter.title = resolvedTitle;
       return true;
     });
   }

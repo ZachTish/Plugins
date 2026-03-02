@@ -4,6 +4,9 @@ import { createPortal } from "react-dom";
 interface CalendarNavigationProps {
   showNavButtons?: boolean;
   navigationLocked?: boolean;
+  canNavigatePrev?: boolean;
+  canNavigateNext?: boolean;
+  canNavigateToday?: boolean;
   headerPortalTarget?: HTMLElement | null;
   headerTitle: string;
   isMobile: boolean;
@@ -14,15 +17,30 @@ interface CalendarNavigationProps {
   onTodayCentered: () => void;
   mobileNavHidden: boolean;
   floatingNavStyle: React.CSSProperties;
+  viewMode?: string;
+  onViewModeChange?: (mode: string) => void;
+  onCreateNow?: () => void;
 }
 
 /**
  * Renders calendar navigation controls — either into a header portal
  * (desktop) or as a floating bar (mobile fallback).
  */
+const VIEW_MODE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'day', label: 'Day' },
+  { value: '3d', label: '3 Day' },
+  { value: '5d', label: '5 Day' },
+  { value: '7d', label: '7 Day' },
+  { value: 'week', label: 'Week' },
+  { value: 'month', label: 'Month' },
+];
+
 export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
   showNavButtons,
   navigationLocked = false,
+  canNavigatePrev = true,
+  canNavigateNext = true,
+  canNavigateToday = true,
   headerPortalTarget,
   headerTitle,
   isMobile,
@@ -33,7 +51,15 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
   onTodayCentered,
   mobileNavHidden,
   floatingNavStyle,
+  viewMode,
+  onViewModeChange,
+  onCreateNow,
 }) => {
+  const prevDisabled = navigationLocked || !canNavigatePrev;
+  const nextDisabled = navigationLocked || !canNavigateNext;
+  const todayDisabled = navigationLocked || !canNavigateToday;
+  const datePickerDisabled = navigationLocked;
+  const viewPickerDisabled = navigationLocked;
   const navDateInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleDatePickerOpen = useCallback((e: React.MouseEvent) => {
@@ -75,7 +101,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
 
   // Header portal navigation (desktop)
   const renderPortalNavigation = () => {
-    if (!showNavButtons || !headerPortalTarget || navigationLocked) return null;
+    if (!showNavButtons || !headerPortalTarget) return null;
 
     return createPortal(
       <div
@@ -89,7 +115,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
               className="bases-calendar-nav-button"
               aria-label="Jump to date"
               title="Jump to date"
-              disabled={navigationLocked}
+              disabled={datePickerDisabled}
               style={{
                 background: 'transparent',
                 border: 'none',
@@ -103,7 +129,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
                 color: 'var(--text-muted)',
                 borderRadius: '4px',
                 pointerEvents: isMobile ? 'none' : 'auto',
-                opacity: navigationLocked ? 0.5 : 1,
+                opacity: datePickerDisabled ? 0.5 : 1,
               }}
               onClick={handleDatePickerOpen}
             >
@@ -141,7 +167,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
             onClick={onPrevClick}
             aria-label="Previous"
             title="Previous"
-            disabled={navigationLocked}
+            disabled={prevDisabled}
               style={{
                 background: 'transparent',
                 border: 'none',
@@ -156,7 +182,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
                 borderRadius: '4px',
                 fontSize: '18px',
                 lineHeight: '1',
-                opacity: navigationLocked ? 0.5 : 1,
+                opacity: prevDisabled ? 0.5 : 1,
               }}
             >
               &#8249;
@@ -166,7 +192,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
             className="bases-calendar-nav-button"
             onClick={onTodayCentered}
             aria-label="Today"
-            disabled={navigationLocked}
+            disabled={todayDisabled}
               style={{
                 background: 'transparent',
                 border: '1px solid var(--background-modifier-border)',
@@ -177,7 +203,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
                 borderRadius: '4px',
                 color: 'var(--text-normal)',
                 margin: '0 2px',
-                opacity: navigationLocked ? 0.5 : 1,
+                opacity: todayDisabled ? 0.5 : 1,
               }}
             >
               Today
@@ -188,7 +214,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
             onClick={onNextClick}
             aria-label="Next"
             title="Next"
-            disabled={navigationLocked}
+            disabled={nextDisabled}
               style={{
                 background: 'transparent',
                 border: 'none',
@@ -203,12 +229,67 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
                 borderRadius: '4px',
                 fontSize: '18px',
                 lineHeight: '1',
-                opacity: navigationLocked ? 0.5 : 1,
+                opacity: nextDisabled ? 0.5 : 1,
               }}
             >
               &#8250;
             </button>
         </div>
+
+        {/* View Mode Picker */}
+        {onViewModeChange && (
+          <select
+            className="tps-calendar-view-picker"
+            value={viewMode || '7d'}
+            onChange={(e) => onViewModeChange(e.target.value)}
+            disabled={viewPickerDisabled}
+            style={{
+              background: 'var(--background-secondary)',
+              border: '1px solid var(--background-modifier-border)',
+              borderRadius: '4px',
+              color: 'var(--text-normal)',
+              fontSize: '0.7rem',
+              padding: '2px 4px',
+              height: '24px',
+              cursor: viewPickerDisabled ? 'not-allowed' : 'pointer',
+              marginLeft: '6px',
+              outline: 'none',
+              opacity: viewPickerDisabled ? 0.5 : 1,
+            }}
+          >
+            {VIEW_MODE_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+
+        {/* Create event now button */}
+        {onCreateNow && (
+          <button
+            className="bases-calendar-nav-button"
+            aria-label="New event"
+            title="New event"
+            disabled={navigationLocked}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '4px',
+              width: '24px',
+              height: '24px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--text-muted)',
+              borderRadius: '4px',
+              marginLeft: '4px',
+              opacity: navigationLocked ? 0.5 : 1,
+            }}
+            onClick={onCreateNow}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+          </button>
+        )}
       </div>,
       headerPortalTarget
     );
@@ -216,7 +297,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
 
   // Floating mobile navigation (fallback when no portal target)
   const renderFloatingNavigation = () => {
-    if (!isMobile || headerPortalTarget || !showNavButtons || mobileNavHidden || navigationLocked) return null;
+    if (!isMobile || headerPortalTarget || !showNavButtons || mobileNavHidden) return null;
 
     return (
       <div className="bases-calendar-floating-nav" style={floatingNavStyle}>
@@ -281,9 +362,65 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
 
         <div style={{ width: '1px', height: '16px', background: 'var(--background-modifier-border)', margin: '0 2px' }} />
 
-        <button className="bases-calendar-nav-button" onClick={onPrevClick} title="Previous" disabled={navigationLocked} style={{ pointerEvents: 'auto', opacity: navigationLocked ? 0.5 : 1 }}>&#8249;</button>
-        <button className="bases-calendar-nav-button" onClick={onTodayCentered} disabled={navigationLocked} style={{ fontSize: '0.8rem', padding: '2px 8px', pointerEvents: 'auto', opacity: navigationLocked ? 0.5 : 1 }}>Today</button>
-        <button className="bases-calendar-nav-button" onClick={onNextClick} title="Next" disabled={navigationLocked} style={{ pointerEvents: 'auto', opacity: navigationLocked ? 0.5 : 1 }}>&#8250;</button>
+        <button className="bases-calendar-nav-button" onClick={onPrevClick} title="Previous" disabled={prevDisabled} style={{ pointerEvents: 'auto', opacity: prevDisabled ? 0.5 : 1 }}>&#8249;</button>
+        <button className="bases-calendar-nav-button" onClick={onTodayCentered} disabled={todayDisabled} style={{ fontSize: '0.8rem', padding: '2px 8px', pointerEvents: 'auto', opacity: todayDisabled ? 0.5 : 1 }}>Today</button>
+        <button className="bases-calendar-nav-button" onClick={onNextClick} title="Next" disabled={nextDisabled} style={{ pointerEvents: 'auto', opacity: nextDisabled ? 0.5 : 1 }}>&#8250;</button>
+
+        {/* View Mode Picker */}
+        {onViewModeChange && (
+          <>
+            <div style={{ width: '1px', height: '16px', background: 'var(--background-modifier-border)', margin: '0 2px' }} />
+            <select
+              className="tps-calendar-view-picker"
+              value={viewMode || '7d'}
+              onChange={(e) => onViewModeChange(e.target.value)}
+              disabled={viewPickerDisabled}
+              style={{
+                background: 'var(--background-secondary)',
+                border: '1px solid var(--background-modifier-border)',
+                borderRadius: '4px',
+                color: 'var(--text-normal)',
+                fontSize: '0.8rem',
+                padding: '2px 4px',
+                height: '28px',
+                cursor: viewPickerDisabled ? 'not-allowed' : 'pointer',
+                outline: 'none',
+                pointerEvents: 'auto',
+                opacity: viewPickerDisabled ? 0.5 : 1,
+              }}
+            >
+              {VIEW_MODE_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </>
+        )}
+
+        {/* Create event now button */}
+        {onCreateNow && (
+          <>
+            <div style={{ width: '1px', height: '16px', background: 'var(--background-modifier-border)', margin: '0 2px' }} />
+            <button
+              className="bases-calendar-nav-button"
+              aria-label="New event"
+              title="New event"
+              disabled={navigationLocked}
+              style={{
+                pointerEvents: 'auto',
+                opacity: navigationLocked ? 0.5 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '28px',
+                height: '28px',
+                padding: '4px',
+              }}
+              onClick={onCreateNow}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+            </button>
+          </>
+        )}
       </div>
     );
   };

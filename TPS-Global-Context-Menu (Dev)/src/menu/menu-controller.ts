@@ -103,6 +103,10 @@ export class MenuController {
     return this.panelBuilder.createSubitemsPanel(file);
   }
 
+  getPanelBuilder(): PanelBuilder {
+    return this.panelBuilder;
+  }
+
   createSummaryHeader(file: TFile, leaf?: WorkspaceLeaf): HTMLElement {
     return this.badgeRenderer.createSummaryHeader(file, leaf);
   }

@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   recurrencePromptTimeout: 30, // 30 minutes (syncs across devices)
   recurrenceCompletionStatuses: ['complete', 'wont-do'],
   recurrenceDefaultStatus: 'open', // Default status for new recurrence instances
+  recurringTemplateFolder: 'Recurring Templates', // Folder to store recurring event templates
 
   // File naming settings
   enableAutoRename: true,
@@ -36,7 +37,8 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   folderExclusions: "",
   checkOpenChecklistItems: true,
   checkParentLinkStatuses: false,
-  parentLinkFrontmatterKey: 'parent',
+  parentLinkFrontmatterKey: 'childOf',
+  childLinkFrontmatterKey: 'parentOf',
   parentLinkFormat: 'wikilink',
   parentTagOnChildLink: 'project',
   parentCompletionStatuses: ['complete', 'wont-do'],
@@ -51,17 +53,21 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   archiveTag: 'archive',
   archiveFolderPath: 'System/Archive',
   archiveUseDailyFolder: false,
+  workspaceRibbonButtons: false,
   enableDailyNoteNav: true,
   enableTopParentNav: true,
   dailyNavShowToday: true,
 
   // Overlay ignore rules
+  ignoredBacklinksFrontmatterKeys: ['dateModified'],
   subitems_IgnoreRules: [],
   inlineMenu_IgnoreRules: [],
   enableSubitemsPanel: true,
   showChecklistInSubitemsPanel: true,
   showReferencesInSubitemsPanel: true,
   showMentionsInSubitemsPanel: true,
+  subitemsPanelPosition: 'below',
+  subitemsPanelAutoCollapse: true,
 
   // Default paths for new items
   defaultAttachmentsPath: '',

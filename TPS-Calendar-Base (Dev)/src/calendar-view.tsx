@@ -56,6 +56,7 @@ import {
   resolveFromPotentialDate,
 } from "./utils/date-value-utils";
 import * as logger from "./logger";
+import { RRule } from "rrule";
 
 export const CalendarViewType = "calendar";
 
@@ -111,6 +112,11 @@ export class CalendarView extends BasesView {
   private filterRangeEnd: Date | null = null; // Computed max date from entries
   private filterRangeDays: number = 0; // Number of days in the filtered range
   private navigationLockedByAutoRange = false;
+  private entryBoundsMin: Date | null = null; // Pure entry min date (before filter config override)
+  private entryBoundsMax: Date | null = null; // Pure entry max date (before filter config override)
+  private autoRangeInitialized = false; // Whether the initial auto-range has been applied
+  private lastAutoRangeKey: string | null = null; // Tracks last range to detect significant changes
+  private saveDateTimeout: ReturnType<typeof setTimeout> | null = null; // Debounce timer for date persistence
 
   // Context-aware date detection (for embedding in daily notes)
   private contextDateEnabled: boolean = false; // Enable date detection from parent note
@@ -269,6 +275,10 @@ export class CalendarView extends BasesView {
     if (this.root) {
       this.root.unmount();
       this.root = null;
+    }
+    if (this.saveDateTimeout) {
+      clearTimeout(this.saveDateTimeout);
+      this.saveDateTimeout = null;
     }
     if (this.dayPickerAction) {
       this.dayPickerAction.remove();
@@ -505,10 +515,24 @@ export class CalendarView extends BasesView {
 
     const configuredViewMode = this.plugin.settings.viewMode || "week";
     this.filterRangeAuto = this.plugin.settings.filterRangeAuto === true;
+
+    // Restore persisted per-view state (viewMode + currentDate) from config.
+    // These are saved whenever the user navigates so they persist across devices.
+    const savedViewMode = this.config.get("tps_viewMode") as string | undefined;
+    const savedCurrentDate = this.config.get("tps_currentDate") as string | undefined;
+
+    if (savedCurrentDate) {
+      const parsed = new Date(savedCurrentDate);
+      if (!isNaN(parsed.getTime())) {
+        this.currentDate = parsed;
+      }
+    }
+
     if (!this.filterRangeAuto) {
-      this.viewMode = configuredViewMode;
+      // When auto-range is off, use saved per-view mode or fall back to global default
+      this.viewMode = (savedViewMode as CalendarViewMode) || configuredViewMode;
     } else if (!this.filterRangeStart && !this.filterRangeEnd && !this.navigationLockedByAutoRange) {
-      this.viewMode = configuredViewMode;
+      this.viewMode = (savedViewMode as CalendarViewMode) || configuredViewMode;
     }
 
     // Toggle Day Picker Action visibility
@@ -1100,6 +1124,71 @@ export class CalendarView extends BasesView {
     // NOTE: Embed sync is now triggered by file-modify events, not calendar refresh
     // This prevents constant updates every few seconds
 
+    // RECURRING GHOST INSTANCES: For each recurring note in the current results,
+    // expand its RRULE forward and inject ghost entries for future occurrences that
+    // don't yet have a real file counterpart.
+    const baseEntries = [...currentEntries];
+    for (const calEntry of baseEntries) {
+      if (calEntry.isGhost || calEntry.isExternal) continue;
+      const entryFile = (calEntry.entry as any).file as TFile | undefined;
+      if (!entryFile) continue;
+
+      const entryCache = this.app.metadataCache.getFileCache(entryFile);
+      const entryFm = entryCache?.frontmatter;
+      if (!entryFm) continue;
+
+      const recurrenceRule = entryFm.recurrenceRule || entryFm.recurrence;
+      if (!recurrenceRule || typeof recurrenceRule !== 'string') continue;
+
+      // Never expand template files
+      if (entryFm.isRecurrenceTemplate) continue;
+
+      try {
+        const opts = RRule.parseString(recurrenceRule);
+        opts.dtstart = calEntry.startDate;
+        const rule = new RRule(opts);
+        const occurrences = rule.between(calEntry.startDate, calendarEnd, false /* exclusive start */);
+
+        const baseName = entryFile.basename.replace(/ \d{4}-\d{2}-\d{2}$/, '');
+        const duration = calEntry.endDate
+          ? calEntry.endDate.getTime() - calEntry.startDate.getTime()
+          : 60 * 60 * 1000;
+
+        for (const occDate of occurrences) {
+          // Don't show ghosts in the past
+          if (occDate <= new Date()) continue;
+
+          // Build the expected path for a real instance at this date
+          const dateStr = `${occDate.getFullYear()}-${String(occDate.getMonth() + 1).padStart(2, '0')}-${String(occDate.getDate()).padStart(2, '0')}`;
+          const expectedName = `${baseName} ${dateStr}.md`;
+          const expectedPath = entryFile.parent
+            ? normalizePath(`${entryFile.parent.path}/${expectedName}`)
+            : normalizePath(expectedName);
+
+          // Skip if a real file already exists at that date
+          if (this.app.vault.getAbstractFileByPath(expectedPath)) continue;
+
+          const ghostEnd = new Date(occDate.getTime() + duration);
+          currentEntries.push({
+            entry: calEntry.entry,
+            startDate: occDate,
+            endDate: ghostEnd,
+            title: calEntry.title,
+            isGhost: true,
+            ghostDate: occDate,
+            isExternal: false,
+            status: calEntry.status,
+            priority: calEntry.priority,
+            cssClasses: [...(calEntry.cssClasses || [])],
+            backgroundColor: 'rgba(100, 100, 100, 0.3)',
+            borderColor: 'rgba(100, 100, 100, 0.5)',
+          });
+        }
+      } catch (_err) {
+        // Silently ignore unparseable RRULE strings
+      }
+    }
+
     // console.log(`[CalendarView] Render update with ${currentEntries.length} events`);
 
     // DEDUPLICATION STEP: Ensure unique IDs without collapsing valid multi-slot entries.
@@ -1151,7 +1240,7 @@ export class CalendarView extends BasesView {
     return entries.filter((entry) => !entry.isExternal && !entry.isGhost);
   }
 
-  private getFilterRangeBoundsFromConfig(): { start: Date | null; end: Date | null } {
+  private getFilterRangeBoundsFromConfig(): { start: Date | null; end: Date | null; hasDateFilter: boolean } {
     const filterSources = [
       this.config.get?.("filters"),
       (this.config as any).filtersAll,
@@ -1164,6 +1253,7 @@ export class CalendarView extends BasesView {
     const propertyAliases = this.getStartDatePropertyAliases();
     let lowerBound: Date | null = null;
     let upperBound: Date | null = null;
+    let hasDateFilter = false;
 
     for (const source of filterSources) {
       const conditions = this.collectFilterConditions(source);
@@ -1171,6 +1261,9 @@ export class CalendarView extends BasesView {
         if (!this.matchesStartDateFilterProperty(condition.property, propertyAliases)) {
           continue;
         }
+
+        // Any condition referencing the start date property means a date filter exists
+        hasDateFilter = true;
 
         const boundaryDate = resolveFilterDateExpression(condition.value);
         if (!boundaryDate) continue;
@@ -1187,7 +1280,7 @@ export class CalendarView extends BasesView {
       }
     }
 
-    return { start: lowerBound, end: upperBound };
+    return { start: lowerBound, end: upperBound, hasDateFilter };
   }
 
   private getStartDatePropertyAliases(): Set<string> {
@@ -1263,7 +1356,14 @@ export class CalendarView extends BasesView {
       }
     }
 
+    // Save pure entry bounds before filter config override
+    this.entryBoundsMin = minDate ? new Date(minDate) : null;
+    this.entryBoundsMax = maxDate ? new Date(maxDate) : null;
+
     const filterBounds = this.getFilterRangeBoundsFromConfig();
+    // Lock navigation when any date filter condition exists (even if the value
+    // is a dynamic expression like `date(this.file.name)` that can't be resolved).
+    const hasExplicitBounds = filterBounds.hasDateFilter;
     if (filterBounds.start) {
       minDate = new Date(filterBounds.start);
     }
@@ -1282,11 +1382,23 @@ export class CalendarView extends BasesView {
       maxDate = new Date(minDate);
     }
 
+    // No dates at all (no filter bounds AND no entries with dates):
+    // default to today, allow navigation
     if (!minDate || !maxDate) {
       this.filterRangeStart = null;
       this.filterRangeEnd = null;
+      this.entryBoundsMin = null;
+      this.entryBoundsMax = null;
       this.filterRangeDays = 0;
       this.navigationLockedByAutoRange = false;
+      // Only reset to today on first load, not on subsequent refreshes
+      if (!this.autoRangeInitialized) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        this.currentDate = today;
+        this.autoRangeInitialized = true;
+      }
+      this.lastAutoRangeKey = null;
       return;
     }
 
@@ -1305,40 +1417,90 @@ export class CalendarView extends BasesView {
 
     logger.log(`[CalendarView] Filter range: ${diffDays} days (${minDate.toDateString()} to ${maxDate.toDateString()})`);
 
-    // Auto-switch view mode based on day count
-    const previousViewMode = this.viewMode;
-    this.navigationLockedByAutoRange = true;
+    // Only lock navigation when there are explicit date bounds in the filter.
+    // When the range is derived purely from entries, allow user to navigate.
+    this.navigationLockedByAutoRange = hasExplicitBounds;
 
-    if (diffDays <= 1) {
-      this.viewMode = "day";
-    } else if (diffDays <= 3) {
-      this.viewMode = "3d";
-    } else if (diffDays <= 4) {
-      this.viewMode = "4d";
-    } else if (diffDays <= 5) {
-      this.viewMode = "5d";
-    } else if (diffDays <= 7) {
-      this.viewMode = "7d";
-    } else {
-      // More than 7 days: use month view
-      this.viewMode = "month";
-    }
+    // Build a key from the date range to detect significant changes.
+    // Only auto-switch viewMode/currentDate on first load or when the range actually changes.
+    const rangeKey = `${startOfMinDay.getTime()}-${startOfMaxDay.getTime()}`;
+    const rangeChanged = this.lastAutoRangeKey !== rangeKey;
+    this.lastAutoRangeKey = rangeKey;
 
-    // Anchor currentDate so centered timeline views start at the lower filter bound.
-    // Without this, multi-day views clip future days when range auto-mode is active.
-    if (this.viewMode !== "month") {
-      const targetDayCount = getAutoRangeViewDayCount(diffDays);
-      const centerOffset = Math.max(0, Math.floor((targetDayCount - 1) / 2));
-      this.currentDate = new Date(startOfMinDay);
-      this.currentDate.setDate(this.currentDate.getDate() + centerOffset);
-      this.currentDate.setHours(0, 0, 0, 0);
-    } else {
-      // For month view, set to the first of the month containing minDate
-      this.currentDate = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
-    }
+    // Only auto-override viewMode/currentDate when:
+    //   (a) the range is explicitly locked by a filter (hasExplicitBounds), or
+    //   (b) it's the very first load AND there is no saved user preference.
+    // For data-derived (unlocked) ranges we must respect what the user last chose,
+    // and default the visible date to *today* rather than the earliest entry date.
+    if (!this.autoRangeInitialized || (rangeChanged && hasExplicitBounds)) {
+      const previousViewMode = this.viewMode;
 
-    if (previousViewMode !== this.viewMode) {
-      logger.log(`[CalendarView] Auto-switched view mode: ${previousViewMode} → ${this.viewMode}`);
+      if (hasExplicitBounds) {
+        // Locked range: auto-select the tightest view to fit the span.
+        if (diffDays <= 1) {
+          this.viewMode = "day";
+        } else if (diffDays <= 3) {
+          this.viewMode = "3d";
+        } else if (diffDays <= 4) {
+          this.viewMode = "4d";
+        } else if (diffDays <= 5) {
+          this.viewMode = "5d";
+        } else if (diffDays <= 7) {
+          this.viewMode = "7d";
+        } else {
+          this.viewMode = "month";
+        }
+
+        // Center currentDate on the locked range.
+        if (this.viewMode !== "month") {
+          const targetDayCount = getAutoRangeViewDayCount(diffDays);
+          const centerOffset = Math.max(0, Math.floor((targetDayCount - 1) / 2));
+          this.currentDate = new Date(startOfMinDay);
+          this.currentDate.setDate(this.currentDate.getDate() + centerOffset);
+          this.currentDate.setHours(0, 0, 0, 0);
+        } else {
+          this.currentDate = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+        }
+      } else if (!this.autoRangeInitialized) {
+        // Data-derived range (not locked), first load only.
+        // Use saved viewMode if the user already has a preference; otherwise auto-select.
+        const savedViewMode = this.config.get("tps_viewMode") as string | undefined;
+        if (!savedViewMode) {
+          if (diffDays <= 1) {
+            this.viewMode = "day";
+          } else if (diffDays <= 3) {
+            this.viewMode = "3d";
+          } else if (diffDays <= 4) {
+            this.viewMode = "4d";
+          } else if (diffDays <= 5) {
+            this.viewMode = "5d";
+          } else if (diffDays <= 7) {
+            this.viewMode = "7d";
+          } else {
+            this.viewMode = "month";
+          }
+        }
+
+        // Default visible date to today when there is no saved/restored date.
+        // Never jump the user back to the oldest entry in a large dataset.
+        if (!this.currentDate) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          this.currentDate = today;
+        }
+      }
+
+      if (previousViewMode !== this.viewMode) {
+        logger.log(`[CalendarView] Auto-switched view mode: ${previousViewMode} → ${this.viewMode}`);
+      }
+
+      // Persist so the next open restores the same state.
+      this.config.set("tps_viewMode", this.viewMode);
+      if (this.currentDate) {
+        this.persistCurrentDate(this.currentDate);
+      }
+
+      this.autoRangeInitialized = true;
     }
     if (this.dayPickerAction) {
       const allowedModes = ['3d', '4d', '5d', '7d', 'week'];
@@ -2573,7 +2735,16 @@ export class CalendarView extends BasesView {
             currentDate={this.currentDate ?? undefined}
             onDateChange={(date) => {
               this.currentDate = date;
-              this.renderReactCalendar();
+              this.persistCurrentDate(date);
+              // NOTE: do NOT call renderReactCalendar() here.
+              // This callback fires from inside FullCalendar's datesSet event,
+              // which is already inside React's event-handling loop. Calling
+              // root.render() from there creates a cascade:
+              //   datesSet → onDateChange → renderReactCalendar → currentDate
+              //   prop change → useEffect → api.gotoDate() → datesSet again …
+              // Each cycle briefly repositions events, causing "ghost" flickers.
+              // The date is already managed internally by FullCalendar; we only
+              // need to persist it here for cross-session / cross-device restore.
             }}
             onToggleFullDay={() => this.toggleFullDay()}
             allDayProperty={this.allDayProperty}
@@ -2586,6 +2757,14 @@ export class CalendarView extends BasesView {
             headerPortalTarget={this.headerPortalContainer}
             showNavButtons={this.showNavButtons}
             navigationLocked={this.navigationLockedByAutoRange}
+            entryBoundsStart={this.filterRangeAuto && this.entryBoundsMin ? this.entryBoundsMin : undefined}
+            entryBoundsEnd={this.filterRangeAuto && this.entryBoundsMax ? this.entryBoundsMax : undefined}
+            onViewModeChange={(mode) => {
+              if (this.navigationLockedByAutoRange) return;
+              this.viewMode = mode as CalendarViewMode;
+              this.config.set("tps_viewMode", mode);
+              this.renderReactCalendar();
+            }}
 
             allDayEventHeight={this.plugin.settings.allDayEventHeight}
             allDayMaxRows={this.plugin.settings.allDayMaxRows}
@@ -3262,6 +3441,21 @@ export class CalendarView extends BasesView {
     return this.currentDate ?? new Date();
   }
 
+  /**
+   * Debounced save of currentDate to per-view config for cross-device persistence.
+   * Uses a 1-second debounce to avoid excessive writes during rapid navigation.
+   */
+  private persistCurrentDate(date: Date): void {
+    if (this.saveDateTimeout) {
+      clearTimeout(this.saveDateTimeout);
+    }
+    this.saveDateTimeout = setTimeout(() => {
+      const iso = date.toISOString();
+      this.config.set("tps_currentDate", iso);
+      this.saveDateTimeout = null;
+    }, 1000);
+  }
+
   private updateCondenseLevel(level: number): void {
     const normalized = this.normalizeCondenseLevel(level);
     this.condenseLevel = normalized;
@@ -3422,6 +3616,12 @@ export class CalendarView extends BasesView {
     folderPath: string | null;
     frontmatter: Record<string, any>;
   } {
+    // Prefer the explicit folder option stored directly in the view config.
+    const explicitFolder =
+      (this.config.get?.("newEventTypeFolder") as string | null | undefined)?.trim() ||
+      (this.config.get?.("newEventFolder") as string | null | undefined)?.trim() ||
+      null;
+
     const filtersAll =
       this.config.get?.("filters") ??
       (this.config as any).filtersAll ??
@@ -3434,12 +3634,12 @@ export class CalendarView extends BasesView {
       (this.config as any).filters ??
       null;
 
-    const folderFromAll = this.extractFolderFromFilters(filtersAll);
-    const folderFromView = folderFromAll ? null : this.extractFolderFromFilters(viewFilters);
+    const folderFromAll = explicitFolder ? null : this.extractFolderFromFilters(filtersAll);
+    const folderFromView = (explicitFolder || folderFromAll) ? null : this.extractFolderFromFilters(viewFilters);
     const frontmatter = this.extractFrontmatterDefaults(filtersAll);
 
     return {
-      folderPath: folderFromAll || folderFromView,
+      folderPath: explicitFolder || folderFromAll || folderFromView,
       frontmatter,
     };
   }
@@ -4067,7 +4267,7 @@ export class CalendarView extends BasesView {
         return;
       }
 
-      const parentKey = (this.plugin.settings.parentLinkKey || "parent").trim() || "parent";
+      const parentKey = (this.plugin.settings.parentLinkKey || "childOf").trim() || "childOf";
       const childKey = (this.plugin.settings.childLinkKey || "").trim();
       const doBidirectional = this.plugin.settings.parentLinkEnabled && !!childKey;
 

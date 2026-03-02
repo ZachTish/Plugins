@@ -22,39 +22,51 @@
       "shortcuts": [
         {
           "type": "tag",
-          "tagPath": "__untagged__"
+          "tagPath": "__untagged__",
+          "alias": "Inbox"
+        },
+        {
+          "type": "note",
+          "path": "Canvas/Homepage.canvas",
+          "alias": "Home"
         }
       ],
       "propertyKeys": [
         {
-          "key": "scheduled",
-          "showInNavigation": false,
-          "showInList": true
-        },
-        {
           "key": "priority",
           "showInNavigation": true,
-          "showInList": true
-        },
-        {
-          "key": "due",
-          "showInNavigation": false,
-          "showInList": true
-        },
-        {
-          "key": "location",
-          "showInNavigation": false,
-          "showInList": true
+          "showInList": false,
+          "showInFileMenu": false
         },
         {
           "key": "recurrenceRule",
           "showInNavigation": true,
-          "showInList": true
+          "showInList": false,
+          "showInFileMenu": false
         },
         {
-          "key": "parent",
+          "key": "status",
           "showInNavigation": true,
-          "showInList": true
+          "showInList": false,
+          "showInFileMenu": false
+        },
+        {
+          "key": "childOf",
+          "showInNavigation": true,
+          "showInList": false,
+          "showInFileMenu": false
+        },
+        {
+          "key": "parentOf",
+          "showInNavigation": true,
+          "showInList": false,
+          "showInFileMenu": false
+        },
+        {
+          "key": "scheduled",
+          "showInNavigation": true,
+          "showInList": false,
+          "showInFileMenu": false
         }
       ]
     }
@@ -68,7 +80,7 @@
     "propertySortOrder": "synced",
     "includeDescendantNotes": "synced",
     "useFloatingToolbars": "synced",
-    "dualPane": "synced",
+    "dualPane": "local",
     "dualPaneOrientation": "synced",
     "paneTransitionDuration": "synced",
     "toolbarVisibility": "local",
@@ -96,8 +108,7 @@
   "showInfoButtons": true,
   "homepage": null,
   "mobileHomepage": "Bases/Calendar 3 Day.base",
-  "useMobileHomepage": true,
-  "dualPane": true,
+  "useMobileHomepage": false,
   "dualPaneOrientation": "horizontal",
   "showTooltips": true,
   "showTooltipPath": true,
@@ -121,7 +132,7 @@
   "showIndentGuides": true,
   "rootLevelSpacing": 0,
   "navIndent": 10,
-  "navItemHeight": 25,
+  "navItemHeight": 24,
   "navItemHeightScaleText": true,
   "collapseBehavior": "all",
   "smartCollapse": true,
@@ -147,9 +158,10 @@
   "folderNoteName": "",
   "folderNoteNamePattern": "",
   "folderNoteTemplate": "System/Templates/foldernote.md",
-  "openFolderNotesInNewTab": false,
+  "enableFolderNoteLinks": true,
   "hideFolderNoteInList": true,
   "pinCreatedFolderNote": true,
+  "openFolderNotesInNewTab": false,
   "showTags": true,
   "showTagIcons": true,
   "showAllTagsFolder": true,
@@ -164,17 +176,17 @@
   "showAllPropertiesFolder": true,
   "defaultListMode": "standard",
   "includeDescendantNotes": true,
-  "defaultFolderSort": "modified-desc",
-  "propertySortKey": "scheduled",
+  "defaultFolderSort": "property-asc",
+  "propertySortKey": "sort",
   "propertySortSecondary": "modified",
-  "revealFileOnListChanges": false,
+  "revealFileOnListChanges": true,
   "listPaneTitle": "header",
   "noteGrouping": "date",
   "filterPinnedByFolder": true,
   "showPinnedGroupHeader": true,
   "showPinnedIcon": true,
   "optimizeNoteHeight": true,
-  "compactItemHeight": 28,
+  "compactItemHeight": 24,
   "compactItemHeightScaleText": true,
   "showQuickActions": true,
   "quickActionRevealInFolder": false,
@@ -191,16 +203,17 @@
   "frontmatterModifiedField": "dateModified",
   "frontmatterDateFormat": "",
   "showFileIcons": true,
-  "showFileIconUnfinishedTask": true,
+  "showFileIconUnfinishedTask": false,
   "showFilenameMatchIcons": false,
   "fileNameIconMap": {},
-  "showCategoryIcons": true,
+  "showCategoryIcons": false,
   "fileTypeIconMap": {},
   "fileNameRows": 1,
   "showFilePreview": true,
   "skipHeadingsInPreview": true,
   "skipCodeBlocksInPreview": true,
   "stripHtmlInPreview": true,
+  "stripLatexInPreview": true,
   "previewRows": 2,
   "previewProperties": [],
   "showFeatureImage": true,
@@ -414,19 +427,25 @@
     "Markdown/Action Items/Reminders": "clock-alert",
     "Markdown/Action Items/Todo": "list-todo",
     "Markdown/Action Items/Toget": "shopping-basket",
-    "Markdown/Daily Notes": "sun"
+    "Markdown/Notes/Daily Notes": "sun",
+    "Assets": "images"
   },
   "folderColors": {},
   "folderBackgroundColors": {},
   "folderSortOverrides": {
     "Markdown/Action Items": "property-asc",
     "Markdown/Notes": "property-asc",
-    "/": "title-asc"
+    "/": "property-asc",
+    "Markdown": "property-asc",
+    "Markdown/Notes/Daily Notes": "property-asc"
   },
-  "folderTreeSortOverrides": {},
+  "folderTreeSortOverrides": {
+    "/": "alpha-desc"
+  },
   "folderAppearances": {},
   "tagIcons": {
-    "__untagged__": "inbox"
+    "__untagged__": "inbox",
+    "project": "list-checks"
   },
   "tagColors": {
     "career": "#ef4444",
@@ -435,7 +454,9 @@
   },
   "tagBackgroundColors": {},
   "tagSortOverrides": {
-    "__tagged__": "property-asc"
+    "__tagged__": "property-asc",
+    "hca": "property-asc",
+    "__untagged__": "property-asc"
   },
   "tagTreeSortOverrides": {},
   "tagAppearances": {
@@ -444,32 +465,32 @@
     }
   },
   "propertyIcons": {
-    "key:status=open": "circle",
-    "key:status=working": "circle-dot",
-    "key:status=complete": "check-circle",
-    "key:status=wont-do": "circle-off",
     "key:scheduled": "calendar",
     "key:status": "emoji:❕",
     "key:priority": "arrow-up-narrow-wide",
     "key:location": "map-pin",
-    "key:due": "clock-alert"
+    "key:due": "clock-alert",
+    "key:recurrencerule": "repeat",
+    "key:parent": "list-checks",
+    "key:status=note": "file-text",
+    "key:status=open": "box-select",
+    "key:status=complete": "check-square",
+    "key:status=blocked": "asterisk-square",
+    "key:status=working": "square",
+    "key:priority=medium": "arrow-big-up",
+    "key:priority=low": "arrow-big-down",
+    "key:priority=high": "arrow-big-up-dash"
   },
-  "propertyColors": {
-    "key:status=wont-do": "#ffffff",
-    "key:status=open": "#ffffff",
-    "key:status=working": "#ffffff",
-    "key:status=complete": "#ffffff"
-  },
-  "propertyBackgroundColors": {
-    "key:status=complete": "#10b981",
-    "key:status=open": "#3b82f6",
-    "key:status=working": "#6366f1",
-    "key:status=wont-do": "#f59e0b"
-  },
+  "propertyColors": {},
+  "propertyBackgroundColors": {},
   "propertyTreeSortOverrides": {
     "key:scheduled": "alpha-desc"
   },
-  "navigationSeparators": {},
+  "navigationSeparators": {
+    "folder:Archive": true,
+    "section:tags": true,
+    "section:properties": true
+  },
   "userColors": [
     "#ffffff",
     "#d9d9d9",
@@ -492,7 +513,7 @@
     "#404040",
     "#404040"
   ],
-  "lastShownVersion": "2.4.2",
+  "lastShownVersion": "2.4.3",
   "rootFolderOrder": [],
   "rootTagOrder": [],
   "rootPropertyOrder": []

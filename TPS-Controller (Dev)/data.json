@@ -53,12 +53,11 @@
       "title": "In 45 Minutes: {filename}",
       "body": "At {time} ",
       "ignorePaths": [
-        ".archive",
-        "Markdown/Notes"
+        "*/Notes/*",
+        "*/Daily Notes/*"
       ],
       "ignoreTags": [
-        "archive",
-        "template"
+        "archive"
       ],
       "ignoreStatuses": [
         "wont-do",
@@ -67,11 +66,9 @@
       ],
       "useSmartOffset": false,
       "smartOffsetOperator": "subtract",
-      "requiredStatuses": [
-        "open"
-      ],
+      "requiredStatuses": [],
       "allDayFilter": "false",
-      "label": "45 minutes before ping",
+      "label": "intra 45 minutes before ping",
       "requiredPaths": []
     },
     {
@@ -86,12 +83,11 @@
         "status: complete",
         "status: wont-do"
       ],
-      "title": "Reminder: {filename}",
+      "title": "All Day Notice: {filename}",
       "body": "At {time} ({remaining})",
       "ignorePaths": [
-        "System",
-        "Notes",
-        "Daily Notes"
+        "*/Notes/*",
+        "*/Daily Notes/*"
       ],
       "ignoreTags": [
         "archive",
@@ -108,9 +104,7 @@
         "open"
       ],
       "label": "All day morning reminder",
-      "requiredPaths": [
-        "Action Items"
-      ]
+      "requiredPaths": []
     },
     {
       "id": "reminder-1767981136916",
@@ -124,12 +118,11 @@
         "status: complete",
         "status: wont-do"
       ],
-      "title": "Reminder: {filename}",
+      "title": "All Day Notice: {filename}",
       "body": "At {time} ({remaining})",
       "ignorePaths": [
-        "System",
-        "Notes",
-        "Daily Notes"
+        "*/Notes/*",
+        "*/Daily Notes/*"
       ],
       "ignoreTags": [
         "archive",
@@ -159,12 +152,11 @@
         "status: complete",
         "status: wont-do"
       ],
-      "title": "Dont forget to finish: {filename}",
+      "title": "Still Working: {filename}?",
       "body": "At {time} ",
       "ignorePaths": [
-        "System",
-        "Notes",
-        "Daily Notes"
+        "*/Notes/*",
+        "*/Daily Notes/*"
       ],
       "ignoreTags": [
         "archive",
@@ -199,9 +191,8 @@
       "title": "5 Minute Notice: {filename}",
       "body": "At {time}",
       "ignorePaths": [
-        "System",
-        "Notes",
-        "Daily Notes"
+        "*/Notes/*",
+        "*/Daily Notes/*"
       ],
       "ignoreTags": [
         "archive",
@@ -234,7 +225,10 @@
       ],
       "title": "{filename}",
       "body": "At {time} ({remaining})",
-      "ignorePaths": [],
+      "ignorePaths": [
+        "*/Notes/*",
+        "*/Daily Notes/*"
+      ],
       "ignoreTags": [
         "template",
         "archive"
@@ -242,12 +236,11 @@
       "ignoreStatuses": [
         "complete",
         "wont-do",
-        "working"
+        "working",
+        "note"
       ],
       "allDayFilter": "any",
-      "requiredStatuses": [
-        "open"
-      ]
+      "requiredStatuses": []
     }
   ],
   "alertState": {
@@ -9487,8 +9480,9 @@
     "Markdown/Untitled.md": {},
     "Markdown/Daily Notes/2026-02-25.md": {
       "reminder-1767981136916": {
-        "triggered": false,
-        "repeatCount": 0
+        "triggered": true,
+        "repeatCount": 4,
+        "lastSent": 1772452866528
       }
     },
     "Markdown/Untitled 1 2026-02-24.md": {
@@ -9526,7 +9520,17 @@
     "Markdown/Action Items/Todo/fix ice maker.md": {},
     "Markdown/Action Items/Todo/Personal Automations.md": {},
     "Markdown/Action Items/Todo/Obsidian plugins.md": {},
-    "Markdown/Action Items/Todo/Home Renovations.md": {},
+    "Markdown/Action Items/Todo/Home Renovations.md": {
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981253430": {
+        "triggered": true,
+        "repeatCount": 0,
+        "lastSent": 1772396233687
+      }
+    },
     "Markdown/Action Items/Todo/Go to doctor.md": {},
     "Markdown/Action Items/Todo/52704 update app codebase.md": {},
     "Markdown/Action Items/Todo/52183 moving hardcoded strings.md": {},
@@ -9614,6 +9618,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/SMART RequisitionsOMS Archtectural Walkthrough 2026-01-16.md": {},
@@ -9632,6 +9640,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Refinement + Daily Standup for GCP App Support 2026-04-02.md": {
@@ -9644,6 +9656,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -9660,6 +9676,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Refinement + Daily Standup for GCP App Support 2026-03-05.md": {
@@ -9672,6 +9692,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -9691,6 +9715,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Planning Review of GCP App Support 2026-04-09.md": {
@@ -9703,6 +9731,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -9719,6 +9751,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Planning Review of GCP App Support 2026-03-12.md": {
@@ -9731,6 +9767,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -9772,6 +9812,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Let's Talk Operational Readiness 2026-04-01.md": {
@@ -9784,6 +9828,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -9800,6 +9848,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Let's Talk Operational Readiness 2026-03-04.md": {
@@ -9812,6 +9864,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -9835,6 +9891,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Leadership Book Club 2026-03-27.md": {
@@ -9849,6 +9909,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Leadership Book Club 2026-03-13.md": {
@@ -9861,6 +9925,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -9962,6 +10030,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/HealthTrust Supply Chain ITG PI Planning - Q1 2026 2026-01-09.md": {},
@@ -9977,6 +10049,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10007,6 +10083,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/HOLD Flight Academy Bring Your Own Lunch & Learn 2026 Series 2026-03-18.md": {
@@ -10019,6 +10099,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10059,6 +10143,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-22.md": {
@@ -10071,6 +10159,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10087,6 +10179,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-20.md": {
@@ -10099,6 +10195,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10115,6 +10215,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-15.md": {
@@ -10127,6 +10231,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10143,6 +10251,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-13.md": {
@@ -10155,6 +10267,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10171,6 +10287,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-08.md": {
@@ -10183,6 +10303,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10199,6 +10323,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-06.md": {
@@ -10211,6 +10339,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10227,6 +10359,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-01.md": {
@@ -10239,6 +10375,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10255,6 +10395,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-03-30.md": {
@@ -10267,6 +10411,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10283,6 +10431,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-03-25.md": {
@@ -10295,6 +10447,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10311,6 +10467,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-03-23.md": {
@@ -10323,6 +10483,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10339,6 +10503,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-03-18.md": {
@@ -10351,6 +10519,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10367,6 +10539,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-03-16 1.md": {
@@ -10379,6 +10555,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10395,6 +10575,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-03-11.md": {
@@ -10407,6 +10591,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10423,6 +10611,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-03-09.md": {
@@ -10435,6 +10627,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10451,6 +10647,10 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-03-04.md": {
@@ -10463,6 +10663,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10479,18 +10683,28 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
       }
     },
     "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-03-02.md": {
       "reminder-1765736094027": {
-        "triggered": false,
-        "repeatCount": 0
+        "triggered": true,
+        "repeatCount": 0,
+        "lastSent": 1772458206543
       },
       "reminder-1767981136916": {
         "triggered": false,
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": true,
+        "repeatCount": 5,
+        "lastSent": 1772460684321
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10551,6 +10765,10 @@
         "repeatCount": 0
       },
       "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
         "triggered": false,
         "repeatCount": 0
       }
@@ -10764,6 +10982,308 @@
       "reminder-1771960218816": {
         "triggered": false,
         "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Notes/Forever/Automations and shortcuts.md": {},
+    "Markdown/Notes/Forever/Food Ingredient Essentials.md": {},
+    "Markdown/Daily Notes/2026-02-28.md": {
+      "reminder-1767981136916": {
+        "triggered": true,
+        "repeatCount": 0,
+        "lastSent": 1772319617211
+      }
+    },
+    "Markdown/Action Items/yep.md": {},
+    "Markdown/Action Items/Walking 2026-02-26.md": {},
+    "Markdown/Action Items/Walking 2026-02-26 1.md": {},
+    "Markdown/Action Items/Todo/Production deployment.md": {
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Action Items/Let's Talk Operational Readiness 2026-04-29.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Action Items/Events/Medication 2026-03-01.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Action Items/Daily Standup for GCP App Support 2026-04-29.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Archive/setup warehouse transfer.md": {},
+    "Markdown/Action Items/Refinement + Daily Standup for GCP App Support 2026-04-30.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Daily Notes/2026-03-01.md": {},
+    "Markdown/Action Items/Todo/Production deployment 2026-03-10.md": {
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Notes/Untitled 1.md": {},
+    "Markdown/Action Items/Todo/Solar in house.md": {},
+    "Markdown/Action Items/Events/worked on ordertypeapi 2026-02-09.md": {},
+    "Markdown/Action Items/Todo/44922 - Modify Stock order details endpoint.md": {},
+    "Markdown/Action Items/Todo/16000 - stock order modification.md": {},
+    "Markdown/Action Items/Todo/15976 - Order Type Api.md": {},
+    "Markdown/Action Items/Events/Dev breakdown 2026-02-27.md": {},
+    "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-29.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-28.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Action Items/Events/Daily Standup for GCP App Support 2026-04-27.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Action Items/Events/tech debt searching 2026-02-27.md": {},
+    "Markdown/Action Items/Events/Planning Review of GCP App Support 2026-02-27.md": {},
+    "Markdown/Action Items/Toget/Dish detergent.md": {},
+    "Markdown/Action Items/Todo/healthstream videos.md": {},
+    "Markdown/Action Items/Todo/HCA 2026 Goals.md": {},
+    "Markdown/Action Items/Todo/MyPath - Refine goals.md": {},
+    "Markdown/Action Items/Events/Let's Talk Operational Readiness 2026-04-29.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Action Items/Events/Walking 2026-02-26 1.md": {},
+    "Markdown/Action Items/Events/Walking 2026-02-26.md": {},
+    "Markdown/Action Items/Events/Traditional Strength Training 2026-02-25.md": {},
+    "Markdown/Action Items/Events/Refinement + Daily Standup for GCP App Support 2026-04-30.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Notes/Forever/Ideal Day.md": {},
+    "Markdown/Notes/Forever/Goals.md": {},
+    "Markdown/Notes/Things/Facility Transfer.md": {},
+    "Markdown/Notes/Things/Cloud Function.md": {},
+    "Markdown/Notes/Ideas/Things I might want to do.md": {},
+    "Markdown/Notes/Forever/Physical Asset List.md": {},
+    "Markdown/Notes/Forever/Software.md": {},
+    "Markdown/Notes/Things/facility trandfer technical debt.md": {},
+    "Markdown/Action Items/Events/Untitled.md": {
+      "reminder-1765736094027": {
+        "triggered": true,
+        "repeatCount": 0,
+        "lastSent": 1772387712935
+      }
+    },
+    "Markdown/Action Items/Events/Untitled 2026-03-01.md": {
+      "reminder-1765736094027": {
+        "triggered": true,
+        "repeatCount": 0,
+        "lastSent": 1772387742934
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": true,
+        "repeatCount": 1,
+        "lastSent": 1772387892935
+      }
+    },
+    "Markdown/Notes/Saved AI Notes/All-Day Section Styling Fix.md": {},
+    "Markdown/Notes/Learning/facility trandfer technical debt.md": {},
+    "Markdown/Notes/Learning/Breaking changes note.md": {},
+    "Markdown/Notes/Learning/documentation ideas.md": {},
+    "Markdown/Notes/Learning/Facility Transfer.md": {},
+    "Markdown/Notes/Learning/Cloud Function.md": {},
+    "Markdown/Notes/Forever/Meals Essentials.md": {},
+    "Markdown/Notes/Forever/Apps and Services.md": {},
+    "Markdown/Data Philosophy.md": {},
+    "Markdown/Action Items/Q1 2026 Cyber Ops Briefing 2026-04-30.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Action Items/Events/Medication 2026-03-02.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Action Items/Events/Family Dinner 2026-02-28.md": {},
+    "Work on second brain 2026-03-01.md": {},
+    "Markdown/Action Items/Events/Medication 2026-03-03.md": {
+      "reminder-1765736094027": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1765736113126": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      },
+      "reminder-1771960218816": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Walk 2026-03-02.md": {},
+    "Markdown/Walk 2026-03-02.md": {
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
+      }
+    },
+    "Markdown/Daily Notes/2026-03-02.md": {},
+    "Untitled 2026-03-02.md": {
+      "reminder-1767981136916": {
+        "triggered": false,
+        "repeatCount": 0
       }
     }
   },
@@ -10785,7 +11305,7 @@
   "companionStartupScanEnabled": true,
   "companionStartupDelayMs": 800,
   "companionUpstreamPropagation": true,
-  "enableLogging": true,
+  "enableLogging": false,
   "_migratedFromPlugins": true,
   "autoCreateConfigs": {}
 }

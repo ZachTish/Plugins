@@ -30,6 +30,22 @@ export class HideSectionRenderer {
             text: "Automatically add or remove specific tags (like '#hide') based on file criteria."
         });
 
+        new Setting(section)
+            .setName("Auto-remove tag when no rule matches")
+            .setDesc(
+                "When enabled, if a file has a tag that is managed by an 'add' hide rule " +
+                "but no matching rule fires, the tag is automatically removed. " +
+                "Disable this to preserve manually set tags."
+            )
+            .addToggle(toggle =>
+                toggle
+                    .setValue(plugin.settings.autoRemoveHiddenWhenNoMatch)
+                    .onChange(async value => {
+                        plugin.settings.autoRemoveHiddenWhenNoMatch = value;
+                        await persistRuleChange(false);
+                    })
+            );
+
         const toolbar = section.createDiv({ cls: "tps-nn-toolbar" });
         this.createActionButton(toolbar, "+ Add hide rule", async () => {
             const rule = plugin.createDefaultHideRule();

@@ -203,7 +203,7 @@ export async function applyParentLinkToChild(
     parentFile: TFile,
     parentLinkKey: string,
 ): Promise<void> {
-    const parentKey = String(parentLinkKey || "parent").trim() || "parent";
+    const parentKey = String(parentLinkKey || "childOf").trim() || "childOf";
     const parentLink = buildParentLinkValue(app, childFile.path, parentFile);
 
     await app.fileManager.processFrontMatter(childFile, (fm) => {

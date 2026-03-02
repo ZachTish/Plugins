@@ -1,6 +1,6 @@
 import { moment, getAllTags, TFile } from 'obsidian';
 import type { PropertyReminder } from '../types';
-import { matchesExclusionPattern, normalizeComparablePath } from '../utils';
+import { matchesExclusionPattern, matchesRequiredPath, normalizeComparablePath } from '../utils';
 
 // ============================================================================
 // Date/Time Parsing
@@ -257,9 +257,9 @@ export function shouldIgnoreForReminder(
         return true;
     }
 
-    // Required paths: if specified, file must be inside at least one of these folders (using startsWith for simple folder containment)
+    // Required paths: if specified, file must be inside at least one of these folders.
     const requiredPaths = Array.isArray(reminder.requiredPaths) ? reminder.requiredPaths.filter(Boolean) : [];
-    if (requiredPaths.length > 0 && !requiredPaths.some(p => file.path.startsWith(p))) {
+    if (requiredPaths.length > 0 && !requiredPaths.some(p => matchesRequiredPath(file.path, p))) {
         return true;
     }
 

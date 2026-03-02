@@ -240,6 +240,15 @@ export class ContextTargetService {
                 logger.log('[Target Service] Click target not in canvas wrapper/node.');
                 return null;
             }
+            // If the click is inside a specific embed entry (e.g. a calendar event
+            // tile or a bases feed row), the canvas-node resolution is too coarse —
+            // it would return the .base file rather than the underlying note.
+            // Return null here so resolveTargets falls through to resolveExplorerPath,
+            // which knows how to read data-path / data-href from these elements.
+            if (evt.target.closest('.tps-calendar-entry, .bases-feed-entry')) {
+                logger.log('[Target Service] Click target inside embed entry — deferring to resolveExplorerPath.');
+                return null;
+            }
         }
 
         const canvas = (view as any).canvas;
@@ -270,11 +279,41 @@ export class ContextTargetService {
 
     /**
      * Expand the selection to include multiple files if they are selected in the active context.
+     * For Notebook Navigator: only DOM-visible selection indicators are trusted (requires explicit
+     * Ctrl/Shift+click highlighting). Storage, API and View sources are skipped here because they
+     * can include the currently-open editor file which is tracked internally by the NN view state
+     * but was never deliberately selected by the user.
      */
     expandSelection(primaryFiles: TFile[], contextEl?: HTMLElement | null): TFile[] {
         if (primaryFiles.length === 0) return [];
 
         const uniquePrimary = this.mergeFileLists([primaryFiles]);
+        const scope = this.detectSelectionScope(contextEl);
+
+        // For Notebook Navigator: use only the DOM selection (explicit visual highlights).
+        // This prevents the currently-open editor file from being co-opted via storage/API/view.
+        if (scope === 'notebook-navigator' || (contextEl && this.isNotebookNavigatorContextTarget(contextEl))) {
+            const domSelection = this.getNotebookNavigatorSelectionFromDom(contextEl);
+            const primaryPaths = new Set(uniquePrimary.map((f) => f.path));
+
+            // Strip the currently-open editor file from the DOM selection unless it is
+            // also the primary (right-clicked) file. NN marks the open file with styling
+            // that can bleed into the selection even without a deliberate Ctrl+click.
+            const activeFile = this.app.workspace.getActiveFile();
+            const filtered = domSelection.filter(
+                (f) => primaryPaths.has(f.path) || !activeFile || f.path !== activeFile.path
+            );
+
+            const filteredPaths = new Set(filtered.map((f) => f.path));
+            const allPrimaryInFiltered = uniquePrimary.every((f) => filteredPaths.has(f.path));
+
+            // Only expand if filtered DOM has >1 file AND all primary files are in it.
+            if (filtered.length > 1 && allPrimaryInFiltered) {
+                return filtered;
+            }
+            return uniquePrimary;
+        }
+
         const selection = this.getSelectedFiles(contextEl, uniquePrimary);
 
         if (selection.length <= 1) {
@@ -319,7 +358,24 @@ export class ContextTargetService {
             sourceCounts.nnDom = nnDom.length;
             sourceCounts.nnStorage = nnStorage.length;
             sourceCounts.nnView = nnView.length;
-            const liveResolved = this.mergeFileLists([nnApi, nnDom, nnView]);
+
+            // The View and API sources deep-scan the NN view object and can
+            // spuriously pick up the currently-open editor file via properties
+            // like `active`, `focused`, or `current` that track the open leaf
+            // independently of the user's deliberate multi-selection. Filter
+            // these out before merging: a file is only trusted from the
+            // View/API sources if it also appears in the DOM selection (which
+            // requires an actual visual selection class like nn-selected) OR if
+            // it is already in primaryFiles (the right-clicked file).
+            const domPaths = new Set(nnDom.map((f) => f.path));
+            const primaryPaths = new Set(primaryFiles.map((f) => f.path));
+            const filterSpuriousActive = (files: TFile[]): TFile[] =>
+                files.filter((f) => domPaths.has(f.path) || primaryPaths.has(f.path));
+
+            const nnApiFiltered = filterSpuriousActive(nnApi);
+            const nnViewFiltered = filterSpuriousActive(nnView);
+
+            const liveResolved = this.mergeFileLists([nnApiFiltered, nnDom, nnViewFiltered]);
             const storageResolved = this.mergeFileLists([nnStorage]);
             resolved = this.chooseNotebookNavigatorSelection(liveResolved, storageResolved, primaryFiles);
         } else if (scope === 'smart-explorer') {
@@ -349,7 +405,11 @@ export class ContextTargetService {
                 sourceCounts.nnDom = nnDom.length;
                 sourceCounts.nnStorage = nnStorage.length;
                 sourceCounts.nnView = nnView.length;
-                const nnLive = this.mergeFileLists([nnApi, nnDom, nnView]);
+                const nnDomPaths = new Set(nnDom.map((f) => f.path));
+                const nnPrimaryPaths = new Set(primaryFiles.map((f) => f.path));
+                const filterSpurious = (files: TFile[]): TFile[] =>
+                    files.filter((f) => nnDomPaths.has(f.path) || nnPrimaryPaths.has(f.path));
+                const nnLive = this.mergeFileLists([filterSpurious(nnApi), nnDom, filterSpurious(nnView)]);
                 const nnStored = this.mergeFileLists([nnStorage]);
                 nnResolved = this.chooseNotebookNavigatorSelection(nnLive, nnStored, primaryFiles);
             }
@@ -483,14 +543,18 @@ export class ContextTargetService {
 
         const nodes = Array.from(
             root.querySelectorAll<HTMLElement>(
+                // nn-selected on a qualified NN node = deliberate Ctrl/Shift+click selection
                 '.nn-file.nn-selected, ' +
-                '.nn-file.is-selected, ' +
                 '.nn-navitem.nn-selected, ' +
-                '.nn-selected, ' +
+                // nn-context-menu-active = the actual right-clicked item
                 '.nn-context-menu-active, ' +
+                // aria-selected is set programmatically only on explicitly selected items
                 '.nn-file[aria-selected="true"], ' +
                 '.nn-navitem[aria-selected="true"], ' +
                 '[data-path][aria-selected="true"]'
+                // NOTE: .nn-file.is-selected and bare .nn-selected intentionally excluded —
+                // Obsidian applies is-selected / nn-selected to the active/focused item in
+                // the tree (the currently-open file), not only to explicitly multi-selected ones.
             ),
         );
 
@@ -562,7 +626,7 @@ export class ContextTargetService {
         const root: ParentNode = scopeRoot ?? document;
         const nodes = Array.from(
             root.querySelectorAll<HTMLElement>(
-                '.nn-file.nn-selected, .nn-file.is-selected, .nn-navitem.nn-selected, .nn-selected, .nn-context-menu-active, [data-path][aria-selected="true"]',
+                '.nn-file.nn-selected, .nn-navitem.nn-selected, .nn-context-menu-active, [data-path][aria-selected="true"]',
             ),
         );
         return nodes.some((node) => node.getClientRects().length > 0);
@@ -596,6 +660,19 @@ export class ContextTargetService {
         if (liveHasPrimary && !storedHasPrimary) return live;
         if (!liveHasPrimary && !storedHasPrimary) return [];
 
+        // If live already exactly accounts for all primary files and contains
+        // no extra files beyond them, it is the authoritative result — do NOT
+        // let stale storage entries grow the selection (e.g. the currently-open
+        // editor file persisted from a previous interaction).
+        const livePathsSet = new Set(live.map((f) => f.path));
+        const liveMatchesPrimaryExactly =
+            primaryPaths.size > 0 &&
+            live.length === primaryPaths.size &&
+            [...primaryPaths].every((p) => livePathsSet.has(p));
+        if (liveMatchesPrimaryExactly) return live;
+
+        // Storage can only expand a multi-file live selection that appears
+        // incomplete (e.g. rapid click lost some DOM nodes).
         const overlap = this.selectionOverlapRatio(live, stored);
         if (stored.length > live.length && overlap >= 0.8) {
             return this.mergeFileLists([live, stored]);

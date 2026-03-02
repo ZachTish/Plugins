@@ -9,6 +9,7 @@ import { BulkEditService } from './services/bulk-edit-service';
 import { RecurrenceService } from './services/recurrence-service';
 import { FileNamingService } from './services/file-naming-service';
 import { ViewModeManager } from './handlers/view-mode-manager';
+import { DailyNoteNavManager } from './handlers/daily-note-nav-manager';
 import { ContextTargetService } from './services/context-target-service';
 import { NoteOperationService } from './services/note-operation-service';
 import { FieldInitializationService } from './services/field-initialization-service';
@@ -17,6 +18,9 @@ import * as logger from "./logger";
 import { CommandQueueService, getErrorMessage, getPluginById } from "./core";
 import { VaultQueryService } from './services/vault-query-service';
 import { TaskIdentityService } from './services/task-identity-service';
+import { BacklinksView, BACKLINKS_VIEW_TYPE } from './views/backlinks-view';
+import { resolveLinkValueToFile } from './handlers/parent-link-format';
+import { WorkspaceRibbonService } from './services/workspace-ribbon-service';
 
 
 export default class TPSGlobalContextMenuPlugin extends Plugin {
@@ -27,12 +31,14 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
   recurrenceService: RecurrenceService;
   fileNamingService: FileNamingService;
   viewModeManager: ViewModeManager;
+  dailyNoteNavManager: DailyNoteNavManager;
   contextTargetService: ContextTargetService;
   noteOperationService: NoteOperationService;
   fieldInitializationService: FieldInitializationService;
   commandQueueService: CommandQueueService;
   vaultQueryService: VaultQueryService;
   taskIdentityService: TaskIdentityService;
+  workspaceRibbonService: WorkspaceRibbonService;
   styleEl: HTMLStyleElement | null = null;
   ignoreNextContext = false;
   keyboardVisible = false;
@@ -64,11 +70,14 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.commandQueueService = new CommandQueueService();
     this.vaultQueryService = new VaultQueryService(this.app);
     this.taskIdentityService = new TaskIdentityService();
+    this.workspaceRibbonService = new WorkspaceRibbonService(this);
 
     this.menuController = new MenuController(this);
     this.persistentMenuManager = new PersistentMenuManager(this);
     this.viewModeManager = new ViewModeManager(this);
     this.addChild(this.viewModeManager);
+    this.dailyNoteNavManager = new DailyNoteNavManager(this);
+    this.addChild(this.dailyNoteNavManager);
 
     // Initialize recurrence listener
     this.recurrenceService.setup();
@@ -76,6 +85,14 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.patchMenuMethods();
 
     this.injectStyles();
+
+    // Register the Backlinks sidebar view
+    this.registerView(BACKLINKS_VIEW_TYPE, (leaf) => new BacklinksView(leaf, this));
+
+    // Ribbon icon to toggle the Backlinks panel
+    this.addRibbonIcon('links-coming-in', 'Toggle Backlinks panel', () => {
+      void this.toggleBacklinksPanel();
+    });
 
     this.keyboardVisible = false;
 
@@ -157,12 +174,44 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     const debouncedMenuRefresh = debounce((file: TFile) => {
       if (file && file.extension === 'md') {
         this.persistentMenuManager.refreshMenusForFile(file);
+
+        // If this file has a parent link, also refresh the parent's subitems panel
+        // so newly linked children appear immediately without requiring a re-open.
+        const parentKey = String(this.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+        const fm = (this.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
+        const fmParentKey = Object.keys(fm).find((k) => k.toLowerCase() === parentKey.toLowerCase());
+        if (fmParentKey !== undefined) {
+          const parentRaw = fm[fmParentKey];
+          const parentValues = Array.isArray(parentRaw) ? parentRaw : [parentRaw];
+          for (const pv of parentValues) {
+            const parentFile = resolveLinkValueToFile(this.app, pv, file.path);
+            if (parentFile instanceof TFile && parentFile.path !== file.path) {
+              this.persistentMenuManager.refreshMenusForFile(parentFile);
+            }
+          }
+        }
       }
     }, 2000, false); // 2 second debounce, fires at END to avoid refresh during typing
+
+    // Debounced filename update when frontmatter (title/scheduled) changes on the active file.
+    // This makes GCM's FileNamingService respond to live edits, not just file-open.
+    const debouncedFilenameSync = debounce((file: TFile) => {
+      if (!file || file.extension !== 'md') return;
+      const active = this.app.workspace.getActiveFile();
+      if (file !== active) return;
+      if (!this.fileNamingService.shouldProcess(file)) return;
+      if (this.settings.enableAutoRename) {
+        this.fileNamingService.updateFilenameIfNeeded(file);
+      }
+      if (this.settings.autoSyncTitleFromFilename) {
+        this.fileNamingService.syncTitleFromFilename(file);
+      }
+    }, 1500, false); // 1.5s debounce, fires at END
 
     this.registerEvent(
       this.app.metadataCache.on('changed', (file) => {
         debouncedMenuRefresh(file);
+        debouncedFilenameSync(file);
       })
     );
 
@@ -187,7 +236,12 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
 
 
     this.registerEvent(
-      this.app.vault.on('delete', () => {
+      this.app.vault.on('delete', (file) => {
+        // Clean up stale parent/child/attachment links in other notes before closing menus.
+        if (file instanceof TFile && file.extension === 'md') {
+          void this.bulkEditService.cleanupLinksForDeletedFile(file.path, file.basename);
+        }
+
         logger.log('[TPS GCM] vault delete detected; blurring and closing menu');
         try {
           if (document.activeElement instanceof HTMLElement) {
@@ -257,8 +311,11 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       ) => this.bulkEditService.updateFrontmatter(files, updates),
     };
 
-    // Check for missing recurrences on startup
+    // Check for missing recurrences on startup; build workspace ribbon buttons
     this.app.workspace.onLayoutReady(async () => {
+      // Workspace ribbon buttons: internal plugins are ready at layout-ready time
+      this.workspaceRibbonService.setup();
+
       // Give a short delay to allow other plugins/cache to settle
       setTimeout(async () => {
         logger.log('[TPS GCM] Checking for missing recurrences on startup...');
@@ -297,6 +354,14 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     }, { capture: true });
 
     // Sidebar Open Commands
+    this.addCommand({
+      id: 'toggle-backlinks-panel',
+      name: 'Toggle Backlinks panel',
+      callback: () => {
+        void this.toggleBacklinksPanel();
+      },
+    });
+
     this.addCommand({
       id: 'open-in-right-sidebar',
       name: 'Open active file in Right Sidebar',
@@ -499,6 +564,7 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.workspaceRibbonService?.teardown();
     delete (this as any).api;
     if (this.restoreMenuPatch) {
       this.restoreMenuPatch();
@@ -555,6 +621,7 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     logger.setLoggingEnabled(this.settings.enableLogging);
+    this.workspaceRibbonService?.refresh();
     this.debouncedSave();
     this.persistentMenuManager?.ensureMenus?.();
     const seen = new Set<string>();
@@ -1167,5 +1234,20 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
   }
 
   // Mobile keyboard watcher moved to PersistentMenuManager
+
+  async toggleBacklinksPanel(): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(BACKLINKS_VIEW_TYPE);
+    if (existing.length > 0) {
+      // If already open, close it
+      existing.forEach((leaf) => leaf.detach());
+      return;
+    }
+
+    // Open in the right sidebar
+    const leaf = this.app.workspace.getRightLeaf(false);
+    if (!leaf) return;
+    await leaf.setViewState({ type: BACKLINKS_VIEW_TYPE, active: true });
+    this.app.workspace.revealLeaf(leaf);
+  }
 
 }

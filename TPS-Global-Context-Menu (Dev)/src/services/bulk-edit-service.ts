@@ -6,7 +6,7 @@ import { normalizeTagValue, normalizeTagList, parseTagInput, mergeNormalizedTags
 import { stripDateSuffix } from '../utils/date-suffix-utils';
 import { ChecklistHandler } from '../handlers/checklist-handler';
 import { ParentLinkHandler } from '../handlers/parent-link-handler';
-import { buildParentLinkValue } from '../handlers/parent-link-format';
+import { buildParentLinkValue, linkValueMatchesFile, extractLinkTarget } from '../handlers/parent-link-format';
 import {
     casefold,
     deleteValueCaseInsensitive,
@@ -521,7 +521,7 @@ export class BulkEditService {
         const updates: Record<string, any> = { status };
 
         if (status === 'complete') {
-            const now = window.moment().format('YYYY-MM-DDTHH:mm:ss');
+            const now = window.moment().format('YYYY-MM-DD HH:mm:ss');
             updates.completedDate = now;
         } else if (status === 'open' || status === 'working' || status === 'blocked') {
             updates.completedDate = null; // Clears the key
@@ -699,9 +699,87 @@ export class BulkEditService {
                     }
                 }, 200);
             }
+
+            // Copy files to recurring template folder (creates template on first set)
+            await this.ensureRecurrenceTemplate(files);
         }
 
         return count;
+    }
+
+    /**
+     * Copies recurring event files to the recurring template folder the first time
+     * a recurrence rule is set on them, if the folder is configured. The template
+     * is a permanent reference copy with `isRecurrenceTemplate: true` in its frontmatter.
+     * Instance files gain a `recurrenceTemplate` link pointing to the template.
+     */
+    async ensureRecurrenceTemplate(files: TFile[]): Promise<void> {
+        const templateFolder = (this.plugin.settings.recurringTemplateFolder || '').trim();
+        if (!templateFolder) return;
+
+        for (const file of files) {
+            try {
+                const cache = this.plugin.app.metadataCache.getFileCache(file);
+                const fm = cache?.frontmatter;
+                // Skip if this is already a template
+                if (fm?.isRecurrenceTemplate) continue;
+
+                // Build destination path
+                const destFolderPath = normalizePath(templateFolder);
+                const destFilePath = normalizePath(`${destFolderPath}/${file.name}`);
+
+                // Create folder if needed
+                const folderExists = await this.plugin.app.vault.adapter.exists(destFolderPath);
+                if (!folderExists) {
+                    await this.plugin.app.vault.createFolder(destFolderPath);
+                }
+
+                // Skip if template already exists
+                const templateExists = await this.plugin.app.vault.adapter.exists(destFilePath);
+                if (templateExists) {
+                    // Just ensure the instance links to it if not already
+                    const templateBasename = file.basename;
+                if (fm && !findKeyCaseInsensitive(fm, 'recurrenceTemplate')) {
+                        await this.plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+                            this.setFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate', `[[${templateBasename}]]`);
+                        });
+                    }
+                    continue;
+                }
+
+                // Copy file content to template location
+                const content = await this.plugin.app.vault.read(file);
+                await this.plugin.app.vault.create(destFilePath, content);
+
+                const templateFile = this.plugin.app.vault.getAbstractFileByPath(destFilePath);
+                if (!(templateFile instanceof TFile)) continue;
+
+                // Mark the template copy
+                await this.plugin.app.fileManager.processFrontMatter(templateFile, (fmw) => {
+                    this.setFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate', true);
+                    // Remove scheduled/status from template so it doesn't show up as an active event
+                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'scheduled');
+                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'status');
+                    // Explicitly store the recurrence rule — the copied content may not yet be
+                    // flushed to disk when vault.read runs, so read it from the metadata cache.
+                    const rule = fm?.recurrenceRule || fm?.recurrence;
+                    if (rule) {
+                        this.setFrontmatterValueCaseInsensitive(fmw, 'recurrenceRule', rule);
+                        this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrence');
+                    }
+                });
+
+                // Add back-link from instance to template
+                await this.plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+                    this.setFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate', `[[${file.basename}]]`);
+                });
+
+                logger.log(`[TPS GCM] Created recurring template for ${file.path} at ${destFilePath}`);
+                new Notice(`Recurring template created: ${file.name}`);
+            } catch (err) {
+                logger.error(`[TPS GCM] Failed to create recurring template for ${file.path}:`, err);
+            }
+        }
     }
 
     async setScheduled(files: TFile[], date: string | null): Promise<number> {
@@ -745,8 +823,12 @@ export class BulkEditService {
 
     getNextOccurrence(recurrenceRule: string, currentDate?: string): Date | null {
         try {
+            // Use moment to parse so date-only strings (e.g. "2026-03-02") are
+            // interpreted as local midnight rather than UTC midnight. Without this,
+            // in timezones behind UTC the "next" occurrence can fall on the same
+            // local calendar day as the seed date.
             const startDate = currentDate
-                ? new Date(currentDate)
+                ? window.moment(currentDate).toDate()
                 : new Date();
 
             const options = RRule.parseString(recurrenceRule);
@@ -810,7 +892,7 @@ export class BulkEditService {
             const newFileName = `${baseName} ${dateStr}.md`;
             const newFilePath = file.parent ? `${file.parent.path}/${newFileName}` : newFileName;
             const chainId = this.resolveRecurrenceChainId(file, frontmatter, recurrenceRule);
-            const newScheduled = window.moment(nextDate).format('YYYY-MM-DDTHH:mm:ss');
+            const newScheduled = window.moment(nextDate).format('YYYY-MM-DD HH:mm:ss');
             const recurrenceOpKey = this.buildRecurrenceOpKey(chainId, newScheduled);
 
             const opStatus = await this.beginRecurrenceOp(recurrenceOpKey, newFilePath);
@@ -888,7 +970,7 @@ export class BulkEditService {
             const nextDate = recurrenceRule ? this.advanceOccurrenceToFuture(recurrenceRule, currentScheduled) : null;
             if (nextDate && recurrenceRule) {
                 const chainId = this.resolveRecurrenceChainId(file, frontmatter, recurrenceRule);
-                const newScheduled = window.moment(nextDate).format('YYYY-MM-DDTHH:mm:ss');
+                const newScheduled = window.moment(nextDate).format('YYYY-MM-DD HH:mm:ss');
                 const recurrenceOpKey = this.buildRecurrenceOpKey(chainId, newScheduled);
                 await this.failRecurrenceOp(recurrenceOpKey);
             }
@@ -1008,6 +1090,7 @@ export class BulkEditService {
 
     async linkToParent(files: TFile[], parentFile: TFile): Promise<number> {
         const parentKey = this.parentLinkHandler.normalizeParentKey();
+        const childKey = this.parentLinkHandler.normalizeChildKey();
         const format = this.parentLinkHandler.normalizeParentLinkFormat();
         const count = await this.applyToFiles(files, (fm, file) => {
             const parentLink = buildParentLinkValue(this.plugin.app, parentFile, file.path, format);
@@ -1017,14 +1100,35 @@ export class BulkEditService {
             }
         });
         if (count > 0) {
+            // Write reverse childKey into parentFile listing child links
+            await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
+                const existingKey = this.findFrontmatterKeyCaseInsensitive(fm, childKey);
+                const existingRaw = existingKey ? fm[existingKey] : undefined;
+                let children: string[] = [];
+                if (Array.isArray(existingRaw)) {
+                    children = existingRaw.map(String);
+                } else if (typeof existingRaw === 'string' && existingRaw.trim()) {
+                    children = [existingRaw];
+                }
+                for (const file of files) {
+                    const childLink = buildParentLinkValue(this.plugin.app, file, parentFile.path, format);
+                    const linkLower = childLink.toLowerCase();
+                    if (!children.some((l) => l.toLowerCase() === linkLower)) {
+                        children.push(childLink);
+                    }
+                }
+                this.setFrontmatterValueCaseInsensitive(fm, childKey, children);
+            });
             await this.tagParentsForLinkedChildren([parentFile]);
             void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(files, [parentKey]);
+            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange([parentFile], [childKey]);
         }
         return count;
     }
 
     async linkChildren(currentFile: TFile, childFiles: TFile[]): Promise<number> {
         const parentKey = this.parentLinkHandler.normalizeParentKey();
+        const childKey = this.parentLinkHandler.normalizeChildKey();
         const format = this.parentLinkHandler.normalizeParentLinkFormat();
         const count = await this.applyToFiles(childFiles, (fm, file) => {
             const parentLink = buildParentLinkValue(this.plugin.app, currentFile, file.path, format);
@@ -1034,49 +1138,222 @@ export class BulkEditService {
             }
         });
         if (count > 0) {
+            // Write reverse childKey into currentFile listing child links
+            await this.plugin.app.fileManager.processFrontMatter(currentFile, (fm) => {
+                const existingKey = this.findFrontmatterKeyCaseInsensitive(fm, childKey);
+                const existingRaw = existingKey ? fm[existingKey] : undefined;
+                let children: string[] = [];
+                if (Array.isArray(existingRaw)) {
+                    children = existingRaw.map(String);
+                } else if (typeof existingRaw === 'string' && existingRaw.trim()) {
+                    children = [existingRaw];
+                }
+                for (const file of childFiles) {
+                    const childLink = buildParentLinkValue(this.plugin.app, file, currentFile.path, format);
+                    const linkLower = childLink.toLowerCase();
+                    if (!children.some((l) => l.toLowerCase() === linkLower)) {
+                        children.push(childLink);
+                    }
+                }
+                this.setFrontmatterValueCaseInsensitive(fm, childKey, children);
+            });
             await this.tagParentsForLinkedChildren([currentFile]);
             void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(childFiles, [parentKey]);
+            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange([currentFile], [childKey]);
         }
         return count;
     }
 
     async linkAttachments(currentFile: TFile, attachmentFiles: TFile[]): Promise<number> {
+        if (!(await this.canMutateFrontmatterSafely(currentFile))) return 0;
+
+        const ATTACHMENTS_KEY = 'attachments';
+        const format = this.parentLinkHandler.normalizeParentLinkFormat();
         let added = 0;
-        await this.plugin.app.fileManager.processFrontMatter(currentFile, (frontmatter: any) => {
-            const ATTACHMENTS_KEY = 'attachments';
-            const existingRaw = frontmatter[ATTACHMENTS_KEY];
-            const values: string[] = [];
-            const seen = new Set<string>();
 
-            const pushValue = (raw: any) => {
-                if (typeof raw !== 'string') return;
-                const trimmed = raw.trim();
-                if (!trimmed) return;
-                const key = trimmed.toLowerCase();
-                if (seen.has(key)) return;
-                seen.add(key);
-                values.push(trimmed);
-            };
+        await this.runSerializedFrontmatterWrite(currentFile, async () => {
+            this.plugin.recurrenceService?.markFileAsModified(currentFile.path);
+            await this.plugin.app.fileManager.processFrontMatter(currentFile, (fm: any) => {
+                const existingKey = this.findFrontmatterKeyCaseInsensitive(fm, ATTACHMENTS_KEY);
+                const existingRaw = existingKey ? fm[existingKey] : undefined;
+                const values: string[] = [];
+                const seen = new Set<string>();
 
-            if (Array.isArray(existingRaw)) {
-                existingRaw.forEach(pushValue);
-            } else if (existingRaw) {
-                pushValue(existingRaw);
-            }
+                const pushValue = (raw: any) => {
+                    if (typeof raw !== 'string') return;
+                    const trimmed = raw.trim();
+                    if (!trimmed) return;
+                    const key = trimmed.toLowerCase();
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    values.push(trimmed);
+                };
 
-            const startCount = values.length;
-            attachmentFiles.forEach((file) => {
-                if (file.path === currentFile.path) return;
-                // Use generateMarkdownLink to handle aliases/paths if needed, or fallback to simple link
-                const link = this.plugin.app.fileManager.generateMarkdownLink(file, currentFile.path);
-                pushValue(link);
+                if (Array.isArray(existingRaw)) {
+                    existingRaw.forEach(pushValue);
+                } else if (existingRaw) {
+                    pushValue(existingRaw);
+                }
+
+                const startCount = values.length;
+                attachmentFiles.forEach((file) => {
+                    if (file.path === currentFile.path) return;
+                    const link = buildParentLinkValue(this.plugin.app, file, currentFile.path, format);
+                    pushValue(link);
+                });
+
+                added = values.length - startCount;
+                if (added > 0) {
+                    this.setFrontmatterValueCaseInsensitive(fm, ATTACHMENTS_KEY, values);
+                }
             });
+        });
 
-            added = values.length - startCount;
-            if (added > 0) {
-                frontmatter[ATTACHMENTS_KEY] = values;
+        if (added > 0) {
+            setTimeout(() => this.plugin.persistentMenuManager?.refreshMenusForFile(currentFile), 350);
+            this.notifyFilesChanged([currentFile]);
+            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange([currentFile], [ATTACHMENTS_KEY]);
+        }
+
+        return added;
+    }
+
+    /**
+     * Removes a frontmatter key+value from each of the given files.
+     * The key match is case-insensitive so it works regardless of casing variation.
+     */
+    async removeFrontmatterKey(files: TFile[], key: string): Promise<number> {
+        let count = 0;
+        for (const file of files) {
+            try {
+                await this.plugin.app.fileManager.processFrontMatter(file, (fm) => {
+                    const actualKey = Object.keys(fm).find(k => k.toLowerCase() === key.toLowerCase()) ?? key;
+                    if (actualKey in fm) {
+                        delete fm[actualKey];
+                        count++;
+                    }
+                });
+            } catch (err) {
+                logger.warn(`[TPS GCM] removeFrontmatterKey failed for ${file.path}:`, err);
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Removes the bidirectional parent↔child link between childFile and parentFile.
+     * - Deletes the `childOf` key from childFile's frontmatter
+     * - Removes childFile from the `parentOf` array in parentFile's frontmatter
+     */
+    async unlinkFromParent(childFile: TFile, parentFile: TFile): Promise<void> {
+        const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+        const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
+
+        // Remove childOf from child
+        await this.plugin.app.fileManager.processFrontMatter(childFile, (fm) => {
+            const key = Object.keys(fm).find(k => k.toLowerCase() === parentKey.toLowerCase());
+            if (key) delete fm[key];
+        });
+
+        // Remove child from parent's parentOf array
+        await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
+            const key = Object.keys(fm).find(k => k.toLowerCase() === childKey.toLowerCase());
+            if (!key) return;
+            const raw = fm[key];
+            const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
+            const filtered = arr.filter((v: any) => !linkValueMatchesFile(this.plugin.app, v, parentFile.path, childFile));
+            if (filtered.length === 0) {
+                delete fm[key];
+            } else {
+                fm[key] = filtered;
             }
         });
-        return added;
+    }
+
+    /**
+     * Removes an attachment from the parent file's `attachments` frontmatter array.
+     */
+    async unlinkAttachment(parentFile: TFile, attachmentFile: TFile): Promise<void> {
+        const attachmentsKey = 'attachments';
+        await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
+            const key = Object.keys(fm).find(k => k.toLowerCase() === attachmentsKey.toLowerCase());
+            if (!key) return;
+            const raw = fm[key];
+            const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
+            const filtered = arr.filter((v: any) => !linkValueMatchesFile(this.plugin.app, v, parentFile.path, attachmentFile));
+            if (filtered.length === 0) {
+                delete fm[key];
+            } else {
+                fm[key] = filtered;
+            }
+        });
+    }
+
+    /**
+     * Scans all vault markdown files and removes stale parent/child/attachment links
+     * that pointed to the given deleted file. Called from the vault delete handler.
+     */
+    async cleanupLinksForDeletedFile(deletedPath: string, deletedBasename: string): Promise<void> {
+        const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+        const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
+        const attachmentsKey = 'attachments';
+
+        const isMatch = (linkValue: any): boolean => {
+            if (linkValue == null) return false;
+            const target = extractLinkTarget(String(linkValue));
+            if (!target) return false;
+            const norm = (s: string) => normalizePath(s).toLowerCase();
+            return target === deletedBasename ||
+                   norm(target) === norm(deletedPath) ||
+                   norm(target) === norm(deletedBasename);
+        };
+
+        const files = this.plugin.app.vault.getMarkdownFiles();
+        for (const file of files) {
+            const cache = this.plugin.app.metadataCache.getFileCache(file);
+            const fm = cache?.frontmatter;
+            if (!fm) continue;
+
+            const hasPk = Object.keys(fm).some(k => k.toLowerCase() === parentKey.toLowerCase());
+            const hasCk = Object.keys(fm).some(k => k.toLowerCase() === childKey.toLowerCase());
+            const hasAk = Object.keys(fm).some(k => k.toLowerCase() === attachmentsKey.toLowerCase());
+            if (!hasPk && !hasCk && !hasAk) continue;
+
+            try {
+                await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
+                    // Clean childOf (single parent ref)
+                    const pk = Object.keys(frontmatter).find(k => k.toLowerCase() === parentKey.toLowerCase());
+                    if (pk && isMatch(frontmatter[pk])) {
+                        delete frontmatter[pk];
+                    }
+
+                    // Clean parentOf array
+                    const ck = Object.keys(frontmatter).find(k => k.toLowerCase() === childKey.toLowerCase());
+                    if (ck) {
+                        const raw = frontmatter[ck];
+                        const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
+                        const filtered = arr.filter(v => !isMatch(v));
+                        if (filtered.length !== arr.length) {
+                            if (filtered.length === 0) delete frontmatter[ck];
+                            else frontmatter[ck] = filtered;
+                        }
+                    }
+
+                    // Clean attachments array
+                    const ak = Object.keys(frontmatter).find(k => k.toLowerCase() === attachmentsKey.toLowerCase());
+                    if (ak) {
+                        const raw = frontmatter[ak];
+                        const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
+                        const filtered = arr.filter(v => !isMatch(v));
+                        if (filtered.length !== arr.length) {
+                            if (filtered.length === 0) delete frontmatter[ak];
+                            else frontmatter[ak] = filtered;
+                        }
+                    }
+                });
+            } catch (err) {
+                logger.warn(`[TPS GCM] cleanupLinksForDeletedFile: failed to clean ${file.path}:`, err);
+            }
+        }
     }
 }

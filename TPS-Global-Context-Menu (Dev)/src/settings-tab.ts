@@ -228,6 +228,30 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(inlineUi)
+      .setName('Subitems panel position')
+      .setDesc('Whether the subitems panel appears above or below the inline context menu bar.')
+      .addDropdown((dd) =>
+        dd
+          .addOption('below', 'Below menu')
+          .addOption('above', 'Above menu')
+          .setValue(this.plugin.settings.subitemsPanelPosition ?? 'below')
+          .onChange(async (value) => {
+            this.plugin.settings.subitemsPanelPosition = value as 'above' | 'below';
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(inlineUi)
+      .setName('Auto-collapse when empty')
+      .setDesc('Collapse the subitems panel on file open when it has no children, attachments, or references to show.')
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.subitemsPanelAutoCollapse ?? true).onChange(async (value) => {
+          this.plugin.settings.subitemsPanelAutoCollapse = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
     // --- Appearance Settings ---
     const appearance = createSection('Appearance');
     appearance.createEl('p', {
@@ -1069,7 +1093,8 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     automation.createEl('h4', { text: 'Checklists & Tasks' });
     new Setting(automation).setName('Check pending items').setDesc('Warn on completion if items unchecked').addToggle(t => t.setValue(this.plugin.settings.checkOpenChecklistItems).onChange(async v => { this.plugin.settings.checkOpenChecklistItems = v; await this.plugin.saveSettings(); }));
     new Setting(automation).setName('Check parent-linked notes').setDesc('Warn when completing if any notes with parent links are still open').addToggle(t => t.setValue(this.plugin.settings.checkParentLinkStatuses).onChange(async v => { this.plugin.settings.checkParentLinkStatuses = v; await this.plugin.saveSettings(); }));
-    new Setting(automation).setName('Parent frontmatter key').setDesc('Frontmatter key used to link a note to its parent').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'parent').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'parent'; await this.plugin.saveSettings(); }));
+    new Setting(automation).setName('Parent frontmatter key').setDesc('Frontmatter key used to link a note to its parent (child → parent direction, e.g. "childOf")').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'childOf'; await this.plugin.saveSettings(); }));
+    new Setting(automation).setName('Child frontmatter key').setDesc('Frontmatter key written to the parent note listing its children (parent → child direction, e.g. "parentOf")').addText(t => t.setValue(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').onChange(async v => { this.plugin.settings.childLinkFrontmatterKey = v.trim() || 'parentOf'; await this.plugin.saveSettings(); }));
     new Setting(automation)
       .setName('Parent link format')
       .setDesc('Store parent links as wikilinks or markdown links with explicit note-title display names.')
@@ -1097,6 +1122,39 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
     new Setting(automation).setName('Page parent navigation').setDesc('Show a parent navigation button at the top of the page above the title').addToggle(t => t.setValue(this.plugin.settings.enableTopParentNav).onChange(async v => { this.plugin.settings.enableTopParentNav = v; await this.plugin.saveSettings(); this.plugin.persistentMenuManager.ensureMenus(); }));
     new Setting(automation).setName('Completion statuses').setDesc('Statuses treated as complete for parent-linked notes').addText(t => t.setValue((this.plugin.settings.parentCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.parentCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
+
+    // Workspace Ribbon Buttons
+    automation.createEl('h4', { text: 'Workspace Ribbon Buttons', attr: { style: 'margin-top: 1.5em;' } });
+    new Setting(automation)
+      .setName('Workspace ribbon buttons')
+      .setDesc(
+        'Add a ribbon icon for each saved workspace in the core Workspaces plugin. ' +
+        'Clicking an icon instantly loads that workspace. ' +
+        'Requires the core Workspaces plugin to be enabled. ' +
+        'Changes take effect immediately.'
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.workspaceRibbonButtons)
+          .onChange(async (value) => {
+            this.plugin.settings.workspaceRibbonButtons = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // Backlinks Panel
+    automation.createEl('h4', { text: 'Backlinks Panel', attr: { style: 'margin-top: 1.5em;' } });
+    new Setting(automation)
+      .setName('Ignored frontmatter keys')
+      .setDesc('Comma-separated list of frontmatter keys to hide from the Frontmatter section in the Backlinks panel (e.g. "dateModified, dateCreated").')
+      .addText(t => t
+        .setPlaceholder('dateModified, dateCreated')
+        .setValue((this.plugin.settings.ignoredBacklinksFrontmatterKeys || []).join(', '))
+        .onChange(async v => {
+          this.plugin.settings.ignoredBacklinksFrontmatterKeys = v.split(',').map(s => s.trim()).filter(Boolean);
+          await this.plugin.saveSettings();
+        }));
+
     new Setting(automation)
       .setName('Checkbox click cycle')
       .setDesc('Cycle task states on normal click: [ ] -> [x] -> [?] -> [-] -> [ ].')
@@ -1109,6 +1167,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       sub.style.borderLeft = '2px solid var(--background-modifier-border)';
       new Setting(sub).setName('Completion Triggers').setDesc('Statuses that trigger recurrence').addText(t => t.setValue((this.plugin.settings.recurrenceCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.recurrenceCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
       new Setting(sub).setName('Prompt on Edit').setDesc('Ask to update future instances').addToggle(t => t.setValue(this.plugin.settings.promptOnRecurrenceEdit).onChange(async v => { this.plugin.settings.promptOnRecurrenceEdit = v; await this.plugin.saveSettings(); }));
+      new Setting(sub).setName('Template Folder').setDesc('Folder for recurring event templates (copied when recurrence first set). Leave blank to disable.').addText(t => t.setPlaceholder('e.g. Recurring Templates').setValue(this.plugin.settings.recurringTemplateFolder || '').onChange(async v => { this.plugin.settings.recurringTemplateFolder = v.trim(); await this.plugin.saveSettings(); }));
     }
 
     // Auto-Rename & File Naming

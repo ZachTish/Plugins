@@ -27,6 +27,7 @@ interface SubitemNode {
   file: TFile;
   relations: SubitemRelationKind[];
   children: SubitemNode[];
+  hidden?: boolean;
 }
 
 type ChecklistTaskState = ' ' | 'x' | 'X' | '?' | '-';
@@ -39,26 +40,34 @@ interface ChecklistSubitem {
   text: string;
 }
 
-type ReferenceDirection = 'incoming' | 'outgoing';
+export type ReferenceDirection = 'incoming' | 'outgoing';
 
-interface ReferenceOccurrence {
+export interface ReferenceOccurrence {
   sourceFile: TFile;
   targetFile: TFile;
   lineNumber: number;
   heading: string;
   previews: string[];
   matchedText?: string;
+  /** When the match was found in a frontmatter field, stores the key name (e.g. "dateCreated") */
+  frontmatterKey?: string;
 }
 
-interface ReferenceGroup {
+export interface ReferenceGroup {
   file: TFile;
   direction: ReferenceDirection;
   occurrences: ReferenceOccurrence[];
 }
 
-interface MentionGroup {
+export interface MentionGroup {
   file: TFile;
   occurrences: ReferenceOccurrence[];
+}
+
+export interface ReferenceData {
+  outgoing: ReferenceGroup[];
+  incoming: ReferenceGroup[];
+  mentions: MentionGroup[];
 }
 
 const ATTACHMENTS_FRONTMATTER_KEY = 'attachments';
@@ -659,6 +668,42 @@ export class PanelBuilder {
     });
     group.appendChild(menuBtn);
 
+    // Attachment button: only for single markdown file
+    if (entries.length === 1 && (entries[0]?.file as TFile)?.extension?.toLowerCase() === 'md') {
+      const currentFile = entries[0].file as TFile;
+      const refreshAttachments = () => {
+        void this.plugin.persistentMenuManager.refreshMenusForFile(currentFile, true, { rebuildInlineSubitems: true });
+      };
+      const attachBtn = this.createIconButton('paperclip', 'Add attachment', (evt: MouseEvent) => {
+        const menu = new Menu();
+        menu.addItem((item) => {
+          item.setTitle('Handwritten Note')
+            .setIcon('pencil')
+            .onClick(() => {
+              void this.ensureEditModeAndExecute(() => this.triggerHandwriting());
+              window.setTimeout(refreshAttachments, 1500);
+            });
+        });
+        menu.addItem((item) => {
+          item.setTitle('Audio Recording')
+            .setIcon('mic')
+            .onClick(() => {
+              void this.ensureEditModeAndExecute(() => this.triggerVoiceRecording());
+              window.setTimeout(refreshAttachments, 1500);
+            });
+        });
+        menu.addItem((item) => {
+          item.setTitle('Link Note')
+            .setIcon('file-text')
+            .onClick(() => {
+              void this.attachExistingNoteAsAttachment(currentFile).then(refreshAttachments);
+            });
+        });
+        menu.showAtMouseEvent(evt);
+      });
+      group.appendChild(attachBtn);
+    }
+
     bar.appendChild(group);
 
     return bar;
@@ -717,17 +762,26 @@ export class PanelBuilder {
     // Children section
     const childrenSection = document.createElement('div');
     childrenSection.className = 'tps-gcm-subitems-section';
+    childrenSection.dataset.showHidden = 'false';
 
     const childrenHeader = document.createElement('div');
     childrenHeader.className = 'tps-gcm-subitems-header';
 
     const childrenTitleWrap = document.createElement('div');
     childrenTitleWrap.className = 'tps-gcm-subitems-title-wrap';
+    childrenTitleWrap.style.flexDirection = 'row';
+    childrenTitleWrap.style.alignItems = 'center';
+    childrenTitleWrap.style.gap = '6px';
 
     const childrenTitle = document.createElement('h4');
     childrenTitle.className = 'tps-gcm-subitems-title';
     childrenTitle.textContent = 'Children';
     childrenTitleWrap.appendChild(childrenTitle);
+
+    const hiddenChildrenBadge = document.createElement('span');
+    hiddenChildrenBadge.className = 'tps-gcm-subitems-hidden-badge';
+    hiddenChildrenBadge.style.display = 'none';
+    childrenTitleWrap.appendChild(hiddenChildrenBadge);
 
     childrenHeader.appendChild(childrenTitleWrap);
 
@@ -750,6 +804,25 @@ export class PanelBuilder {
       });
     });
     childrenActions.appendChild(addSubitemBtn);
+
+    const hiddenToggleBtn = document.createElement('button');
+    hiddenToggleBtn.type = 'button';
+    hiddenToggleBtn.className = 'tps-gcm-subitems-header-btn tps-gcm-subitems-hidden-toggle';
+    hiddenToggleBtn.title = 'Show completed / archived children';
+    hiddenToggleBtn.style.display = 'none';
+    setIcon(hiddenToggleBtn, 'eye-off');
+    addSafeClickListener(hiddenToggleBtn, () => {
+      const showing = childrenSection.dataset.showHidden === 'true';
+      const willShow = !showing;
+      childrenSection.dataset.showHidden = willShow ? 'true' : 'false';
+      hiddenToggleBtn.title = willShow
+        ? 'Hide completed / archived children'
+        : 'Show completed / archived children';
+      setIcon(hiddenToggleBtn, willShow ? 'eye' : 'eye-off');
+      void this.refreshSubitemsPanel(rootFile, childrenBody, attachmentBody, referencesBody);
+    });
+    childrenActions.appendChild(hiddenToggleBtn);
+
     childrenHeader.appendChild(childrenActions);
 
     const childrenBody = document.createElement('div');
@@ -775,57 +848,6 @@ export class PanelBuilder {
     attachmentTitleWrap.appendChild(attachmentTitle);
 
     attachmentHeader.appendChild(attachmentTitleWrap);
-
-    const attachmentActions = document.createElement('div');
-    attachmentActions.className = 'tps-gcm-subitems-header-actions';
-
-    const addAttachmentBtn = document.createElement('button');
-    addAttachmentBtn.type = 'button';
-    addAttachmentBtn.className = 'tps-gcm-subitems-header-btn';
-    addAttachmentBtn.title = 'Add attachment';
-    setIcon(addAttachmentBtn, 'paperclip');
-    addSafeClickListener(addAttachmentBtn, (evt: MouseEvent) => {
-      const menu = new Menu();
-      const refreshAfter = async () => {
-        await this.refreshSubitemsPanel(rootFile, childrenBody, attachmentBody, referencesBody);
-        window.setTimeout(() => {
-          void this.refreshSubitemsPanel(rootFile, childrenBody, attachmentBody, referencesBody);
-        }, 220);
-      };
-
-      menu.addItem((item) => {
-        item.setTitle('Handwritten Note')
-          .setIcon('pencil')
-          .onClick(() => {
-            void this.ensureEditModeAndExecute(() => this.triggerHandwriting());
-            // Handwriting plugin embeds inline; refresh panel after a delay
-            window.setTimeout(() => void refreshAfter(), 1500);
-          });
-      });
-
-      menu.addItem((item) => {
-        item.setTitle('Audio Recording')
-          .setIcon('mic')
-          .onClick(() => {
-            void this.ensureEditModeAndExecute(() => this.triggerVoiceRecording());
-            window.setTimeout(() => void refreshAfter(), 1500);
-          });
-      });
-
-      menu.addItem((item) => {
-        item.setTitle('Note')
-          .setIcon('file-text')
-          .onClick(() => {
-            void this.createNoteAndAddAsAttachment(rootFile).then(async () => {
-              await refreshAfter();
-            });
-          });
-      });
-
-      menu.showAtMouseEvent(evt);
-    });
-    attachmentActions.appendChild(addAttachmentBtn);
-    attachmentHeader.appendChild(attachmentActions);
 
     const attachmentBody = document.createElement('div');
     attachmentBody.className = 'tps-gcm-subitems-body tps-gcm-subitems-body--attachments';
@@ -882,7 +904,7 @@ export class PanelBuilder {
   private async populateParentNavButton(rootFile: TFile, container: HTMLElement): Promise<void> {
     container.innerHTML = '';
 
-    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent';
+    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
     const parentFiles: TFile[] = [];
 
     // Find the parent(s) OF this file by reading its frontmatter
@@ -934,6 +956,26 @@ export class PanelBuilder {
       }
     });
 
+    navButton.addEventListener('contextmenu', (evt) => {
+      evt.preventDefault();
+      evt.stopPropagation();
+      const menu = new Menu();
+      for (const parentFile of parentFiles) {
+        const unlinkTitle = parentFiles.length === 1 ? 'Unlink from parent' : `Unlink from "${parentFile.basename}"`;
+        menu.addItem((item) => {
+          item
+            .setTitle(unlinkTitle)
+            .setIcon('unlink')
+            .onClick(() => {
+              void this.plugin.bulkEditService.unlinkFromParent(rootFile, parentFile).then(() => {
+                void this.populateParentNavButton(rootFile, container);
+              });
+            });
+        });
+      }
+      menu.showAtMouseEvent(evt);
+    });
+
     container.appendChild(navButton);
   }
 
@@ -982,18 +1024,47 @@ export class PanelBuilder {
     try {
       const tree = await this.buildSubitemTree(rootFile);
 
-      // Separate children and attachments
-      const children: SubitemNode[] = [];
+      // Separate children and attachments, track hidden children separately
+      const visibleChildren: SubitemNode[] = [];
+      const hiddenChildren: SubitemNode[] = [];
       const attachments: SubitemNode[] = [];
 
       tree.forEach((node) => {
         const isAttachmentOnly = node.relations.includes('attachment') && !node.relations.includes('child');
         if (isAttachmentOnly) {
           attachments.push(node);
+        } else if (node.hidden) {
+          hiddenChildren.push(node);
         } else {
-          children.push(node);
+          visibleChildren.push(node);
         }
       });
+
+      // Read show-hidden state and update toggle button / badge
+      const childrenSection = childrenBody.closest<HTMLElement>('.tps-gcm-subitems-section');
+      const showHidden = childrenSection?.dataset.showHidden === 'true';
+
+      const toggleBtn = panel?.querySelector<HTMLButtonElement>('.tps-gcm-subitems-hidden-toggle');
+      const hiddenBadge = panel?.querySelector<HTMLElement>('.tps-gcm-subitems-hidden-badge');
+
+      const hasHidden = hiddenChildren.length > 0;
+      if (toggleBtn) {
+        toggleBtn.style.display = hasHidden ? '' : 'none';
+        if (hasHidden) {
+          toggleBtn.title = showHidden
+            ? 'Hide completed / archived children'
+            : 'Show completed / archived children';
+          setIcon(toggleBtn, showHidden ? 'eye' : 'eye-off');
+        }
+      }
+      if (hiddenBadge) {
+        hiddenBadge.style.display = hasHidden ? '' : 'none';
+        hiddenBadge.textContent = `${hiddenChildren.length} hidden`;
+      }
+
+      const childrenToRender = showHidden
+        ? [...visibleChildren, ...hiddenChildren]
+        : visibleChildren;
       const [checklistItems, references] = await Promise.all([
         this.plugin.settings.showChecklistInSubitemsPanel
           ? this.collectChecklistSubitems(rootFile)
@@ -1008,7 +1079,7 @@ export class PanelBuilder {
       // Render children section
       this.renderSubitemsSection(
         childrenBody,
-        children,
+        childrenToRender,
         rootFile,
         'No linked children yet. Use + to create one.',
         getBodyRefs,
@@ -1025,6 +1096,31 @@ export class PanelBuilder {
         empty.className = 'tps-gcm-subitem-empty';
         empty.textContent = 'Reference previews are disabled.';
         referencesBody.appendChild(empty);
+      }
+
+      // Auto-collapse: advance the state machine on each render pass.
+      // 'pending' → 'ready' on first render; 'ready' → collapsed/expanded on second render.
+      if (panel instanceof HTMLElement) {
+        const ac = panel.dataset.autoCollapse;
+        if (ac === 'pending') {
+          panel.dataset.autoCollapse = 'ready';
+        } else if (ac === 'ready') {
+          delete panel.dataset.autoCollapse;
+          const hasContent =
+            visibleChildren.length > 0 ||
+            hiddenChildren.length > 0 ||
+            attachments.length > 0 ||
+            checklistItems.length > 0 ||
+            (this.plugin.settings.showReferencesInSubitemsPanel && (references.outgoing.length > 0 || references.incoming.length > 0)) ||
+            (this.plugin.settings.showMentionsInSubitemsPanel && references.mentions.length > 0);
+          if (hasContent) {
+            panel.classList.remove('tps-gcm-subitems-panel--collapsed');
+            this.plugin.persistentMenuManager.setSubitemsPanelCollapsed(rootFile.path, false);
+          } else {
+            panel.classList.add('tps-gcm-subitems-panel--collapsed');
+            this.plugin.persistentMenuManager.setSubitemsPanelCollapsed(rootFile.path, true);
+          }
+        }
       }
     } catch (error) {
       logger.error('[TPS GCM] Failed to render subitems panel:', error);
@@ -1208,7 +1304,7 @@ export class PanelBuilder {
     checkbox.className = 'task-list-item-checkbox tps-gcm-checklist-toggle';
     checkbox.checked = false;
     checkbox.indeterminate = item.state === '?';
-    checkbox.title = 'Complete checklist item';
+    checkbox.title = 'Complete (right-click for more options)';
     checkbox.addEventListener('click', (evt) => {
       evt.preventDefault();
       evt.stopPropagation();
@@ -1218,12 +1314,67 @@ export class PanelBuilder {
         checkbox.disabled = false;
       });
     });
+
+    const showChecklistStateMenu = (x: number, y: number) => {
+      const menu = new Menu();
+      menu.addItem((mi) => {
+        mi.setTitle('Complete')
+          .setIcon('check')
+          .onClick(() => {
+            void this.setChecklistItemStateFromPanel(rootFile, item, row, 'x', onRefresh);
+          });
+      });
+      menu.addItem((mi) => {
+        mi.setTitle('Cross out')
+          .setIcon('minus')
+          .onClick(() => {
+            void this.setChecklistItemStateFromPanel(rootFile, item, row, '-', onRefresh);
+          });
+      });
+      menu.addItem((mi) => {
+        mi.setTitle('Question')
+          .setIcon('help-circle')
+          .onClick(() => {
+            void this.setChecklistItemStateFromPanel(rootFile, item, row, '?', onRefresh);
+          });
+      });
+      menu.showAtPosition({ x, y });
+    };
+
+    checkbox.addEventListener('contextmenu', (evt) => {
+      evt.preventDefault();
+      evt.stopPropagation();
+      showChecklistStateMenu(evt.clientX, evt.clientY);
+    });
+
+    // Long-press for touch devices
+    let longPressTimer: number | null = null;
+    checkbox.addEventListener('touchstart', (evt) => {
+      longPressTimer = window.setTimeout(() => {
+        longPressTimer = null;
+        const touch = evt.touches[0];
+        showChecklistStateMenu(touch?.clientX ?? 0, touch?.clientY ?? 0);
+      }, 500);
+    }, { passive: true });
+    const cancelLongPress = () => {
+      if (longPressTimer !== null) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    };
+    checkbox.addEventListener('touchmove', cancelLongPress, { passive: true });
+    checkbox.addEventListener('touchend', cancelLongPress, { passive: true });
+    checkbox.addEventListener('touchcancel', cancelLongPress, { passive: true });
+
     row.appendChild(checkbox);
 
     const title = document.createElement('span');
     title.className = 'tps-gcm-subitem-title tps-gcm-subitem-title--checklist';
     title.textContent = item.text;
     title.title = `${rootFile.path}:${item.lineNumber + 1}`;
+    addSafeClickListener(title, () => {
+      void this.scrollToChecklistLine(rootFile, item);
+    });
     row.appendChild(title);
 
     const actions = document.createElement('div');
@@ -1248,6 +1399,17 @@ export class PanelBuilder {
     rowEl: HTMLElement,
     onRefresh: () => void
   ): Promise<void> {
+    // Standard toggle: mark complete. The item disappears (filtered by collectChecklistSubitems).
+    await this.setChecklistItemStateFromPanel(rootFile, item, rowEl, 'x', onRefresh);
+  }
+
+  private async setChecklistItemStateFromPanel(
+    rootFile: TFile,
+    item: ChecklistSubitem,
+    rowEl: HTMLElement,
+    newState: ChecklistTaskState,
+    onRefresh: () => void
+  ): Promise<void> {
     try {
       const content = await this.app.vault.read(rootFile);
       const lines = content.split('\n');
@@ -1257,7 +1419,7 @@ export class PanelBuilder {
       const currentLine = lines[lineIndex];
       const updatedLine = currentLine.replace(
         /^(\s*(?:[-*+]|\d+\.)\s*)\[( |x|X|\?|-)\](\s*.*)$/,
-        '$1[x]$3'
+        `$1[${newState}]$3`
       );
       if (updatedLine === currentLine) return;
 
@@ -1266,18 +1428,19 @@ export class PanelBuilder {
       if (updatedContent === content) return;
 
       await this.app.vault.modify(rootFile, updatedContent);
-      rowEl.style.opacity = '0';
-      rowEl.style.pointerEvents = 'none';
-      window.setTimeout(() => {
-        rowEl.remove();
-      }, 120);
+      // x / X / - are filtered out of the panel — fade and remove the row
+      if (newState === 'x' || newState === 'X' || newState === '-') {
+        rowEl.style.opacity = '0';
+        rowEl.style.pointerEvents = 'none';
+        window.setTimeout(() => rowEl.remove(), 120);
+      }
       const pluginAny = this.plugin as any;
       if (typeof pluginAny.scheduleChecklistReorder === 'function') {
         pluginAny.scheduleChecklistReorder(rootFile);
       }
       window.setTimeout(() => onRefresh(), 180);
     } catch (error) {
-      logger.warn('[TPS GCM] Failed toggling checklist item from subitems panel for', rootFile.path, error);
+      logger.warn('[TPS GCM] Failed setting checklist item state from subitems panel for', rootFile.path, error);
     }
   }
 
@@ -1367,7 +1530,108 @@ export class PanelBuilder {
       .toLowerCase();
   }
 
-  private async collectReferenceGroups(rootFile: TFile): Promise<{ outgoing: ReferenceGroup[]; incoming: ReferenceGroup[]; mentions: MentionGroup[] }> {
+  private async scrollToChecklistLine(rootFile: TFile, item: ChecklistSubitem): Promise<void> {
+    try {
+      // Resolve the actual line index (may have shifted since panel was rendered)
+      const content = await this.app.vault.cachedRead(rootFile);
+      const lines = content.split('\n');
+      const lineIndex = this.resolveChecklistLineIndex(lines, item);
+      if (lineIndex < 0) return;
+
+      // Find the leaf showing this file
+      const leaf = this.app.workspace.getLeavesOfType('markdown')
+        .find((l: any) => l?.view?.file?.path === rootFile.path);
+      if (!leaf) return;
+
+      const view = leaf.view as MarkdownView;
+      const viewState = (view as any).getState?.() || {};
+      const isReading = viewState.mode === 'preview';
+
+      if (isReading) {
+        this.scrollInReadingMode(view, lineIndex, item.text);
+      } else {
+        this.scrollInEditorMode(view, lineIndex);
+      }
+    } catch (error) {
+      logger.warn('[TPS GCM] Failed scrolling to checklist line for', rootFile.path, error);
+    }
+  }
+
+  private scrollInEditorMode(view: MarkdownView, lineIndex: number): void {
+    const editor = view.editor;
+    if (!editor || typeof editor.setCursor !== 'function') return;
+
+    editor.setCursor({ line: lineIndex, ch: 0 });
+    if (typeof editor.scrollIntoView === 'function') {
+      editor.scrollIntoView(
+        { from: { line: lineIndex, ch: 0 }, to: { line: lineIndex + 1, ch: 0 } },
+        true
+      );
+    }
+
+    // Flash-highlight after a short delay so CM6 updates the DOM
+    window.setTimeout(() => {
+      try {
+        const cmEditor = (editor as any)?.cm;
+        if (!cmEditor) return;
+        const lineInfo = cmEditor.state?.doc?.line(lineIndex + 1);
+        if (!lineInfo) return;
+
+        const domResult = cmEditor.domAtPos?.(lineInfo.from);
+        if (!domResult) return;
+        const node = domResult.node;
+        const lineEl = node instanceof HTMLElement
+          ? (node.closest('.cm-line') || node)
+          : node?.parentElement?.closest?.('.cm-line');
+
+        if (lineEl instanceof HTMLElement) {
+          lineEl.classList.add('tps-gcm-line-highlight');
+          window.setTimeout(() => lineEl.classList.remove('tps-gcm-line-highlight'), 1500);
+        }
+      } catch {
+        // Highlight is purely cosmetic
+      }
+    }, 80);
+  }
+
+  private scrollInReadingMode(view: MarkdownView, lineIndex: number, itemText: string): void {
+    const previewEl = (view as any).previewMode?.containerEl
+      || view.containerEl?.querySelector('.markdown-preview-view');
+    if (!previewEl) return;
+
+    // Reading mode renders checklist items as <li> with class "task-list-item"
+    // We match by text content since line numbers aren't preserved in the DOM
+    const taskItems = previewEl.querySelectorAll('li.task-list-item') as NodeListOf<HTMLElement>;
+    const normalizedTarget = itemText.replace(/\s+/g, ' ').trim().toLowerCase();
+
+    let matchedEl: HTMLElement | null = null;
+    for (const li of Array.from(taskItems)) {
+      const liText = (li.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (liText.includes(normalizedTarget)) {
+        matchedEl = li as HTMLElement;
+        break;
+      }
+    }
+
+    if (!matchedEl) {
+      // Fallback: try to find by position among all list items
+      // Count all checklist lines up to lineIndex to get approximate position
+      // This won't be perfect but provides a reasonable fallback
+      return;
+    }
+
+    matchedEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // Flash highlight
+    matchedEl.classList.add('tps-gcm-line-highlight');
+    window.setTimeout(() => matchedEl!.classList.remove('tps-gcm-line-highlight'), 1500);
+  }
+
+  private flashHighlightLine(_cmEditor: any, _lineIndex: number): void {
+    // Deprecated: highlighting is now handled inline by scrollInEditorMode / scrollInReadingMode
+  }
+
+  async collectReferenceGroups(rootFile: TFile): Promise<ReferenceData> {
     const outgoingOccurrences = await this.extractReferenceOccurrencesFromSource(rootFile);
     const outgoing = this.groupReferenceOccurrences(outgoingOccurrences, 'outgoing');
 
@@ -1378,6 +1642,75 @@ export class PanelBuilder {
     const incoming = this.groupReferenceOccurrences(incomingBatches.flat(), 'incoming');
 
     const mentions = await this.collectUnlinkedMentionGroups(rootFile);
+
+    // Fold children & parent into mentions
+    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+    const parentIndex = this.buildParentToChildrenIndex();
+    const childFiles = parentIndex.get(rootFile.path) || [];
+    const existingMentionPaths = new Set(mentions.map((m) => m.file.path));
+
+    for (const child of childFiles) {
+      if (child.path === rootFile.path || existingMentionPaths.has(child.path)) continue;
+      existingMentionPaths.add(child.path);
+      mentions.push({
+        file: child,
+        occurrences: [{
+          sourceFile: child,
+          targetFile: rootFile,
+          lineNumber: 0,
+          heading: '',
+          previews: [`${parentKey}: [[${rootFile.basename}]]`],
+          matchedText: rootFile.basename,
+          frontmatterKey: parentKey,
+        }],
+      });
+    }
+
+    // Add parent as a mention (the current file's frontmatter references the parent)
+    const rootFm = (this.app.metadataCache.getFileCache(rootFile)?.frontmatter || {}) as Record<string, any>;
+    const parentRaw = this.getFrontmatterValueCaseInsensitive(rootFm, parentKey);
+    const parentFiles = this.parseLinksFromFrontmatterValue(parentRaw, rootFile.path);
+    for (const parentFile of parentFiles) {
+      if (parentFile.path === rootFile.path || existingMentionPaths.has(parentFile.path)) continue;
+      existingMentionPaths.add(parentFile.path);
+      mentions.push({
+        file: parentFile,
+        occurrences: [{
+          sourceFile: rootFile,
+          targetFile: parentFile,
+          lineNumber: 0,
+          heading: '',
+          previews: [`${parentKey}: [[${parentFile.basename}]]`],
+          matchedText: parentFile.basename,
+          frontmatterKey: parentKey,
+        }],
+      });
+    }
+
+    // Fold attachments into outgoing
+    const attachmentFiles = await this.resolveAttachmentFilesFromFrontmatter(rootFile);
+    const existingOutgoingPaths = new Set(outgoing.map((g) => g.file.path));
+    for (const attachment of attachmentFiles) {
+      if (attachment.path === rootFile.path || existingOutgoingPaths.has(attachment.path)) continue;
+      existingOutgoingPaths.add(attachment.path);
+      outgoing.push({
+        file: attachment,
+        direction: 'outgoing',
+        occurrences: [{
+          sourceFile: rootFile,
+          targetFile: attachment,
+          lineNumber: 0,
+          heading: '',
+          previews: [`attachment: ${attachment.basename}`],
+          matchedText: attachment.basename,
+          frontmatterKey: 'attachments',
+        }],
+      });
+    }
+
+    // Sort after merging
+    mentions.sort((a, b) => a.file.basename.localeCompare(b.file.basename));
+    outgoing.sort((a, b) => a.file.basename.localeCompare(b.file.basename));
 
     return { outgoing, incoming, mentions };
   }
@@ -1430,12 +1763,15 @@ export class PanelBuilder {
           if (!(targetFile instanceof TFile) || targetFile.extension?.toLowerCase() !== 'md') continue;
           if (onlyTarget && targetFile.path !== onlyTarget.path) continue;
 
+          // Use the full link syntax as focus text so the preview centers on it
+          const linkSnippet = line.slice(match.start, match.end);
           occurrences.push({
             sourceFile,
             targetFile,
             lineNumber,
             heading: this.findHeadingForLine(headings, lineNumber),
-            previews: this.buildReferencePreviewLevels(lines, lineNumber),
+            previews: this.buildReferencePreviewLevels(lines, lineNumber, linkSnippet),
+            matchedText: linkSnippet,
           });
         }
       }
@@ -1496,17 +1832,37 @@ export class PanelBuilder {
     return activeHeading;
   }
 
-  private buildReferencePreviewLevels(lines: string[], lineNumber: number): string[] {
-    const linePreview = this.cropPreviewText(lines[lineNumber] || '');
-    const paragraphPreview = this.cropPreviewText(this.extractParagraphPreview(lines, lineNumber), 320);
-    const sectionPreview = this.cropPreviewText(this.extractSectionPreview(lines, lineNumber), 520);
+  private buildReferencePreviewLevels(lines: string[], lineNumber: number, focusText?: string): string[] {
+    const linePreview = this.cropPreviewText(lines[lineNumber] || '', 140, focusText);
+    const paragraphPreview = this.cropPreviewText(this.extractParagraphPreview(lines, lineNumber), 320, focusText);
+    const sectionPreview = this.cropPreviewText(this.extractSectionPreview(lines, lineNumber), 520, focusText);
     return Array.from(new Set([linePreview, paragraphPreview, sectionPreview].filter(Boolean)));
   }
 
-  private cropPreviewText(text: string, maxLength = 140): string {
+  private cropPreviewText(text: string, maxLength = 140, focusText?: string): string {
     const normalized = String(text || '').replace(/\t/g, '  ').replace(/\s+/g, ' ').trim();
     if (!normalized) return '';
     if (normalized.length <= maxLength) return normalized;
+
+    // If a focus string is provided, try to center the window around it
+    if (focusText) {
+      const idx = normalized.toLowerCase().indexOf(focusText.toLowerCase());
+      if (idx >= 0) {
+        const matchEnd = idx + focusText.length;
+        const half = Math.floor((maxLength - focusText.length) / 2);
+        let start = Math.max(0, idx - half);
+        let end = Math.min(normalized.length, start + maxLength - 1);
+        // If we hit the end, shift start back
+        if (end >= normalized.length) {
+          end = normalized.length;
+          start = Math.max(0, end - maxLength + 1);
+        }
+        const prefix = start > 0 ? '…' : '';
+        const suffix = end < normalized.length ? '…' : '';
+        return `${prefix}${normalized.slice(start, end).trim()}${suffix}`;
+      }
+    }
+
     return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
   }
 
@@ -1633,6 +1989,30 @@ export class PanelBuilder {
       );
 
       const occurrences: ReferenceOccurrence[] = [];
+
+      // Scan frontmatter lines for mentions (use YAML key as heading)
+      if (frontmatterEndLine > 0) {
+        for (let lineNumber = 1; lineNumber <= frontmatterEndLine; lineNumber += 1) {
+          const line = lines[lineNumber] || '';
+          if (line.trim() === '---') continue;
+          const matchedText = this.findMentionInLine(line, candidateTitles);
+          if (!matchedText) continue;
+          // Extract the YAML key name from "key: value" as the heading
+          const keyMatch = line.match(/^\s*([\w-]+)\s*:/);
+          const fmKey = keyMatch ? keyMatch[1] : '';
+          occurrences.push({
+            sourceFile,
+            targetFile,
+            lineNumber,
+            heading: fmKey ? `frontmatter › ${fmKey}` : 'frontmatter',
+            previews: [line.trim()],
+            matchedText,
+            frontmatterKey: fmKey || undefined,
+          });
+        }
+      }
+
+      // Scan body lines
       let inFence = false;
       for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
         if (lineNumber <= frontmatterEndLine) continue;
@@ -1651,7 +2031,7 @@ export class PanelBuilder {
           targetFile,
           lineNumber,
           heading: this.findHeadingForLine(headings, lineNumber),
-          previews: this.buildReferencePreviewLevels(lines, lineNumber),
+          previews: this.buildReferencePreviewLevels(lines, lineNumber, matchedText),
           matchedText,
         });
       }
@@ -1678,7 +2058,7 @@ export class PanelBuilder {
 
   private renderReferencesSection(
     body: HTMLElement,
-    references: { outgoing: ReferenceGroup[]; incoming: ReferenceGroup[]; mentions: MentionGroup[] },
+    references: ReferenceData,
     rootFile: TFile
   ): void {
     body.innerHTML = '';
@@ -1894,7 +2274,7 @@ export class PanelBuilder {
     return section;
   }
 
-  private async openReferenceOccurrence(file: TFile, occurrence: ReferenceOccurrence): Promise<void> {
+  async openReferenceOccurrence(file: TFile, occurrence: ReferenceOccurrence): Promise<void> {
     const opened = await this.plugin.openFileInLeaf(file, false, () => this.app.workspace.getLeaf(false), { revealLeaf: true });
     if (!opened) return;
 
@@ -1915,7 +2295,7 @@ export class PanelBuilder {
     }, 60);
   }
 
-  private async convertMentionToLinkedReference(
+  async convertMentionToLinkedReference(
     targetFile: TFile,
     occurrence: ReferenceOccurrence,
     rowEl: HTMLElement
@@ -1966,15 +2346,16 @@ export class PanelBuilder {
 
     const relationMap = await this.collectDirectSubitemRelations(file, parentIndex);
 
-    // Filter out archived notes and completed children
-    const activeEntries = Array.from(relationMap.values()).filter((entry) => {
-      if (this.isArchived(entry.file)) return false;
-      const cache = this.app.metadataCache.getFileCache(entry.file);
-      if (cache?.frontmatter?.status === 'complete') return false;
-      return true;
+    // Mark archived / completed children as hidden (they can be shown via the toggle)
+    type MarkedEntry = SubitemRelationEntry & { hidden: boolean };
+    const markedEntries: MarkedEntry[] = Array.from(relationMap.values()).map((entry) => {
+      const isHidden =
+        this.isArchived(entry.file) ||
+        this.app.metadataCache.getFileCache(entry.file)?.frontmatter?.status === 'complete';
+      return { ...entry, hidden: isHidden };
     });
 
-    const relationEntries = activeEntries.sort((a, b) => {
+    const relationEntries = markedEntries.sort((a, b) => {
       // 1. Custom Sort Key from Companion (if configured)
       const sortField = this.getSortField();
       if (sortField) {
@@ -2052,6 +2433,7 @@ export class PanelBuilder {
         file: entry.file,
         relations: Array.from(entry.relations.values()),
         children: childNodes,
+        hidden: entry.hidden,
       });
     }
 
@@ -2092,20 +2474,34 @@ export class PanelBuilder {
   }
 
   private buildParentToChildrenIndex(): Map<string, TFile[]> {
-    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent';
+    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+    const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
     const index = new Map<string, TFile[]>();
+
+    const addToIndex = (parentPath: string, childFile: TFile) => {
+      if (parentPath === childFile.path) return;
+      const bucket = index.get(parentPath) || [];
+      if (!bucket.some((c) => c.path === childFile.path)) {
+        bucket.push(childFile);
+      }
+      index.set(parentPath, bucket);
+    };
 
     for (const file of this.app.vault.getMarkdownFiles()) {
       const fm = (this.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
+
+      // Forward direction: file has childOf → [[parent]]
       const parentRaw = this.getFrontmatterValueCaseInsensitive(fm, parentKey);
       const parentFiles = this.parseLinksFromFrontmatterValue(parentRaw, file.path);
       for (const parent of parentFiles) {
-        if (parent.path === file.path) continue;
-        const bucket = index.get(parent.path) || [];
-        if (!bucket.some((child) => child.path === file.path)) {
-          bucket.push(file);
-        }
-        index.set(parent.path, bucket);
+        addToIndex(parent.path, file);
+      }
+
+      // Reverse direction: file has parentOf → [[child1]], [[child2]]
+      const childRaw = this.getFrontmatterValueCaseInsensitive(fm, childKey);
+      const childFiles = this.parseLinksFromFrontmatterValue(childRaw, file.path);
+      for (const child of childFiles) {
+        addToIndex(file.path, child);
       }
     }
 
@@ -2368,6 +2764,9 @@ export class PanelBuilder {
     if (isAttachmentOnly) {
       row.classList.add('tps-gcm-subitem-row--attachment');
     }
+    if (node.hidden) {
+      row.classList.add('tps-gcm-subitem-row--hidden');
+    }
 
     // Drag support
     row.draggable = true;
@@ -2383,6 +2782,32 @@ export class PanelBuilder {
     });
     row.addEventListener('dragend', () => {
       row.classList.remove('tps-gcm-subitem-row--dragging');
+    });
+
+    row.addEventListener('contextmenu', (evt) => {
+      evt.preventDefault();
+      evt.stopPropagation();
+      const menu = new Menu();
+      if (isAttachmentOnly) {
+        menu.addItem((item) => {
+          item
+            .setTitle('Remove attachment')
+            .setIcon('unlink')
+            .onClick(() => {
+              void this.plugin.bulkEditService.unlinkAttachment(rootFile, node.file).then(onRefresh);
+            });
+        });
+      } else {
+        menu.addItem((item) => {
+          item
+            .setTitle('Unlink from parent')
+            .setIcon('unlink')
+            .onClick(() => {
+              void this.plugin.bulkEditService.unlinkFromParent(node.file, rootFile).then(onRefresh);
+            });
+        });
+      }
+      menu.showAtMouseEvent(evt);
     });
 
     const iconEl = document.createElement('span');
@@ -2729,15 +3154,30 @@ export class PanelBuilder {
 
   /**
    * Change a child → attachment:
-   * - Remove `parent` key from child's frontmatter
+   * - Remove `childOf` key from child's frontmatter
+   * - Remove child from root's `parentOf` frontmatter list
    * - Add child to root's `attachments` frontmatter
    */
   private async changeRelationToAttachment(rootFile: TFile, childFile: TFile): Promise<void> {
-    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent';
+    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+    const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
     // Remove parent link from child
     await this.app.fileManager.processFrontMatter(childFile, (fm: Record<string, any>) => {
       const existingKey = Object.keys(fm).find((k) => k.toLowerCase() === parentKey.toLowerCase());
       if (existingKey) delete fm[existingKey];
+    });
+    // Remove child from parent's reverse list
+    await this.app.fileManager.processFrontMatter(rootFile, (fm: Record<string, any>) => {
+      const existingKey = Object.keys(fm).find((k) => k.toLowerCase() === childKey.toLowerCase());
+      if (!existingKey) return;
+      const raw = fm[existingKey];
+      const existing = this.parseLinksFromFrontmatterValue(raw, rootFile.path);
+      const filtered = existing.filter((f) => f.path !== childFile.path);
+      if (filtered.length === 0) {
+        delete fm[existingKey];
+      } else {
+        fm[existingKey] = filtered.map((f) => this.app.fileManager.generateMarkdownLink(f, rootFile.path));
+      }
     });
     // Add to root's attachments
     await this.addFilesToAttachmentsFrontmatter(rootFile, [childFile]);

@@ -4,6 +4,7 @@ import { SYSTEM_COMMANDS } from '../constants';
 import { TextInputModal } from '../modals/text-input-modal';
 import { FileSuggestModal } from '../modals/FileSuggestModal';
 import { MultiFileSelectModal } from '../modals/MultiFileSelectModal';
+import { ConfirmDeleteModal } from '../modals/confirm-delete-modal';
 import { mergeNormalizedTags, normalizeTagValue } from '../utils/tag-utils';
 import * as logger from '../logger';
 import { resolveCustomProperties } from '../resolve-profiles';
@@ -416,7 +417,49 @@ export class MenuBuilder {
             });
           });
         }
+
       });
+
+      // "Remove property" grouped submenu — lists all removable properties in one place.
+      // Excludes folder-type (moves files, not frontmatter) and the core title key.
+      const removableProps = properties.filter(
+        (p) => p.showInContextMenu !== false && p.type !== 'folder' && p.key?.toLowerCase() !== 'title'
+      );
+      if (removableProps.length > 0) {
+        const n = markdownEntries.length;
+        const fileWord = n === 1 ? '1 note' : `${n} notes`;
+        menu.addItem((item) => {
+          item
+            .setTitle('Remove property')
+            .setIcon('trash-2')
+            .setSection('tps-props')
+            .setWarning(true);
+          const subMenu = (item as any).setSubmenu();
+          removableProps.forEach((prop) => {
+            subMenu.addItem((sub: any) => {
+              sub
+                .setTitle(prop.label)
+                .setIcon(prop.icon || 'trash-2')
+                .setWarning(true)
+                .onClick(() => {
+                  new ConfirmDeleteModal(
+                    this.app,
+                    `Remove the "${prop.label}" (${prop.key}) field and its value from ${fileWord}?`,
+                    async () => {
+                      const removed = await this.plugin.bulkEditService.removeFrontmatterKey(
+                        markdownEntries.map(e => e.file),
+                        prop.key
+                      );
+                      if (removed > 0) {
+                        new Notice(`Removed "${prop.key}" from ${removed} note${removed === 1 ? '' : 's'}.`);
+                      }
+                    }
+                  ).open();
+                });
+            });
+          });
+        });
+      }
 
       // Add Note Operations (Markdown Only)
       if (markdownFiles.length > 0) {
@@ -789,6 +832,7 @@ export class MenuBuilder {
             });
         });
       });
+
     });
   }
 
@@ -839,6 +883,7 @@ export class MenuBuilder {
         });
       });
     }
+
   }
 
   addDatetimeToMenu(menu: Menu, entries: any[], prop: any, sectionId: string) {

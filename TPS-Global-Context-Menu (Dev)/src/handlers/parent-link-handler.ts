@@ -21,8 +21,13 @@ export class ParentLinkHandler {
   }
 
   normalizeParentKey(): string {
-    const key = String(this.getSettings().parentLinkFrontmatterKey || 'parent').trim();
-    return key || 'parent';
+    const key = String(this.getSettings().parentLinkFrontmatterKey || 'childOf').trim();
+    return key || 'childOf';
+  }
+
+  normalizeChildKey(): string {
+    const key = String(this.getSettings().childLinkFrontmatterKey || 'parentOf').trim();
+    return key || 'parentOf';
   }
 
   normalizeParentLinkFormat(): ParentLinkFormat {

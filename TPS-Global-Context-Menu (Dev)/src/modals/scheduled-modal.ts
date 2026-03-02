@@ -114,8 +114,17 @@ export class ScheduledModal extends Modal {
         saveBtn.classList.add('mod-cta');
         saveBtn.addEventListener('click', () => {
             this.close();
+            // Normalize datetime-local format (YYYY-MM-DDTHH:mm) to space-separated (YYYY-MM-DD HH:mm:ss)
+            let dateValue = this.dateComponent.getValue();
+            if (dateValue && dateValue.includes('T')) {
+                dateValue = dateValue.replace('T', ' ');
+                // Ensure seconds are present
+                if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(dateValue)) {
+                    dateValue += ':00';
+                }
+            }
             this.onSubmit({
-                date: this.dateComponent.getValue(),
+                date: dateValue,
                 timeEstimate: parseInt(this.timeEstimateComponent.getValue()) || 0,
                 allDay: this.allDayToggle.getValue()
             });

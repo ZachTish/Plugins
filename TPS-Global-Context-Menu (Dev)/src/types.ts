@@ -99,6 +99,7 @@ export interface TPSGlobalContextMenuSettings {
   recurrencePromptTimeout: number; // Minutes
   recurrenceCompletionStatuses: string[];
   recurrenceDefaultStatus: string; // Default status for new recurrence instances
+  recurringTemplateFolder: string; // Folder to store recurring event templates
 
   // File naming settings
 
@@ -112,9 +113,11 @@ export interface TPSGlobalContextMenuSettings {
   checkOpenChecklistItems: boolean;
   checkParentLinkStatuses: boolean;
   parentLinkFrontmatterKey: string;
+  childLinkFrontmatterKey: string;
   parentLinkFormat: ParentLinkFormat;
   parentTagOnChildLink: string;
   parentCompletionStatuses: string[];
+  ignoredBacklinksFrontmatterKeys: string[];
 
   // View Mode Settings
   enableViewModeSwitching: boolean;
@@ -135,6 +138,9 @@ export interface TPSGlobalContextMenuSettings {
   archiveFolderPath: string;
   archiveUseDailyFolder: boolean;
 
+  // Workspace Ribbon Buttons
+  workspaceRibbonButtons: boolean;
+
   // Daily Note Navigation
   enableDailyNoteNav: boolean;
   enableTopParentNav: boolean;
@@ -147,6 +153,8 @@ export interface TPSGlobalContextMenuSettings {
   showChecklistInSubitemsPanel: boolean;
   showReferencesInSubitemsPanel: boolean;
   showMentionsInSubitemsPanel: boolean;
+  subitemsPanelPosition: 'above' | 'below';
+  subitemsPanelAutoCollapse: boolean;
 
   // Default paths for new items
   defaultAttachmentsPath: string;

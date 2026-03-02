@@ -31,7 +31,7 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     canceledStatusValue: "",
     inProgressStatusValue: "working",
     parentLinkEnabled: false,
-    parentLinkKey: "parent",
+    parentLinkKey: "childOf",
     childLinkKey: "meetings",
     eventIdKey: "externalEventId",
     uidKey: "tpsCalendarUid",
@@ -44,7 +44,7 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     filterRangeAuto: false,
     contextDateEnabled: false,
     weekStartDay: "monday",
-    navStep: 7,
+    navStep: 1,
     showNavButtons: true,
     minHour: "",
     maxHour: "",
@@ -118,7 +118,7 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         ? stored.weekStartDay
         : "monday";
     const navStepRaw = Number(stored?.navStep);
-    const navStep = Number.isFinite(navStepRaw) && navStepRaw > 0 ? Math.round(navStepRaw) : 7;
+    const navStep = Number.isFinite(navStepRaw) && navStepRaw > 0 ? Math.round(navStepRaw) : 1;
 
     return {
         sidebarBasePath: stored?.sidebarBasePath ?? null,
@@ -145,7 +145,7 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         canceledStatusValue: stored?.canceledStatusValue ?? "",
         inProgressStatusValue: stored?.inProgressStatusValue ?? "working",
         parentLinkEnabled: stored?.parentLinkEnabled ?? false,
-        parentLinkKey: sanitizeKey(stored?.parentLinkKey, "parent"),
+        parentLinkKey: sanitizeKey(stored?.parentLinkKey, "childOf"),
         childLinkKey: sanitizeKey(stored?.childLinkKey, "meetings"),
         eventIdKey,
         uidKey,

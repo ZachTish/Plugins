@@ -278,7 +278,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           .addOption("5", "5 days")
           .addOption("7", "1 week")
           .addOption("30", "1 month")
-          .setValue(String(this.plugin.settings.navStep ?? 7))
+          .setValue(String(this.plugin.settings.navStep ?? 1))
           .onChange(async (value) => {
             this.plugin.settings.navStep = Number(value);
             await this.plugin.saveSettings();
@@ -360,13 +360,13 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
 
     new Setting(linkDetails)
       .setName("Parent Link Key")
-      .setDesc("Key in Child Note pointing to Parent (e.g. 'project').")
+      .setDesc("Key in Child Note pointing to Parent (e.g. 'childOf').")
       .addText((text) =>
         text
-          .setPlaceholder("parent")
-          .setValue(this.plugin.settings.parentLinkKey || "parent")
+          .setPlaceholder("childOf")
+          .setValue(this.plugin.settings.parentLinkKey || "childOf")
           .onChange(async (value) => {
-            this.plugin.settings.parentLinkKey = value.trim() || "parent";
+            this.plugin.settings.parentLinkKey = value.trim() || "childOf";
             await this.plugin.saveSettings();
           }),
       );

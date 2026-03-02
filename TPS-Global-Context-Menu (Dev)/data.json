@@ -1,9 +1,10 @@
 {
   "enableLogging": true,
+  "enableInlinePersistentMenus": true,
   "enableInLivePreview": true,
   "enableInPreview": true,
   "enableInSidePanels": true,
-  "enableStrictMode": false,
+  "inlineMenuOnly": false,
   "nativeMenuPlacement": "tps-first",
   "enableLineItems": false,
   "suppressMobileKeyboard": true,
@@ -21,60 +22,18 @@
       "type": "selector",
       "pinned": true,
       "options": [
+        "idea",
         "open",
         "working",
         "blocked",
         "wont-do",
-        "complete"
+        "complete",
+        "note"
       ],
       "icon": "check-circle",
       "label": "Status",
       "key": "status",
       "profiles": [
-        {
-          "id": "1771627622063",
-          "name": "Action Items",
-          "match": "all",
-          "conditions": [
-            {
-              "type": "path",
-              "operator": "contains",
-              "value": "Action Items"
-            }
-          ],
-          "hidden": false,
-          "options": [
-            "open",
-            "working",
-            "blocked",
-            "wont-do",
-            "complete"
-          ]
-        },
-        {
-          "id": "1771627700135",
-          "name": "Notes",
-          "match": "all",
-          "conditions": [
-            {
-              "type": "path",
-              "operator": "contains",
-              "value": "Notes"
-            },
-            {
-              "type": "path",
-              "operator": "not-contains",
-              "value": "Daily Notes"
-            }
-          ],
-          "options": [
-            "draft",
-            "evergreen",
-            "reference",
-            "log"
-          ],
-          "hidden": true
-        },
         {
           "id": "1771630328121",
           "name": "Dailynote",
@@ -84,20 +43,6 @@
               "type": "path",
               "operator": "starts-with",
               "value": "Daily Notes"
-            }
-          ],
-          "hidden": true,
-          "options": []
-        },
-        {
-          "id": "1771630382698",
-          "name": "System",
-          "match": "all",
-          "conditions": [
-            {
-              "type": "path",
-              "operator": "starts-with",
-              "value": "System"
             }
           ],
           "hidden": true,
@@ -114,7 +59,6 @@
       "options": [
         "high",
         "medium",
-        "normal",
         "low"
       ],
       "icon": "signal",
@@ -130,19 +74,6 @@
               "type": "path",
               "operator": "contains",
               "value": "Daily Notes"
-            }
-          ],
-          "hidden": true
-        },
-        {
-          "id": "1771631378810",
-          "name": "New Profile",
-          "match": "all",
-          "conditions": [
-            {
-              "type": "path",
-              "operator": "contains",
-              "value": "Templates"
             }
           ],
           "hidden": true
@@ -228,7 +159,7 @@
             {
               "type": "path",
               "operator": "starts-with",
-              "value": "System"
+              "value": "Templates"
             }
           ],
           "options": [],
@@ -297,16 +228,25 @@
   "recurrencePromptTimeout": 5,
   "recurrenceCompletionStatuses": [
     "complete",
-    "wont-do"
+    "wont-do",
+    "note",
+    "blocked"
   ],
   "recurrenceDefaultStatus": "open",
+  "recurringTemplateFolder": "Templates",
   "enableAutoRename": true,
+  "autoSyncTitleFromFilename": true,
   "autoSaveFolderPath": true,
+  "seedNewSubitemVisualMetadata": false,
+  "applyCompanionRulesOnSubitemCreate": false,
   "frontmatterAutoWriteExclusions": "Markdown/Templates/*.md",
   "folderExclusions": "System/Templates",
   "checkOpenChecklistItems": true,
   "checkParentLinkStatuses": true,
-  "parentLinkFrontmatterKey": "parent",
+  "parentLinkFrontmatterKey": "childOf",
+  "childLinkFrontmatterKey": "parentOf",
+  "parentLinkFormat": "markdown-title",
+  "parentTagOnChildLink": "project",
   "parentCompletionStatuses": [
     "complete",
     "wont-do"
@@ -316,20 +256,6 @@
   "viewModeFrontmatterKey": "status",
   "viewModeIgnoredFolders": "",
   "viewModeRules": [
-    {
-      "key": "folderPath",
-      "value": "System/Archive",
-      "mode": "reading",
-      "match": "all",
-      "conditions": [
-        {
-          "type": "frontmatter",
-          "key": "folderPath",
-          "operator": "equals",
-          "value": ".archive"
-        }
-      ]
-    },
     {
       "mode": "reading",
       "match": "all",
@@ -367,14 +293,12 @@
       "match": "all",
       "conditions": [
         {
-          "type": "frontmatter",
-          "key": "folderPath",
+          "type": "path",
           "operator": "contains",
           "value": "Notes"
         },
         {
-          "type": "frontmatter",
-          "key": "folderPath",
+          "type": "path",
           "operator": "not-contains",
           "value": "Daily Notes"
         }
@@ -414,14 +338,20 @@
     "duplicate",
     "get-relative-path"
   ],
-  "enableShiftClickCancel": true,
+  "enableTaskCheckboxCycle": true,
   "enableArchiveTagMove": true,
   "archiveTag": "archive",
   "archiveFolderPath": "Archive",
   "archiveUseDailyFolder": true,
+  "workspaceRibbonButtons": true,
   "enableDailyNoteNav": true,
   "enableTopParentNav": true,
   "dailyNavShowToday": true,
+  "ignoredBacklinksFrontmatterKeys": [
+    "dateModified",
+    "sort",
+    "icon"
+  ],
   "subitems_IgnoreRules": [
     {
       "mode": "ignore",
@@ -458,6 +388,12 @@
       ]
     }
   ],
+  "enableSubitemsPanel": true,
+  "showChecklistInSubitemsPanel": true,
+  "showReferencesInSubitemsPanel": false,
+  "showMentionsInSubitemsPanel": false,
+  "subitemsPanelPosition": "above",
+  "subitemsPanelAutoCollapse": true,
   "defaultAttachmentsPath": "Markdown/Notes",
   "defaultSubitemsPath": "Markdown/Action Items",
   "menuTextScale": 0.95,
@@ -479,6 +415,8 @@
     "buttonScale": "local",
     "liveMenuOffsetY": "local"
   },
+  "enableStrictMode": false,
+  "enableShiftClickCancel": true,
   "headerTextScale": 0.7,
   "badgeTextScale": 1.15,
   "enableTypeProfiles": true,

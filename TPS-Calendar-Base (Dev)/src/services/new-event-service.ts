@@ -180,7 +180,7 @@ export class NewEventService {
           tags: resolvedTags,
         };
         const initialContent = await this.buildInitialContent(templateFile, path, templateVars);
-        const file = await this.config.app.vault.create(path, initialContent || '---\n---\n');
+        const file = await this.createFileRetrying(path, initialContent || '---\n---\n');
         logger.log(`[NewEventService] Created note: "${file.basename}" at ${file.path}`);
 
         // Explicitly run Templater to process any remaining <% tp.* %> tags.
@@ -220,7 +220,7 @@ export class NewEventService {
         // If Templater has a folder-template for this folder it will fire via the vault
         // 'create' event and overwrite the stub — that is expected and correct.
         // TPS then applies its frontmatter additively on top.
-        const file = await this.config.app.vault.create(path, '---\n---\n');
+        const file = await this.createFileRetrying(path, '---\n---\n');
 
         if (!options?.useBaseDefaults) {
           const frontmatterWithFolder = {
@@ -789,7 +789,10 @@ export class NewEventService {
       return { safe: true };
     }
 
-    const firstClose = normalized.indexOf("\n---\n", bomOffset + 4);
+    // Search from bomOffset + 3 so that empty frontmatter ("---\n---\n") is handled.
+    // The closing \n---\n pattern starts at the \n that terminates the opening ---.
+    // Starting at +4 would skip that \n and miss the only valid closing delimiter.
+    const firstClose = normalized.indexOf("\n---\n", bomOffset + 3);
     if (firstClose === -1) {
       return { safe: false, reason: "missing frontmatter closing delimiter" };
     }
@@ -1028,6 +1031,39 @@ export class NewEventService {
         onChooseItem(item: TFile) { this.onChoose(item); }
       })(this.config.app, files, resolve).open();
     });
+  }
+
+  /**
+   * Creates a file at `initialPath`, retrying with an incremented counter suffix
+   * if the path is already taken. This handles the race condition where multiple
+   * CalendarView instances (e.g. multiple calendar bases embedded in a canvas)
+   * pass the buildUniquePath check simultaneously and then both try to create
+   * the same file.
+   */
+  private async createFileRetrying(initialPath: string, content: string): Promise<TFile> {
+    const MAX_RETRIES = 20;
+    // Strip .md and any trailing " N" counter so we can rebuild cleanly
+    const withoutExt = initialPath.endsWith('.md') ? initialPath.slice(0, -3) : initialPath;
+    const baseWithoutCounter = withoutExt.replace(/ \d+$/, '');
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const path = attempt === 0
+        ? initialPath
+        : normalizePath(`${baseWithoutCounter} ${attempt}.md`);
+      try {
+        return await this.config.app.vault.create(path, content);
+      } catch (err: any) {
+        const isExists =
+          typeof err?.message === 'string' &&
+          err.message.toLowerCase().includes('already exists');
+        if (!isExists || attempt === MAX_RETRIES) throw err;
+        logger.log(
+          `[NewEventService] Path "${path}" already exists (race condition), retrying with counter ${attempt + 1}`
+        );
+      }
+    }
+    // Unreachable, but satisfies the type-checker
+    throw new Error(`[NewEventService] Could not create file after ${MAX_RETRIES} retries for "${initialPath}"`);
   }
 
   private buildUniquePath(folderPath: string, title: string, date: Date): string {
