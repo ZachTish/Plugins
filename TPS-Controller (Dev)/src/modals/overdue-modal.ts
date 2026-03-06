@@ -1,14 +1,14 @@
 import { Modal, App, TFile, debounce, setIcon, moment } from 'obsidian';
-import TPSNotifier from '../main';
-import { OverdueItem } from '../types';
+import type TPSControllerPlugin from '../main';
+import type { OverdueItem } from '../types';
 
 export class OverdueItemsModal extends Modal {
-    plugin: TPSNotifier;
+    plugin: TPSControllerPlugin;
     items: OverdueItem[] = [];
     container: HTMLDivElement;
     refreshDebounced: () => void;
 
-    constructor(app: App, plugin: TPSNotifier) {
+    constructor(app: App, plugin: TPSControllerPlugin) {
         super(app);
         this.plugin = plugin;
         this.refreshDebounced = debounce(this.refresh.bind(this), 300, true);
@@ -18,25 +18,17 @@ export class OverdueItemsModal extends Modal {
         const { contentEl, titleEl } = this;
         titleEl.setText('Overdue Items');
 
-        this.container = contentEl.createDiv();
+        this.container = contentEl.createDiv() as HTMLDivElement;
         this.container.style.maxHeight = '400px';
         this.container.style.overflowY = 'auto';
 
-        // Initial load
         await this.refresh();
 
-        // Register event listener
         this.plugin.registerEvent(
-            this.app.metadataCache.on('changed', (file: TFile) => {
-                // Only refresh if the changed file is relevant? 
-                // Hard to know without checking all rules, so just refresh.
-                // Or maybe check if file is in current list OR might be in list?
-                // Safest to just refresh.
+            this.app.metadataCache.on('changed', (_file: TFile) => {
                 this.refreshDebounced();
             })
         );
-
-        // Also listen for detailed modify if metadataCache isn't enough (usually it is for frontmatter)
     }
 
     onClose() {
@@ -75,9 +67,7 @@ export class OverdueItemsModal extends Modal {
                 ? `Snoozed until ${moment(item.snoozedUntil).format('HH:mm')}`
                 : `${item.reminder.property}: ${item.diff}`;
 
-            const details = row.createEl('div', {
-                text: detailsText
-            });
+            const details = row.createEl('div', { text: detailsText });
             details.style.fontSize = '0.85em';
             details.style.color = item.snoozedUntil ? 'var(--text-accent)' : 'var(--text-muted)';
 
@@ -87,7 +77,6 @@ export class OverdueItemsModal extends Modal {
             actions.style.marginTop = '4px';
             actions.style.alignItems = 'center';
 
-            // Helper to create icon buttons
             const createIconBtn = (icon: string, label: string, onClick: (e: MouseEvent) => void) => {
                 const btn = actions.createDiv({ cls: 'tps-icon-btn' });
                 setIcon(btn, icon);
@@ -98,7 +87,6 @@ export class OverdueItemsModal extends Modal {
                 btn.style.display = 'flex';
                 btn.style.alignItems = 'center';
                 btn.style.cursor = 'pointer';
-
                 btn.addEventListener('mouseenter', () => {
                     btn.style.backgroundColor = 'var(--background-modifier-hover)';
                     btn.style.color = 'var(--text-normal)';
@@ -107,7 +95,6 @@ export class OverdueItemsModal extends Modal {
                     btn.style.backgroundColor = 'transparent';
                     btn.style.color = 'var(--text-muted)';
                 });
-
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     onClick(e);
@@ -115,14 +102,12 @@ export class OverdueItemsModal extends Modal {
                 return btn;
             };
 
-            // Check button - mark as complete
-            createIconBtn('check', 'Mark Complete', async (e) => {
+            createIconBtn('check', 'Mark Complete', async () => {
                 await this.plugin.markFileComplete(item.file);
                 await this.refresh();
             });
 
-            // X button - mark as won't do
-            createIconBtn('x', 'Mark Won\'t Do', async (e) => {
+            createIconBtn('x', "Mark Won't Do", async () => {
                 await this.plugin.markFileWontDo(item.file);
                 await this.refresh();
             });
@@ -130,13 +115,8 @@ export class OverdueItemsModal extends Modal {
             const openBtn = actions.createEl('button', { text: 'Open Note' });
             openBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                // Don't close modal, just open file in background?
-                // User asked for "responsive", keeping it open allows them to edit and see it vanish.
-                // But usually open note means "I want to deal with this". 
-                // Let's keep it open but activate the leaf.
                 this.app.workspace.openLinkText(item.file.path, '', false);
             });
-
         }
     }
 }

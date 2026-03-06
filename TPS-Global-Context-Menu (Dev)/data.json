@@ -22,13 +22,10 @@
       "type": "selector",
       "pinned": true,
       "options": [
-        "idea",
-        "open",
         "working",
         "blocked",
         "wont-do",
-        "complete",
-        "note"
+        "complete"
       ],
       "icon": "check-circle",
       "label": "Status",
@@ -221,6 +218,14 @@
       "icon": "tag",
       "label": "tags",
       "key": "tags"
+    },
+    {
+      "id": "1772572959938",
+      "label": "New Property",
+      "key": "timeEstimate",
+      "type": "number",
+      "icon": "lucide:clock",
+      "showInCollapsed": false
     }
   ],
   "enableRecurrence": true,
@@ -339,6 +344,8 @@
     "get-relative-path"
   ],
   "enableTaskCheckboxCycle": true,
+  "enableChecklistCompletionProperty": true,
+  "checklistCompletionPropertyKey": "checklistDone",
   "enableArchiveTagMove": true,
   "archiveTag": "archive",
   "archiveFolderPath": "Archive",
@@ -389,13 +396,15 @@
     }
   ],
   "enableSubitemsPanel": true,
-  "showChecklistInSubitemsPanel": true,
-  "showReferencesInSubitemsPanel": false,
-  "showMentionsInSubitemsPanel": false,
-  "subitemsPanelPosition": "above",
+  "showChecklistInSubitemsPanel": false,
+  "showReferencesInSubitemsPanel": true,
+  "showMentionsInSubitemsPanel": true,
+  "subitemsPanelPosition": "below",
   "subitemsPanelAutoCollapse": true,
   "defaultAttachmentsPath": "Markdown/Notes",
   "defaultSubitemsPath": "Markdown/Action Items",
+  "defaultNewSubitemStatus": "open",
+  "defaultNewSubitemPriority": "normal",
   "menuTextScale": 0.95,
   "buttonScale": 1,
   "controlScale": 1,

@@ -1,4 +1,4 @@
-import { App, Menu, TFile, TFolder, Notice, Platform, WorkspaceLeaf } from 'obsidian';
+import { App, Menu, TFile, TFolder, Notice, Platform, WorkspaceLeaf, normalizePath } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
 import { AddTagModal } from '../modals/add-tag-modal';
 import { RecurrenceModal } from '../modals/recurrence-modal';
@@ -13,6 +13,7 @@ import { BadgeRenderer, hashStringToHue } from './badge-renderer';
 import { PanelBuilder } from './panel-builder';
 import { MenuBuilder } from './menu-builder';
 import { getInternalPlugin } from '../core';
+import { stripDateSuffix } from '../utils/date-suffix-utils';
 
 export function addSafeClickListener(element: HTMLElement, handler: (e: MouseEvent) => void) {
   element.addEventListener('click', (e) => {
@@ -396,9 +397,22 @@ export class MenuController {
       }
     }
 
-    new RecurrenceModal(this.app, this.getRecurrenceValue(fm), startDate, async (rule) => {
+    // Pre-fill recurrenceEnds from the series template if one exists
+    let currentEndsOn = '';
+    const templateFolderSetting = (this.plugin.settings.recurringTemplateFolder || '').trim();
+    if (templateFolderSetting && entries[0].file instanceof TFile) {
+      const seriesBaseName = stripDateSuffix((entries[0].file as TFile).basename).trim();
+      const templatePath = normalizePath(`${templateFolderSetting}/${seriesBaseName}.md`);
+      const seriesTemplateFile = this.app.vault.getAbstractFileByPath(templatePath);
+      if (seriesTemplateFile instanceof TFile) {
+        const tmplCache = this.app.metadataCache.getFileCache(seriesTemplateFile);
+        currentEndsOn = tmplCache?.frontmatter?.recurrenceEnds || '';
+      }
+    }
+
+    new RecurrenceModal(this.app, this.getRecurrenceValue(fm), startDate, currentEndsOn, async (rule, endsOn) => {
       const files = entries.map(e => e.file);
-      await this.plugin.bulkEditService.setRecurrence(files, rule);
+      await this.plugin.bulkEditService.setRecurrence(files, rule, endsOn);
       // Refresh menus immediately to show updated recurrence
       files.forEach(file => {
         this.plugin.persistentMenuManager?.refreshMenusForFile(file, true);

@@ -1,7 +1,7 @@
 import { normalizePath, TFile } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
 import * as logger from "../logger";
-import { extractDateSuffix, stripDateSuffix } from '../utils/date-suffix-utils';
+import { extractDateSuffix, stripDateSuffix, FULL_DATE_REGEX } from '../utils/date-suffix-utils';
 
 /**
  * Handles automatic file naming based on title and scheduled date
@@ -228,6 +228,10 @@ export class FileNamingService {
             const rawBasename = (liveFile.basename || '').trim();
             if (!rawBasename) return "skipped";
 
+            // Date-only files (daily notes: YYYY-MM-DD) are owned by the Companion
+            // plugin for title sync. Skip them here to avoid fighting over title values.
+            if (FULL_DATE_REGEX.test(rawBasename)) return "skipped";
+
             // Avoid writing clearly-stale template-derived titles
             if (rawBasename.toLowerCase().includes('template')) return "skipped";
 
@@ -323,6 +327,10 @@ export class FileNamingService {
         if (title.toLowerCase().includes('template')) {
             return;
         }
+
+        // Date-only files (daily notes: YYYY-MM-DD) should never be renamed based on
+        // title/scheduled logic. Their filename IS the canonical identifier.
+        if (FULL_DATE_REGEX.test(String(liveFile.basename).trim())) return;
 
         const scheduled = fm.scheduled;
 

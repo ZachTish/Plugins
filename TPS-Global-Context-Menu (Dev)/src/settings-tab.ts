@@ -136,6 +136,32 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
 
     new Setting(general)
+      .setName('Default new subitem status')
+      .setDesc('Status applied to newly promoted/created subitems. Leave empty to use "open".')
+      .addText((text) =>
+        text
+          .setPlaceholder('open')
+          .setValue(this.plugin.settings.defaultNewSubitemStatus ?? 'open')
+          .onChange((value) => {
+            this.plugin.settings.defaultNewSubitemStatus = value.trim() || 'open';
+            void debouncedSave();
+          })
+      );
+
+    new Setting(general)
+      .setName('Default new subitem priority')
+      .setDesc('Priority applied to newly promoted/created subitems. Leave empty to use "normal".')
+      .addText((text) =>
+        text
+          .setPlaceholder('normal')
+          .setValue(this.plugin.settings.defaultNewSubitemPriority ?? 'normal')
+          .onChange((value) => {
+            this.plugin.settings.defaultNewSubitemPriority = value.trim() || 'normal';
+            void debouncedSave();
+          })
+      );
+
+    new Setting(general)
       .setName('Right-click menu placement')
       .setDesc('Choose whether TPS items appear before or after native/core menu items.')
       .addDropdown((dropdown) =>
@@ -1093,6 +1119,27 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     automation.createEl('h4', { text: 'Checklists & Tasks' });
     new Setting(automation).setName('Check pending items').setDesc('Warn on completion if items unchecked').addToggle(t => t.setValue(this.plugin.settings.checkOpenChecklistItems).onChange(async v => { this.plugin.settings.checkOpenChecklistItems = v; await this.plugin.saveSettings(); }));
     new Setting(automation).setName('Check parent-linked notes').setDesc('Warn when completing if any notes with parent links are still open').addToggle(t => t.setValue(this.plugin.settings.checkParentLinkStatuses).onChange(async v => { this.plugin.settings.checkParentLinkStatuses = v; await this.plugin.saveSettings(); }));
+    new Setting(automation)
+      .setName('Checklist completion property')
+      .setDesc('When enabled, automatically writes a boolean frontmatter property that is true only when every checklist item is checked [x] or canceled [-]. Unchecked [ ] and question-mark [?] items keep it false.')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enableChecklistCompletionProperty).onChange(async (v) => {
+          this.plugin.settings.enableChecklistCompletionProperty = v;
+          await this.plugin.saveSettings();
+        })
+      );
+    new Setting(automation)
+      .setName('Completion property key')
+      .setDesc('Frontmatter key used for the checklist completion boolean (e.g. "allChecked").')
+      .addText((t) =>
+        t
+          .setPlaceholder('allChecked')
+          .setValue(this.plugin.settings.checklistCompletionPropertyKey || 'allChecked')
+          .onChange(async (v) => {
+            this.plugin.settings.checklistCompletionPropertyKey = v.trim() || 'allChecked';
+            await this.plugin.saveSettings();
+          })
+      );
     new Setting(automation).setName('Parent frontmatter key').setDesc('Frontmatter key used to link a note to its parent (child → parent direction, e.g. "childOf")').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'childOf'; await this.plugin.saveSettings(); }));
     new Setting(automation).setName('Child frontmatter key').setDesc('Frontmatter key written to the parent note listing its children (parent → child direction, e.g. "parentOf")').addText(t => t.setValue(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').onChange(async v => { this.plugin.settings.childLinkFrontmatterKey = v.trim() || 'parentOf'; await this.plugin.saveSettings(); }));
     new Setting(automation)

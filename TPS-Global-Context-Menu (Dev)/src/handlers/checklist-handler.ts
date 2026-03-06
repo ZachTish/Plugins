@@ -36,14 +36,14 @@ export class ChecklistHandler {
   /**
    * Update checklist items in a file based on action
    */
-  async updateChecklistItems(file: TFile, action: 'complete' | 'progress'): Promise<void> {
+  async updateChecklistItems(file: TFile, action: 'complete' | 'canceled'): Promise<void> {
     try {
       let content = await this.app.vault.read(file);
 
       if (action === 'complete') {
         content = content.replace(/^(\s*[-*+]\s*)\[ \]/gm, '$1[x]');
-      } else if (action === 'progress') {
-        content = content.replace(/^(\s*[-*+]\s*)\[ \]/gm, '$1[?]');
+      } else if (action === 'canceled') {
+        content = content.replace(/^(\s*[-*+]\s*)\[ \]/gm, '$1[-]');
       }
 
       await this.app.vault.modify(file, content);
@@ -83,8 +83,8 @@ export class ChecklistHandler {
 
     if (userAction === 'complete') {
       await this.updateChecklistItems(file, 'complete');
-    } else if (userAction === 'progress') {
-      await this.updateChecklistItems(file, 'progress');
+    } else if (userAction === 'canceled') {
+      await this.updateChecklistItems(file, 'canceled');
     }
     // 'ignore' falls through to set status
     return true;

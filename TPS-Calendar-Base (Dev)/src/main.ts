@@ -89,6 +89,27 @@ export default class ObsidianCalendarPlugin
       await this.openDefaultBaseInSidebar();
     });
 
+    // Auto-focus sidebar panel based on active leaf type
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (!leaf) return;
+        const viewType = leaf.view.getViewType();
+        if (viewType === "markdown" && this.settings.autoFocusBacklinksOnMdOpen) {
+          const backlinkLeaves = this.app.workspace.getLeavesOfType("backlink");
+          if (backlinkLeaves.length > 0) {
+            this.app.workspace.revealLeaf(backlinkLeaves[0]);
+          } else {
+            const rightLeaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getRightLeaf(true);
+            if (rightLeaf) {
+              rightLeaf.setViewState({ type: "backlink", active: true }).then(() => {
+                this.app.workspace.revealLeaf(rightLeaf);
+              });
+            }
+          }
+        }
+      })
+    );
+
     // Listen for file deletions to remove parent-child links
     this.registerEvent(
       this.app.vault.on("delete", async (file) => {

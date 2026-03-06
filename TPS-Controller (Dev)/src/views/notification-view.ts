@@ -1,12 +1,12 @@
 import { ItemView, WorkspaceLeaf, TFile, IconName, Menu, setIcon, debounce, moment } from 'obsidian';
-import { OverdueItem, TPSNotifierSettings } from './types';
-import { SnoozeModal } from './modals/snooze-modal';
+import type { OverdueItem } from '../types';
+import { SnoozeModal } from '../modals/snooze-modal';
 
 export const NOTIFICATION_VIEW_TYPE = 'tps-notification-view';
 
-// Minimal interface to decouple from main plugin class
-export interface TPSNotifierInterface {
-    settings: TPSNotifierSettings;
+// Minimal interface so the view stays decoupled from the full plugin class.
+export interface TPSControllerRemindersAPI {
+    settings: { snoozeOptions?: { label: string; minutes: number }[] };
     getOverdueItems(): Promise<OverdueItem[]>;
     snoozeFile(file: TFile, minutes: number): Promise<void>;
     openFile(file: TFile): void;
@@ -15,11 +15,11 @@ export interface TPSNotifierInterface {
 }
 
 export class NotificationView extends ItemView {
-    plugin: TPSNotifierInterface;
+    plugin: TPSControllerRemindersAPI;
     items: OverdueItem[] = [];
     private refreshDebounced: () => void;
 
-    constructor(leaf: WorkspaceLeaf, plugin: TPSNotifierInterface) {
+    constructor(leaf: WorkspaceLeaf, plugin: TPSControllerRemindersAPI) {
         super(leaf);
         this.plugin = plugin;
         this.refreshDebounced = debounce(() => {
@@ -27,25 +27,15 @@ export class NotificationView extends ItemView {
         }, 120, false);
     }
 
-    getViewType() {
-        return NOTIFICATION_VIEW_TYPE;
-    }
-
-    getDisplayText() {
-        return "Notifications";
-    }
-
-    getIcon(): IconName {
-        return "bell"; // or 'alarm-clock'
-    }
+    getViewType() { return NOTIFICATION_VIEW_TYPE; }
+    getDisplayText() { return "Notifications"; }
+    getIcon(): IconName { return "bell"; }
 
     async onOpen() {
-        // Add standard refresh action to the view header toolbar
         this.addAction('refresh-cw', 'Refresh Notifications', async () => {
             await this.refresh();
         });
 
-        // Keep view responsive after status/frontmatter updates from context menus/modals.
         this.registerEvent(
             this.app.metadataCache.on('changed', (file) => {
                 if (!(file instanceof TFile)) return;
@@ -55,7 +45,6 @@ export class NotificationView extends ItemView {
             })
         );
 
-        // File-level operations (rename/delete) should also update immediately.
         this.registerEvent(
             this.app.vault.on('delete', (file) => {
                 if (!(file instanceof TFile)) return;
@@ -64,6 +53,7 @@ export class NotificationView extends ItemView {
                 }
             })
         );
+
         this.registerEvent(
             this.app.vault.on('rename', (file) => {
                 if (!(file instanceof TFile)) return;
@@ -71,7 +61,6 @@ export class NotificationView extends ItemView {
             })
         );
 
-        // Immediate refresh path for explicit TPS GCM updates.
         this.registerEvent(
             (this.app.workspace as any).on('tps-gcm-files-updated', (paths: string[] | undefined) => {
                 if (!Array.isArray(paths) || paths.length === 0) return;
@@ -83,7 +72,6 @@ export class NotificationView extends ItemView {
         );
 
         await this.refresh();
-        // Keep a periodic safety refresh as backup.
         this.registerInterval(window.setInterval(() => this.refreshDebounced(), 15000));
     }
 
@@ -93,7 +81,6 @@ export class NotificationView extends ItemView {
     }
 
     draw() {
-        // console.log('[TPS Notifier Debug] View draw() started');
         const container = this.contentEl;
         container.empty();
         container.addClass('tps-notification-view');
@@ -113,12 +100,10 @@ export class NotificationView extends ItemView {
             emptyState.style.height = '100%';
             emptyState.style.color = 'var(--text-muted)';
             emptyState.style.padding = '20px';
-
             const icon = emptyState.createDiv();
             setIcon(icon, 'check-circle');
             icon.style.marginBottom = '8px';
             icon.style.opacity = '0.5';
-
             emptyState.createDiv({ text: 'All caught up!' });
             return;
         }
@@ -134,7 +119,6 @@ export class NotificationView extends ItemView {
             row.style.gap = '12px';
             row.style.transition = 'background-color 0.1s ease';
 
-            // Hover effect
             row.addEventListener('mouseenter', () => {
                 row.style.backgroundColor = 'var(--background-modifier-hover)';
             });
@@ -142,21 +126,18 @@ export class NotificationView extends ItemView {
                 row.style.backgroundColor = 'transparent';
             });
 
-            // Click to open file
             row.addEventListener('click', (e) => {
-                // Ignore if clicked on action buttons
                 if ((e.target as HTMLElement).closest('.tps-notification-actions')) return;
                 this.plugin.openFile(item.file);
             });
 
-            // Context Menu
             row.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 this.showContextMenu(e, item);
             });
 
-            // Left Content: Title + Preview
+            // Left Content
             const content = row.createDiv({ cls: 'tps-notification-content' });
             content.style.display = 'flex';
             content.style.flexDirection = 'column';
@@ -169,8 +150,11 @@ export class NotificationView extends ItemView {
             topRow.style.gap = '8px';
             topRow.style.marginBottom = '2px';
 
-            const titleText = item.title || item.file.basename;
-            const title = topRow.createEl('span', { text: titleText });
+            let displayName = item.file.basename;
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(displayName)) {
+                displayName = displayName.replace(/ \d{4}-\d{2}-\d{2}$/, '');
+            }
+            const title = topRow.createEl('span', { text: displayName });
             title.style.fontWeight = '600';
             title.style.color = 'var(--text-normal)';
             title.style.fontSize = '0.9em';
@@ -187,7 +171,7 @@ export class NotificationView extends ItemView {
             time.style.flexShrink = '0';
 
             const body = content.createDiv({ cls: 'tps-notification-body' });
-            body.setText(item.body || item.reminder.property);
+            body.setText(item.reminder.label || item.reminder.property);
             body.style.fontSize = '0.8em';
             body.style.color = 'var(--text-muted)';
             body.style.whiteSpace = 'nowrap';
@@ -198,11 +182,11 @@ export class NotificationView extends ItemView {
                 row.style.opacity = '0.5';
             }
 
-            // Right Actions: Snooze
+            // Right Actions
             const actions = row.createDiv({ cls: 'tps-notification-actions' });
             actions.style.display = 'flex';
             actions.style.alignItems = 'center';
-            actions.style.gap = '4px'; // Minimal gap
+            actions.style.gap = '4px';
 
             const createIconBtn = (icon: string, label: string, onClick: (e: MouseEvent) => void) => {
                 const btn = actions.createDiv({ cls: 'tps-icon-btn' });
@@ -213,7 +197,6 @@ export class NotificationView extends ItemView {
                 btn.style.color = 'var(--text-muted)';
                 btn.style.display = 'flex';
                 btn.style.alignItems = 'center';
-
                 btn.addEventListener('mouseenter', () => {
                     btn.style.backgroundColor = 'var(--background-modifier-hover)';
                     btn.style.color = 'var(--text-normal)';
@@ -222,7 +205,6 @@ export class NotificationView extends ItemView {
                     btn.style.backgroundColor = 'transparent';
                     btn.style.color = 'var(--text-muted)';
                 });
-
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     onClick(e);
@@ -230,38 +212,28 @@ export class NotificationView extends ItemView {
                 return btn;
             };
 
-            createIconBtn('clock', 'Snooze', (e) => {
+            createIconBtn('clock', 'Snooze', (_e) => {
                 new SnoozeModal(this.app, async (minutes) => {
                     await this.plugin.snoozeFile(item.file, minutes);
                     await this.refresh();
                 }, this.plugin.settings.snoozeOptions || []).open();
             });
 
-            // Check button - mark as complete
-            createIconBtn('check', 'Mark Complete', async (e) => {
+            createIconBtn('check', 'Mark Complete', async () => {
                 await this.plugin.markFileComplete(item.file);
                 await this.refresh();
             });
 
-            // X button - mark as won't do
-            createIconBtn('x', 'Mark Won\'t Do', async (e) => {
+            createIconBtn('x', "Mark Won't Do", async () => {
                 await this.plugin.markFileWontDo(item.file);
                 await this.refresh();
             });
-
         }
     }
 
-    /**
-     * Shows the context menu for a notification item
-     */
     private showContextMenu(e: MouseEvent, item: OverdueItem) {
         const menu = new Menu();
-
-        // Trigger the native file-menu event so all plugins (including TPS Global Context Menu)
-        // can populate the menu with their standard actions.
         this.app.workspace.trigger('file-menu', menu, item.file, 'tps-notification-view', this.leaf);
-
         menu.showAtMouseEvent(e);
     }
 }

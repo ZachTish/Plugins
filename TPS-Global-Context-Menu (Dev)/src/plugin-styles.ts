@@ -971,6 +971,14 @@ export const PLUGIN_STYLES = `
         pointer-events: none !important;
       }
 
+      /* Keyboard-visible state: hide persistent inline context menu bar. */
+      .tps-gcm-menu--keyboard-hidden {
+        display: none !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+      }
+
       /* Gesture collapse behavior for subitems panel (paired with context menu). */
       .tps-gcm-subitems-panel.tps-gcm-gesture-collapsed {
         opacity: 0;

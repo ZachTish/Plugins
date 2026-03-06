@@ -77,7 +77,6 @@ export class SnoozeModal extends Modal {
     handleSelection(value: number) {
         let minutes = 0;
         if (typeof value === 'number') minutes = value;
-
         this.onSubmit(minutes);
         this.close();
     }

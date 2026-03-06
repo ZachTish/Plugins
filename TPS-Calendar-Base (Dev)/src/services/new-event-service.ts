@@ -75,7 +75,7 @@ export class NewEventService {
     }
     this.createInProgress = true;
     try {
-      const rawTitle = await this.promptForTitle();
+      const rawTitle = await this.promptForTitle(options?.typeFolderOverride);
 
       if (rawTitle === undefined) {
         this.pendingLinkExisting = false;
@@ -387,8 +387,13 @@ export class NewEventService {
 
     const folder = this.config.app.vault.getAbstractFileByPath(folderPath);
     if (!folder) {
-
-      await this.config.app.vault.createFolder(folderPath);
+      try {
+        await this.config.app.vault.createFolder(folderPath);
+      } catch (e: any) {
+        if (!(typeof e.message === "string" && e.message.toLowerCase().includes("already exists"))) {
+          throw e;
+        }
+      }
     }
   }
 
@@ -405,7 +410,7 @@ export class NewEventService {
     return this.config.app.vault.getRoot().path;
   }
 
-  private async promptForTitle(): Promise<string | undefined> {
+  private async promptForTitle(typeFolderOverride?: string | null): Promise<string | undefined> {
     const service = this;
     return new Promise((resolve) => {
       const modal = new (class extends Modal {
@@ -470,15 +475,24 @@ export class NewEventService {
           typeRow.style.gap = "8px";
           typeRow.style.marginBottom = "10px";
           typeRow.createSpan({ text: "Type:" });
-          typeValue = typeRow.createSpan({
-            text: service.pendingTypeFolderPath ? service.pendingTypeFolderPath : "Default",
-          });
+          const getTypeDisplay = () => {
+            if (service.pendingTypeFolderPath) return service.pendingTypeFolderPath;
+            if (typeFolderOverride) return `${typeFolderOverride} (from filter)`;
+            return "Vault root";
+          };
+          typeValue = typeRow.createSpan({ text: getTypeDisplay() });
+          if (!service.pendingTypeFolderPath && typeFolderOverride) {
+            typeValue.style.color = "var(--text-muted)";
+          }
           const clearTypeBtn = typeRow.createEl("button", { text: "Clear", type: "button" });
           clearTypeBtn.addEventListener("click", (evt) => {
             evt.preventDefault();
             evt.stopPropagation();
             service.pendingTypeFolderPath = null;
-            if (typeValue) typeValue.textContent = "Default";
+            if (typeValue) {
+              typeValue.textContent = getTypeDisplay();
+              typeValue.style.color = typeFolderOverride ? "var(--text-muted)" : "";
+            }
           });
           const buttons = form.createDiv({ cls: "modal-button-container" });
           const createBtn = buttons.createEl("button", { text: "Create", cls: "mod-cta", type: "button" });
@@ -505,7 +519,10 @@ export class NewEventService {
             const selected = await service.promptForTypeFolderSelection();
             if (selected) {
               service.pendingTypeFolderPath = selected.path;
-              if (typeValue) typeValue.textContent = selected.path;
+              if (typeValue) {
+                typeValue.textContent = selected.path;
+                typeValue.style.color = "";
+              }
             }
             typePickInProgress = false;
             setTimeout(maintain, 0);

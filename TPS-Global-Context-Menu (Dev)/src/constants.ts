@@ -49,6 +49,8 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   viewModeRules: [],
   systemCommands: ['open-in-new-tab', 'duplicate', 'get-relative-path'],
   enableTaskCheckboxCycle: true,
+  enableChecklistCompletionProperty: false,
+  checklistCompletionPropertyKey: 'allChecked',
   enableArchiveTagMove: false,
   archiveTag: 'archive',
   archiveFolderPath: 'System/Archive',
@@ -72,6 +74,8 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   // Default paths for new items
   defaultAttachmentsPath: '',
   defaultSubitemsPath: '',
+  defaultNewSubitemStatus: 'open',
+  defaultNewSubitemPriority: 'normal',
 
   menuTextScale: 1,
   buttonScale: 1,

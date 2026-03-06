@@ -10,6 +10,7 @@
   Notice,
   normalizePath,
   parsePropertyId,
+  parseYaml,
   QueryController,
   setIcon,
   TFile,
@@ -57,6 +58,7 @@ import {
 } from "./utils/date-value-utils";
 import * as logger from "./logger";
 import { RRule } from "rrule";
+import { parseAllTaskItems, ParsedTaskItem } from "./services/task-parser-service";
 
 export const CalendarViewType = "calendar";
 
@@ -71,6 +73,7 @@ export class CalendarView extends BasesView {
 
   // Internal rendering data
   private entries: CalendarEntry[] = [];
+  private unscheduledEntries: { file: TFile; title: string }[] = [];
   private pendingUpdates = new Map<string, { start: Date; end?: Date; timestamp: number }>();
   private startDateProp: BasesPropertyId | null = null;
   private endDateProp: BasesPropertyId | null = null;
@@ -103,6 +106,9 @@ export class CalendarView extends BasesView {
   // private showHiddenEvents: boolean = false; // Removed per user request
   private cachedExternalEvents: ExternalCalendarEvent[] = [];
   private isFetchingExternalEvents: boolean = false;
+  private cachedRawTaskItems: ParsedTaskItem[] = [];
+  private isFetchingTaskItems: boolean = false;
+  private lastTaskItemsFetch: number = 0;
   private viewMode: CalendarViewMode = "week";
   private allDayLimit: number = 3; // New property with default 3
 
@@ -670,6 +676,7 @@ export class CalendarView extends BasesView {
 
 
     const currentEntries: CalendarEntry[] = [];
+    const unscheduledEntries: { file: TFile; title: string }[] = [];
 
     // Determine the time window we'll display/expand events for
     const baseDate = this.currentDate || new Date();
@@ -1073,6 +1080,21 @@ export class CalendarView extends BasesView {
         // Note: Time logs are now stored in daily notes, not source notes.
         // Source notes only contain daily note links like [[2025-12-10]].
         // Time log entries are read from daily notes in the separate scan below.
+      } else if (entryFile) {
+        // Apply the same archive + name filter as scheduled entries
+        const uIsArchived = archiveFolder
+          ? normalizePath(entryFile.path).startsWith(`${archiveFolder}/`)
+          : false;
+        if (!uIsArchived) {
+          const uCache = this.app.metadataCache.getFileCache(entryFile);
+          const uFrontmatterTitle = this.getFrontmatterStringCaseInsensitive(
+            uCache?.frontmatter as Record<string, any> | undefined, "title",
+          ) || undefined;
+          const uHasFilters = this.config.get("filters") || (this.config as any).viewFilters || (this.config as any).filtersAll;
+          if (!uHasFilters || this.passesNameFilters([uFrontmatterTitle, entryFile.basename, entryFile.path])) {
+            unscheduledEntries.push({ file: entryFile, title: uFrontmatterTitle || entryFile.basename });
+          }
+        }
       }
     }
 
@@ -1179,13 +1201,22 @@ export class CalendarView extends BasesView {
             isExternal: false,
             status: calEntry.status,
             priority: calEntry.priority,
-            cssClasses: [...(calEntry.cssClasses || [])],
-            backgroundColor: 'rgba(100, 100, 100, 0.3)',
-            borderColor: 'rgba(100, 100, 100, 0.5)',
+            cssClasses: [...(calEntry.cssClasses || []), 'is-recurring-instance'],
+            backgroundColor: calEntry.backgroundColor || 'rgba(100, 100, 100, 0.3)',
+            borderColor: calEntry.borderColor || 'rgba(100, 100, 100, 0.5)',
           });
         }
       } catch (_err) {
         // Silently ignore unparseable RRULE strings
+      }
+    }
+
+    // 4. Task items (if enabled)
+    if (this.plugin.settings.showTaskItems) {
+      currentEntries.push(...this.buildTaskItemEntries());
+      const timeSinceLastFetch = Date.now() - this.lastTaskItemsFetch;
+      if (timeSinceLastFetch > 60000 && !recentlyTyping && !this.isFetchingTaskItems) {
+        this.refreshTaskItems();
       }
     }
 
@@ -1204,7 +1235,9 @@ export class CalendarView extends BasesView {
       // Keep kind-specific identity stable while allowing multiple rows per file/event across time ranges.
       const id = entry.isGhost
         ? `ghost:${(entry.entry as any).path || "unknown"}:${startTs}:${endTs}`
-        : entry.isExternal
+        : entry.isTask
+          ? `task:${(entry.entry as any).file?.path || "unknown"}:${startTs}:${(entry.title || "").slice(0, 40)}`
+          : entry.isExternal
           ? `external:${entry.externalEvent?.id || entry.title || "unknown"}:${startTs}:${endTs}`
           : `local:${(entry.entry as any).file?.path || entry.title || "unknown"}:${startTs}:${endTs}`;
 
@@ -1220,6 +1253,7 @@ export class CalendarView extends BasesView {
       // console.log(`[CalendarView] First event: ${first.title} at ${first.startDate} (ghost: ${first.isGhost})`);
     }
     this.entries = finalEntries;
+    this.unscheduledEntries = unscheduledEntries;
 
     // If auto view mode is enabled, derive range from filters first (if present),
     // then fall back to local visible entries.
@@ -1552,27 +1586,11 @@ export class CalendarView extends BasesView {
         }
       }
 
-      // Method 2: Find the workspace leaf and look up the view
-      const leafEl = this.containerEl.closest('.workspace-leaf');
-      if (leafEl) {
-        // Iterate through all leaves to find the matching one
-        let foundPath: string | null = null;
-        this.app.workspace.iterateAllLeaves((leaf) => {
-          const leafContainer = (leaf as any).containerEl as HTMLElement | undefined;
-          if (leafContainer && (leafContainer === leafEl || leafEl.contains(leafContainer) || leafContainer.contains(leafEl as any))) {
-            const view = leaf.view;
-            if (view && 'file' in view && (view as any).file) {
-              const file = (view as any).file;
-              if (file.path) {
-                foundPath = file.path;
-              }
-            }
-          }
-        });
-        if (foundPath) {
-          logger.log(`[CalendarView] Found parent via leaf iteration: ${foundPath}`);
-          return foundPath;
-        }
+      // Method 2: Find the workspace leaf and look up the view file.
+      const leafFile = this.resolveContainerLeafFile();
+      if (leafFile) {
+        logger.log(`[CalendarView] Found parent via leaf iteration: ${leafFile.path}`);
+        return leafFile.path;
       }
 
       // Method 3: Check for markdown-embed container (for sync blocks)
@@ -1599,13 +1617,12 @@ export class CalendarView extends BasesView {
         }
       }
 
-      // Method 4: For bases views, try to get the source file from controller
-      if (this.controller) {
-        const sourceFile = (this.controller as any).file || (this.controller as any).sourceFile;
-        if (sourceFile?.path) {
-          logger.log(`[CalendarView] Found parent via controller: ${sourceFile.path}`);
-          return sourceFile.path;
-        }
+      // Method 4: controller API (not currently populated, kept for forward-compat)
+      const ctrl = this.controller as any;
+      const ctrlFilePath: string | undefined = ctrl.file?.path ?? ctrl.sourceFile?.path;
+      if (ctrlFilePath) {
+        logger.log(`[CalendarView] Found parent via controller: ${ctrlFilePath}`);
+        return ctrlFilePath;
       }
 
       // Method 5: Check if we have a parent file path attribute anywhere in the hierarchy
@@ -1747,7 +1764,8 @@ export class CalendarView extends BasesView {
 
     // Default: Create Event
     try {
-      const creationDefaults = this.getFilterCreationDefaults();
+      const baseFilters = await this.readBaseFileFilters();
+      const creationDefaults = this.getFilterCreationDefaults(baseFilters);
       const file = await this.newEventService.createEvent(start, end, undefined, {
         useBaseDefaults: true,
         frontmatterDefaults: creationDefaults.frontmatter,
@@ -2435,10 +2453,12 @@ export class CalendarView extends BasesView {
         const end = allDay
           ? new Date(start.getTime() + 24 * 60 * 60 * 1000)
           : new Date(start.getTime() + this.defaultEventDuration * 60000);
+        const baseFilters = await this.readBaseFileFilters();
+        const creationDefaults = this.getFilterCreationDefaults(baseFilters);
         const created = await this.newEventService.createEvent(start, end, undefined, {
           useBaseDefaults: true,
-          frontmatterDefaults: this.getFilterCreationDefaults().frontmatter,
-          typeFolderOverride: this.getFilterCreationDefaults().folderPath,
+          frontmatterDefaults: creationDefaults.frontmatter,
+          typeFolderOverride: creationDefaults.folderPath,
           templateOverride: file.path,
           templateTypeOverride: "file",
         });
@@ -2723,6 +2743,11 @@ export class CalendarView extends BasesView {
               this.handleEventResize(entry, newStart, newEnd, allDay, scope, oldStart, oldEnd)
             }
             onCreateSelection={(start, end) => this.handleCreateRange(start, end)}
+            unscheduledEntries={this.plugin.settings.enableUnscheduledView ? this.unscheduledEntries.map(e => ({ filePath: e.file.path, title: e.title })) : undefined}
+            onUnscheduledEntryClick={(filePath) => {
+              const f = this.app.vault.getAbstractFileByPath(filePath);
+              if (f instanceof TFile) this.app.workspace.openLinkText(f.path, '', false);
+            }}
             onExternalDrop={(filePath, start, allDay) => this.handleExternalDrop(filePath, start, allDay)}
             editable={this.isEditable()}
 
@@ -2773,6 +2798,7 @@ export class CalendarView extends BasesView {
             dayHeaderShowDate={this.plugin.settings.dayHeaderShowDate}
             timeFormatSetting={this.plugin.settings.timeFormat}
             slotDurationMinutes={this.plugin.settings.slotDuration}
+            minEventHeight={this.plugin.settings.minEventHeight}
             snapDurationMinutes={this.plugin.settings.snapDuration}
             defaultScrollTimeSetting={this.plugin.settings.defaultScrollTime}
             showNowIndicator={this.plugin.settings.showNowIndicator}
@@ -3123,6 +3149,72 @@ export class CalendarView extends BasesView {
         return null;
       },
     } as unknown as BasesEntry;
+  }
+
+  private createTaskEntry(file: TFile): BasesEntry {
+    return {
+      file,
+      getValue: (_propId: BasesPropertyId) => null,
+    } as unknown as BasesEntry;
+  }
+
+  private buildTaskItemEntries(): CalendarEntry[] {
+    const settings = this.plugin.settings;
+    const dateField = settings.taskDateField;
+    const color = settings.taskItemColor || "#f59e0b";
+    const entries: CalendarEntry[] = [];
+
+    for (const task of this.cachedRawTaskItems) {
+      if (!settings.showCompletedTaskItems && task.isCompleted) continue;
+
+      let date: Date | null = null;
+      if (dateField === "due") date = task.dueDate;
+      else if (dateField === "scheduled") date = task.scheduledDate;
+      else if (dateField === "start") date = task.startDate;
+      else date = task.dueDate ?? task.scheduledDate ?? task.startDate;
+
+      if (!date) continue;
+
+      const abstractFile = this.app.vault.getAbstractFileByPath(task.filePath);
+      if (!abstractFile || !(abstractFile instanceof TFile)) continue;
+
+      // All-day event: start at midnight, end at next-day midnight (FC exclusive end).
+      const startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+      const endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0);
+
+      entries.push({
+        entry: this.createTaskEntry(abstractFile),
+        startDate,
+        endDate,
+        title: task.text || "Task",
+        isTask: true,
+        isExternal: false,
+        cssClasses: ["bases-calendar-event", "is-task"],
+        backgroundColor: color,
+        borderColor: color,
+      });
+    }
+
+    return entries;
+  }
+
+  private async refreshTaskItems(): Promise<void> {
+    if (this.isFetchingTaskItems) return;
+    this.isFetchingTaskItems = true;
+    try {
+      this.cachedRawTaskItems = await parseAllTaskItems(
+        this.app,
+        this.plugin.settings.taskItemFolderFilter || "",
+      );
+      this.lastTaskItemsFetch = Date.now();
+      if (this.plugin.settings.showTaskItems) {
+        this.debouncedRefresh();
+      }
+    } catch (err) {
+      logger.error("[CalendarView] Failed to fetch task items:", err);
+    } finally {
+      this.isFetchingTaskItems = false;
+    }
   }
 
   public setEphemeralState(state: unknown): void {
@@ -3612,47 +3704,156 @@ export class CalendarView extends BasesView {
     return evalNode(filter);
   }
 
-  private getFilterCreationDefaults(): {
+  /**
+   * Returns the TFile for the workspace leaf that contains this view's container.
+   * Checks the controller first, then falls back to iterating workspace leaves.
+   * Used by both readBaseFileFilters() and findParentNotePath().
+   */
+  private resolveContainerLeafFile(): TFile | null {
+    // Cheap: check if the controller exposes the file directly.
+    const ctrl = this.controller as any;
+    const ctrlFile = ctrl.file ?? ctrl.sourceFile ?? ctrl.baseFile ?? null;
+    if (ctrlFile instanceof TFile) return ctrlFile;
+
+    // Walk workspace leaves to find the one whose container wraps this view.
+    const leafEl = this.containerEl.closest('.workspace-leaf');
+    if (!leafEl) return null;
+
+    let found: TFile | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (found) return;
+      const leafContainer = (leaf as any).containerEl as HTMLElement | undefined;
+      if (
+        leafContainer &&
+        (leafContainer === leafEl ||
+          leafEl.contains(leafContainer) ||
+          leafContainer.contains(leafEl as any))
+      ) {
+        const f = (leaf.view as any).file;
+        if (f instanceof TFile) found = f;
+      }
+    });
+    return found;
+  }
+
+  /**
+   * Reads and returns the top-level `filters:` block from the .base file that
+   * hosts this calendar view. Returns null if the file cannot be resolved.
+   */
+  private async readBaseFileFilters(): Promise<unknown> {
+    try {
+      const baseFile = this.resolveContainerLeafFile();
+      if (!baseFile) return null;
+      const content = await this.app.vault.cachedRead(baseFile);
+      const parsed = parseYaml(content);
+      return parsed?.filters ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Derives a creation folder path and frontmatter defaults from the base file's
+   * top-level filters.  Callers that run in an async context should pass
+   * `baseFilters` obtained via `readBaseFileFilters()` so the full base-level
+   * filter tree is available.  When not provided (e.g. the sync loadConfig call)
+   * only frontmatter defaults are derived; folder detection is skipped.
+   */
+  private getFilterCreationDefaults(baseFilters?: unknown): {
     folderPath: string | null;
     frontmatter: Record<string, any>;
   } {
-    // Prefer the explicit folder option stored directly in the view config.
-    const explicitFolder =
-      (this.config.get?.("newEventTypeFolder") as string | null | undefined)?.trim() ||
-      (this.config.get?.("newEventFolder") as string | null | undefined)?.trim() ||
-      null;
+    const folderPath = baseFilters
+      ? this.extractFolderFromTopLevelFilters(baseFilters)
+      : null;
+    const frontmatter = this.extractFrontmatterDefaults(baseFilters ?? null);
 
-    const filtersAll =
-      this.config.get?.("filters") ??
-      (this.config as any).filtersAll ??
-      (this.config as any).filters?.all ??
-      this.config.get?.("filtersAll") ??
-      null;
-    const viewFilters =
-      (this.config as any).viewFilters ??
-      this.config.get?.("filters") ??
-      (this.config as any).filters ??
-      null;
-
-    const folderFromAll = explicitFolder ? null : this.extractFolderFromFilters(filtersAll);
-    const folderFromView = (explicitFolder || folderFromAll) ? null : this.extractFolderFromFilters(viewFilters);
-    const frontmatter = this.extractFrontmatterDefaults(filtersAll);
-
-    return {
-      folderPath: explicitFolder || folderFromAll || folderFromView,
-      frontmatter,
-    };
+    return { folderPath, frontmatter };
   }
 
-  private extractFolderFromFilters(filters: unknown): string | null {
-    const conditions = this.collectFilterConditions(filters);
-    for (const condition of conditions) {
-      const derived = this.deriveFolderPathFromCondition(condition);
-      if (derived) {
-        return derived;
+  /**
+   * Extracts a target creation folder from a filter tree.
+   * When the top level is an "or", the first group that contains a positive
+   * folder/path assertion wins (matching how the filter logically identifies
+   * a primary bucket). Negated conditions are never used as folder hints.
+   */
+  private extractFolderFromTopLevelFilters(filters: unknown): string | null {
+    if (!filters || typeof filters !== "object" || Array.isArray(filters)) return null;
+    const node = filters as Record<string, any>;
+
+    // Top-level "or": first group with a positive folder assertion wins.
+    if (Array.isArray(node.or)) {
+      for (const group of node.or) {
+        const folder = this.extractFolderFromPositiveConditions(group);
+        if (folder) return folder;
       }
+      return null;
+    }
+
+    // "and" or flat: search all positive conditions.
+    return this.extractFolderFromPositiveConditions(filters);
+  }
+
+  /** Collect only positive conditions from a node and return the first derived folder. */
+  private extractFolderFromPositiveConditions(node: unknown): string | null {
+    const conditions = this.collectPositiveFilterConditions(node);
+    for (const condition of conditions) {
+      const folder = this.deriveFolderPathFromCondition(condition);
+      if (folder) return folder;
     }
     return null;
+  }
+
+  /**
+   * Collects only positive equality conditions from a filter tree.
+   * Specifically:
+   * - Inline string expressions starting with "!" are skipped.
+   * - Object branches keyed on "not" are skipped entirely.
+   * - Conditions whose operator is negative (!=, does not contain, …) are dropped.
+   * This is intentionally more restrictive than collectFilterConditions(), which
+   * is used for date-range analysis where negations are meaningful.
+   */
+  private collectPositiveFilterConditions(
+    filters: unknown,
+  ): Array<{ property: string; operator: string; value: unknown }> {
+    const conditions: Array<{ property: string; operator: string; value: unknown }> = [];
+    const visit = (n: any) => {
+      if (!n) return;
+      if (typeof n === "string") {
+        if (n.trim().startsWith("!")) return; // skip negated inline expressions
+        const parsed = this.parseInlineFilterCondition(n.trim());
+        if (parsed && this.isPositiveEqualityOp(parsed.operator)) conditions.push(parsed);
+        return;
+      }
+      if (typeof n === "object" && "data" in n) { visit(n.data); return; }
+      if (Array.isArray(n)) { n.forEach(visit); return; }
+      if (typeof n !== "object") return;
+      if ("not" in n) return; // skip not-branches entirely
+      for (const key of ["and", "or", "all", "any", "filters"]) {
+        if (key in n) visit((n as any)[key]);
+      }
+      if (Array.isArray((n as any).children)) (n as any).children.forEach(visit);
+      // Direct condition node
+      const rawProp = (n as any).property ?? (n as any).field ?? (n as any).key ?? (n as any).column ?? null;
+      const property =
+        typeof rawProp === "string" ? rawProp.trim()
+        : rawProp && typeof rawProp === "object"
+          ? String((rawProp as any).property ?? (rawProp as any).name ?? (rawProp as any).key ?? (rawProp as any).field ?? (rawProp as any).id ?? "").trim()
+          : "";
+      if (!property) return;
+      const rawOp = (n as any).op ?? (n as any).operator ?? (n as any).comparison;
+      const operator =
+        typeof rawOp === "string" ? rawOp.trim()
+        : rawOp && typeof rawOp === "object"
+          ? String((rawOp as any).operator ?? (rawOp as any).op ?? (rawOp as any).name ?? "").trim()
+          : "";
+      if (!this.isPositiveEqualityOp(operator)) return;
+      let value = (n as any).value ?? (n as any).pattern ?? (n as any).match;
+      if (value && typeof value === "object" && "value" in value) value = (value as any).value;
+      conditions.push({ property, operator, value });
+    };
+    visit(filters);
+    return conditions;
   }
 
   private deriveFolderPathFromCondition(condition: {
@@ -3839,7 +4040,7 @@ export class CalendarView extends BasesView {
       return {
         property: comparisonMatch[1],
         operator: comparisonMatch[2],
-        value: comparisonMatch[3].trim(),
+        value: stripOuterQuotes(comparisonMatch[3].trim()),
       };
     }
 
@@ -3850,7 +4051,7 @@ export class CalendarView extends BasesView {
     const op = operator.toLowerCase().replace(/\s+/g, "");
     if (!op) return true;
     if (op.includes("not") || op.includes("!=") || op.includes("doesnot")) return false;
-    return op.includes("is") || op.includes("equals") || op === "=";
+    return op.includes("is") || op.includes("equals") || op === "=" || op === "==";
   }
 
   private toggleFullDay(): void {
@@ -4056,6 +4257,11 @@ export class CalendarView extends BasesView {
       this.plugin.getExternalCalendarFilter(),
     );
     this.updateExternalCalendarVisibility();
+    // Invalidate task item cache so next updateCalendar() re-fetches.
+    if (!this.plugin.settings.showTaskItems) {
+      this.cachedRawTaskItems = [];
+    }
+    this.lastTaskItemsFetch = 0;
     this.updateCalendar();
   }
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 interface CalendarNavigationProps {
@@ -20,6 +20,8 @@ interface CalendarNavigationProps {
   viewMode?: string;
   onViewModeChange?: (mode: string) => void;
   onCreateNow?: () => void;
+  onUnscheduledEntries?: { filePath: string; title: string }[];
+  onUnscheduledEntryClick?: (filePath: string) => void;
 }
 
 /**
@@ -54,6 +56,8 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
   viewMode,
   onViewModeChange,
   onCreateNow,
+  onUnscheduledEntries,
+  onUnscheduledEntryClick,
 }) => {
   const prevDisabled = navigationLocked || !canNavigatePrev;
   const nextDisabled = navigationLocked || !canNavigateNext;
@@ -61,6 +65,38 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
   const datePickerDisabled = navigationLocked;
   const viewPickerDisabled = navigationLocked;
   const navDateInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Unscheduled dropdown state
+  const unscheduledBtnRef = useRef<HTMLButtonElement | null>(null);
+  const unscheduledPanelRef = useRef<HTMLDivElement | null>(null);
+  const [showUnscheduledPanel, setShowUnscheduledPanel] = useState(false);
+  const [panelPos, setPanelPos] = useState<{ top: number; right: number } | null>(null);
+
+  useEffect(() => {
+    if (!showUnscheduledPanel) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        panelRef.current && panelRef.current.contains(e.target as Node)
+      ) return;
+      if (
+        unscheduledBtnRef.current && unscheduledBtnRef.current.contains(e.target as Node)
+      ) return;
+      setShowUnscheduledPanel(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showUnscheduledPanel]);
+
+  // alias so the useEffect above can ref the same element
+  const panelRef = unscheduledPanelRef;
+
+  const handleUnscheduledBtnClick = useCallback(() => {
+    if (!showUnscheduledPanel && unscheduledBtnRef.current) {
+      const rect = unscheduledBtnRef.current.getBoundingClientRect();
+      setPanelPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    }
+    setShowUnscheduledPanel(p => !p);
+  }, [showUnscheduledPanel]);
 
   const handleDatePickerOpen = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -263,32 +299,110 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
           </select>
         )}
 
-        {/* Create event now button */}
-        {onCreateNow && (
-          <button
-            className="bases-calendar-nav-button"
-            aria-label="New event"
-            title="New event"
-            disabled={navigationLocked}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '4px',
-              width: '24px',
-              height: '24px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--text-muted)',
-              borderRadius: '4px',
-              marginLeft: '4px',
-              opacity: navigationLocked ? 0.5 : 1,
-            }}
-            onClick={onCreateNow}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
-          </button>
+        {/* Create event button removed — base plugin provides a plus */}
+
+        {/* Show unscheduled dropdown button */}
+        {onUnscheduledEntries !== undefined && (
+          <>
+            <button
+              ref={unscheduledBtnRef}
+              className="bases-calendar-nav-button"
+              aria-label="Show unscheduled notes"
+              title="Show unscheduled notes"
+              style={{
+                background: showUnscheduledPanel ? 'var(--background-modifier-hover)' : 'transparent',
+                border: 'none',
+                marginLeft: '6px',
+                cursor: 'pointer',
+                padding: '4px',
+                width: '24px',
+                height: '24px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: showUnscheduledPanel ? 'var(--text-normal)' : 'var(--text-muted)',
+                borderRadius: '4px',
+              }}
+              onClick={handleUnscheduledBtnClick}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line><line x1="10" y1="14" x2="14" y2="18"></line><line x1="14" y1="14" x2="10" y2="18"></line></svg>
+            </button>
+            {showUnscheduledPanel && panelPos && createPortal(
+              <div
+                ref={unscheduledPanelRef}
+                style={{
+                  position: 'fixed',
+                  top: panelPos.top,
+                  right: panelPos.right,
+                  width: '320px',
+                  maxHeight: '400px',
+                  overflowY: 'auto',
+                  background: 'var(--background-primary)',
+                  border: '1px solid var(--background-modifier-border)',
+                  borderRadius: '8px',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+                  zIndex: 10000,
+                  padding: '6px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0',
+                }}
+                onClick={e => e.stopPropagation()}
+              >
+                <div style={{
+                  fontSize: '0.72em',
+                  fontWeight: 600,
+                  color: 'var(--text-muted)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  padding: '4px 6px 8px',
+                }}>
+                  {onUnscheduledEntries.length === 0
+                    ? 'No unscheduled notes'
+                    : `${onUnscheduledEntries.length} unscheduled note${onUnscheduledEntries.length === 1 ? '' : 's'}`}
+                </div>
+                {onUnscheduledEntries.map(entry => (
+                  <div
+                    key={entry.filePath}
+                    draggable
+                    onDragStart={(e: React.DragEvent<HTMLDivElement>) => {
+                      e.dataTransfer.effectAllowed = 'copy';
+                      e.dataTransfer.setData('obsidian/file', entry.filePath);
+                      e.dataTransfer.setData('text/plain', entry.filePath);
+                    }}
+                    onDragEnd={() => {
+                      // Close the panel after the drag completes so the browser
+                      // doesn't cancel the drag when the source element is removed.
+                      setShowUnscheduledPanel(false);
+                    }}
+                    onClick={() => {
+                      onUnscheduledEntryClick?.(entry.filePath);
+                      setShowUnscheduledPanel(false);
+                    }}
+                    style={{
+                      padding: '5px 8px',
+                      marginBottom: '2px',
+                      borderRadius: '4px',
+                      background: 'var(--background-secondary)',
+                      borderLeft: '3px solid var(--interactive-accent)',
+                      cursor: 'pointer',
+                      fontSize: '0.82em',
+                      color: 'var(--text-normal)',
+                      fontWeight: 500,
+                      wordBreak: 'break-word',
+                      userSelect: 'none',
+                      transition: 'background-color 0.1s',
+                    }}
+                    onMouseOver={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--background-modifier-hover)'; }}
+                    onMouseOut={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--background-secondary)'; }}
+                  >
+                    {entry.title}
+                  </div>
+                ))}
+              </div>,
+              document.body
+            )}
+          </>
         )}
       </div>,
       headerPortalTarget
@@ -396,31 +510,7 @@ export const CalendarNavigation: React.FC<CalendarNavigationProps> = ({
           </>
         )}
 
-        {/* Create event now button */}
-        {onCreateNow && (
-          <>
-            <div style={{ width: '1px', height: '16px', background: 'var(--background-modifier-border)', margin: '0 2px' }} />
-            <button
-              className="bases-calendar-nav-button"
-              aria-label="New event"
-              title="New event"
-              disabled={navigationLocked}
-              style={{
-                pointerEvents: 'auto',
-                opacity: navigationLocked ? 0.5 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '28px',
-                height: '28px',
-                padding: '4px',
-              }}
-              onClick={onCreateNow}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
-            </button>
-          </>
-        )}
+        {/* Create event button removed for consistency with base plugin */}
       </div>
     );
   };

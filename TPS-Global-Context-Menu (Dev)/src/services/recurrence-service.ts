@@ -172,6 +172,10 @@ export class RecurrenceService {
     private vaultOpenedAt: number = 0;
     private readonly startupGracePeriodMs: number = 3000; // 3 seconds
     private globalModalOpen: boolean = false;
+    /** Templates edited since the user last navigated away from them. */
+    private dirtyTemplates: Set<string> = new Set();
+    /** Path of the file in the currently active leaf, used to detect navigation away. */
+    private lastActiveFilePath: string | null = null;
 
     constructor(plugin: TPSGlobalContextMenuPlugin) {
         this.plugin = plugin;
@@ -224,19 +228,76 @@ export class RecurrenceService {
                         // Not actively typing - this is a background modification, skip it
                         return;
                     }
+                    // Mark recurring series templates as dirty so we can prompt on navigation away.
+                    // Only mark dirty when the template is the actively open file — background
+                    // writes (Companion, sync, etc.) should never trigger the update prompt.
+                    const cache = this.plugin.app.metadataCache.getFileCache(file);
+                    if (cache?.frontmatter?.isRecurrenceTemplate) {
+                        const activeFile = this.plugin.app.workspace.getActiveFile();
+                        if (activeFile?.path === file.path) {
+                            this.dirtyTemplates.add(file.path);
+                        }
+                        return; // templates are never split/completed — nothing else to do here
+                    }
                     await this.handleFileModification(file);
                 }
+            })
+        );
+
+        // Detect when the user navigates away from a dirty template
+        this.plugin.registerEvent(
+            this.plugin.app.workspace.on('active-leaf-change', (leaf) => {
+                const prevPath = this.lastActiveFilePath;
+                const newView = leaf?.view as any;
+                const newFile = newView?.file;
+                this.lastActiveFilePath = newFile instanceof TFile ? newFile.path : null;
+
+                if (!prevPath || !this.dirtyTemplates.has(prevPath)) return;
+                this.dirtyTemplates.delete(prevPath);
+
+                const templateFile = this.plugin.app.vault.getAbstractFileByPath(prevPath);
+                if (!(templateFile instanceof TFile)) return;
+
+                // Small delay so Obsidian finishes flushing the file to disk.
+                // If the user navigates back to the template before the timeout fires
+                // (e.g. quick tab switch), cancel the prompt — they're still editing.
+                window.setTimeout(() => {
+                    if (this.lastActiveFilePath === templateFile.path) return;
+                    void this.handleTemplateLeave(templateFile);
+                }, 600);
             })
         );
     }
 
     cleanup(): void {
         this.sessionTracker.clear();
+        this.dirtyTemplates.clear();
         for (const timer of this.pendingModifyTimers.values()) {
             window.clearTimeout(timer);
         }
         this.pendingModifyTimers.clear();
         // Global listener is registered to plugin, so it cleans up automatically on plugin unload.
+    }
+
+    /**
+     * Prompt the user when they navigate away from a modified series template,
+     * offering to push changes to all open (non-completed) instances.
+     */
+    private async handleTemplateLeave(templateFile: TFile): Promise<void> {
+        if (this.globalModalOpen) return;
+
+        this.globalModalOpen = true;
+        const confirmed = await new Promise<boolean>((resolve) => {
+            new TemplateUpdateModal(this.plugin.app, templateFile.basename, (result) => {
+                this.globalModalOpen = false;
+                resolve(result);
+            }).open();
+        });
+
+        if (confirmed) {
+            const count = await this.plugin.bulkEditService.applyTemplateToOpenInstances(templateFile);
+            new Notice(`Updated ${count} open instance${count !== 1 ? 's' : ''} of "${templateFile.basename}".`);
+        }
     }
 
     /**
@@ -304,12 +365,11 @@ export class RecurrenceService {
             : ['complete', 'wont-do'];
         if (completionStatuses.includes(fm.status)) return;
 
-        // 5. Auto-create next instance immediately when the body of a scheduled
-        //    recurring event is edited (no modal — the next instance is spawned in
-        //    the background so the user can keep editing the current one).
-        logger.log('[RecurrenceService] Body edit detected on recurring event — auto-creating next instance:', file.path);
+        // 5. Note the edit for session tracking so we don't fire duplicate events.
+        //    The next instance is created from the series template when this note
+        //    is completed — pre-splitting on every body edit is avoided intentionally.
+        logger.log('[RecurrenceService] Body edit on recurring event; next instance will be created on completion:', file.path);
         this.sessionTracker.markAsEdited(file.path);
-        await this.splitInstance(file);
     }
 
     /**
@@ -405,17 +465,23 @@ export class RecurrenceService {
 
         try {
             // 1. Create the NEXT instance (clone of this one, moved to next date)
-            await this.plugin.bulkEditService.createNextRecurrenceInstance(file, fm);
+            const created = await this.plugin.bulkEditService.createNextRecurrenceInstance(file, fm);
 
-            // 2. Remove recurrence rule from THIS file (making it a single instance exception)
-            // createNextRecurrenceInstance checks 'status', but here we are splitting an *active* task.
-            // We just want to remove the rrule.
-            await this.plugin.bulkEditService.updateFrontmatter([file], {
-                recurrenceRule: null,
-                recurrence: null
-            });
-
-            new Notice(`Split recurring event. Next instance created.`);
+            if (created) {
+                // 2. Remove recurrence rule from THIS file (making it a single instance exception).
+                // createNextRecurrenceInstance already calls clearRecurrenceRule internally;
+                // updateFrontmatter here is a belt-and-suspenders cleanup for any edge cases.
+                await this.plugin.bulkEditService.updateFrontmatter([file], {
+                    recurrenceRule: null,
+                    recurrence: null
+                });
+                new Notice(`Split recurring event. Next instance created.`);
+            } else {
+                // Creation failed — preserve the recurrence rule on the current file
+                // so the chain is not permanently broken.
+                logger.warn('[RecurrenceService] splitInstance: createNextRecurrenceInstance returned false; recurrence rule preserved on', file.path);
+                new Notice(`Could not create next recurrence instance. Recurrence rule preserved.`);
+            }
         } finally {
             this.activeSplits.delete(file.path);
         }
@@ -550,5 +616,61 @@ class RecurrenceUpdateModal extends Modal {
     onClose() {
         this.contentEl.empty();
         this.settle('cancel');
+    }
+}
+
+/**
+ * Simple yes/no confirmation shown when the user navigates away from an edited
+ * series template. Asks whether to propagate changes to all open instances.
+ */
+class TemplateUpdateModal extends Modal {
+    private seriesName: string;
+    private resolve: (confirmed: boolean) => void;
+    private settled = false;
+
+    constructor(app: App, seriesName: string, resolve: (confirmed: boolean) => void) {
+        super(app);
+        this.seriesName = seriesName;
+        this.resolve = resolve;
+    }
+
+    onOpen(): void {
+        this.modalEl.addClass('mod-tps-gcm');
+        const { contentEl } = this;
+        contentEl.empty();
+
+        contentEl.createEl('h3', { text: 'Update Recurring Instances?' });
+
+        const msg = contentEl.createEl('p');
+        msg.style.marginBottom = '16px';
+        msg.style.color = 'var(--text-muted)';
+        msg.textContent = `The series template "${this.seriesName}" was edited. Apply changes to all open (non-completed) instances?`;
+
+        const row = contentEl.createDiv();
+        row.style.display = 'flex';
+        row.style.gap = '8px';
+        row.style.justifyContent = 'flex-end';
+
+        const skipBtn = row.createEl('button', { text: 'Skip' });
+        skipBtn.addEventListener('click', () => this.finish(false));
+
+        const updateBtn = row.createEl('button', { text: 'Update Instances' });
+        updateBtn.addClass('mod-cta');
+        updateBtn.addEventListener('click', () => this.finish(true));
+    }
+
+    private finish(confirmed: boolean): void {
+        if (this.settled) return;
+        this.settled = true;
+        this.resolve(confirmed);
+        this.close();
+    }
+
+    onClose(): void {
+        this.contentEl.empty();
+        if (!this.settled) {
+            this.settled = true;
+            this.resolve(false);
+        }
     }
 }

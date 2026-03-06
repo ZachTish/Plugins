@@ -1,9 +1,9 @@
 {
-    "id": "tps-notifier",
-    "name": "TPS Notifier",
+    "id": "tps-messager",
+    "name": "TPS Messager",
     "version": "1.0.0",
     "minAppVersion": "0.15.0",
-    "description": "Obsidian plugin for notifications and reminders via ntfy.",
+    "description": "Push notification delivery for the TPS suite via ntfy.",
     "author": "Zach Tisherman",
     "authorUrl": "https://github.com/StartAutomating",
     "isDesktopOnly": false

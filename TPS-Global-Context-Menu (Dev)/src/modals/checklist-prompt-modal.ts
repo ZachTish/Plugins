@@ -1,6 +1,6 @@
 import { App, Modal, Setting, ButtonComponent } from "obsidian";
 
-export type ChecklistAction = "open" | "complete" | "progress" | "ignore" | "cancel";
+export type ChecklistAction = "open" | "complete" | "canceled" | "ignore" | "cancel";
 
 export class ChecklistPromptModal extends Modal {
     private items: string[];
@@ -63,13 +63,13 @@ export class ChecklistPromptModal extends Modal {
                     this.close();
                 }));
 
-        // Mark as [?]
+        // Mark as Canceled
         new Setting(buttonContainer)
             .setClass("tps-gcm-no-border")
             .addButton(btn => btn
-                .setButtonText('Mark as Question (- [?])')
+                .setButtonText('Mark as Canceled (- [-])')
                 .onClick(() => {
-                    this.onResult("progress");
+                    this.onResult("canceled");
                     this.close();
                 }));
 

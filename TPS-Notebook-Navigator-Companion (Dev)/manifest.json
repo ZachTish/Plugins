@@ -6,5 +6,6 @@
   "description": "Rule-based frontmatter icon/color automation for Notebook Navigator.",
   "author": "Codex",
   "authorUrl": "",
+  "main": "main.js",
   "isDesktopOnly": false
 }

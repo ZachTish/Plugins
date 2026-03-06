@@ -356,7 +356,19 @@ export class NoteOperationService {
             content = `---\ntitle: ${dateStr}\ntags: [dailynote]\n---\n\n${content}`;
         }
 
-        const created = await this.app.vault.create(path, content);
+        let created: TFile | null = null;
+        try {
+            created = await this.app.vault.create(path, content);
+        } catch (err: any) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (typeof msg === 'string' && msg.toLowerCase().includes('already exists')) {
+                const existing = this.app.vault.getAbstractFileByPath(path);
+                if (existing instanceof TFile) {
+                    created = existing;
+                }
+            }
+            if (!created) throw err;
+        }
 
         // Run Templater explicitly so <% tp.* %> expressions are evaluated.
         // This is safe to call even when Templater is not installed.

@@ -240,6 +240,17 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
+        new Setting(remSection)
+            .setName('Default All-Day Base Time')
+            .setDesc('Time of day (HH:MM) used as the trigger base for all-day events when a reminder has no per-rule "All-Day Base Time" set. Without this, all-day events default to midnight and notifications fire at the start of the day.')
+            .addText(text => text
+                .setPlaceholder('09:00')
+                .setValue(this.plugin.settings.defaultAllDayBaseTime || '09:00')
+                .onChange(async (value) => {
+                    this.plugin.settings.defaultAllDayBaseTime = value.trim();
+                    await this.plugin.saveSettings();
+                }));
+
         // Global ignore lists (collapsible)
         const ignoreDetails = remSection.createEl('details', { cls: 'tps-collapsible-subsection' });
         const ignoreSummary = ignoreDetails.createEl('summary', { text: 'Global Ignore Lists' });
@@ -309,6 +320,35 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     btn.setButtonText('Check Now');
                     btn.setDisabled(false);
                 }));
+
+        // ── Snooze ─────────────────────────────────────────────────
+        const snoozeSection = createCollapsibleSection(containerEl, {
+            title: 'Snooze',
+            defaultOpen: false
+        });
+
+        new Setting(snoozeSection)
+            .setName('Snooze Property')
+            .setDesc('Frontmatter property name for snooze time (e.g., reminderSnooze)')
+            .addText(text => text
+                .setPlaceholder('reminderSnooze')
+                .setValue(this.plugin.settings.snoozeProperty || 'reminderSnooze')
+                .onChange((value) => {
+                    this.plugin.settings.snoozeProperty = value.trim() || 'reminderSnooze';
+                    void debouncedSave();
+                }));
+
+        const snoozePresetsEl = createCollapsibleSection(snoozeSection, { title: 'Snooze Presets', cssClass: 'tps-collapsible-subsection' } as any);
+        this.renderSnoozeOptions(snoozePresetsEl);
+        new Setting(snoozePresetsEl)
+            .addButton((btn) =>
+                btn.setButtonText('Add Preset').setCta().onClick(async () => {
+                    if (!Array.isArray(this.plugin.settings.snoozeOptions)) this.plugin.settings.snoozeOptions = [];
+                    this.plugin.settings.snoozeOptions.push({ label: '15 Minutes', minutes: 15 });
+                    await this.plugin.saveSettings();
+                    this.renderSnoozeOptions(snoozePresetsEl);
+                })
+            );
 
         // ── Companion Scan ──────────────────────────────────────────
         const compSection = createCollapsibleSection(containerEl, {
@@ -426,18 +466,16 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             const ruleEl = container.createEl('details', { cls: 'tps-controller-reminder-rule' });
 
             const ruleSummary = ruleEl.createEl('summary');
-
             const labelSpan = ruleSummary.createSpan({ cls: 'tps-rule-label' });
-            const enabledDot = rem.enabled ? '🟢' : '⚫';
-            labelSpan.textContent = `${enabledDot} ${rem.label || `Rule ${index + 1}`}`;
-
+            labelSpan.textContent = `${rem.enabled ? '🟢' : '⚫'} ${rem.label || `Rule ${index + 1}`}`;
             const descSpan = ruleSummary.createSpan({ cls: 'tps-rule-desc' });
-            descSpan.textContent = `${rem.property} • ${rem.offsetMinutes >= 0 ? '+' : ''}${rem.offsetMinutes}min`;
+            descSpan.textContent = this.buildRuleDesc(rem);
 
             const ruleContent = ruleEl.createDiv({ cls: 'tps-rule-content' });
 
-            // ── General ──────────────────────────────────────
-            // Label
+            // ── General ──────────────────────────────────────────────────────
+            new Setting(ruleContent).setName('General').setHeading();
+
             new Setting(ruleContent)
                 .setName('Label')
                 .addText(text => text
@@ -446,9 +484,9 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         rem.label = value;
                         await this.plugin.saveSettings();
                         labelSpan.textContent = `${rem.enabled ? '🟢' : '⚫'} ${value || `Rule ${index + 1}`}`;
+                        descSpan.textContent = this.buildRuleDesc(rem);
                     }));
 
-            // Enabled
             new Setting(ruleContent)
                 .setName('Enabled')
                 .addToggle(toggle => toggle
@@ -459,14 +497,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         labelSpan.textContent = `${value ? '🟢' : '⚫'} ${rem.label || `Rule ${index + 1}`}`;
                     }));
 
-            // ── Trigger Settings ─────────────────────────────
-            const triggerGroup = ruleContent.createEl('details');
-            triggerGroup.setAttr('open', 'true');
-            const triggerSummary = triggerGroup.createEl('summary', { text: 'Trigger Settings' });
-            const triggerContent = triggerGroup.createDiv();
+            // ── Trigger ──────────────────────────────────────────────────────
+            new Setting(ruleContent).setName('Trigger').setHeading();
 
-            // Property
-            new Setting(triggerContent)
+            new Setting(ruleContent)
                 .setName('Property')
                 .setDesc('Frontmatter date/time property to trigger on.')
                 .addText(text => text
@@ -474,12 +508,34 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         rem.property = value;
                         await this.plugin.saveSettings();
+                        descSpan.textContent = this.buildRuleDesc(rem);
                     }));
 
-            // Offset
-            new Setting(triggerContent)
-                .setName('Offset (minutes)')
-                .setDesc('Negative = before, positive = after the property time.')
+            new Setting(ruleContent)
+                .setName('Mode')
+                .setDesc('Task fires once at the trigger time. Timeblock skips firing once the event end time has passed.')
+                .addDropdown(drop => drop
+                    .addOption('task', 'Task')
+                    .addOption('timeblock', 'Timeblock')
+                    .setValue(rem.mode || 'task')
+                    .onChange(async (value) => {
+                        rem.mode = value as 'task' | 'timeblock';
+                        await this.plugin.saveSettings();
+                    }));
+
+            new Setting(ruleContent)
+                .setName('Trigger at End')
+                .setDesc('Use the event end time (start + duration) as the trigger base instead of the start time.')
+                .addToggle(toggle => toggle
+                    .setValue(!!rem.triggerAtEnd)
+                    .onChange(async (value) => {
+                        rem.triggerAtEnd = value;
+                        await this.plugin.saveSettings();
+                    }));
+
+            new Setting(ruleContent)
+                .setName('Fixed Offset (minutes)')
+                .setDesc('Applied after the trigger base. Negative = before, positive = after. Used as fallback when Duration Offset is enabled but the property is missing or unparseable.')
                 .addText(text => text
                     .setValue(String(rem.offsetMinutes))
                     .onChange(async (value) => {
@@ -487,147 +543,94 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         if (!isNaN(num)) {
                             rem.offsetMinutes = num;
                             await this.plugin.saveSettings();
+                            descSpan.textContent = this.buildRuleDesc(rem);
                         }
                     }));
 
-            // Mode
-            new Setting(triggerContent)
-                .setName('Mode')
-                .addDropdown(drop => drop
-                    .addOption('task', 'Task (single trigger time)')
-                    .addOption('timeblock', 'Timeblock (start–end range)')
-                    .setValue(rem.mode || 'task')
+            // Duration offset — shown/hidden without full re-render
+            const durationOffsetWrapper = ruleContent.createDiv();
+            durationOffsetWrapper.style.display = rem.useSmartOffset ? '' : 'none';
+
+            new Setting(ruleContent)
+                .setName('Use Duration Offset')
+                .setDesc('Replace the fixed offset with a duration read from a frontmatter property (e.g. timeEstimate: "30m"). Falls back to Fixed Offset if the property is missing.')
+                .addToggle(toggle => toggle
+                    .setValue(!!rem.useSmartOffset)
                     .onChange(async (value) => {
-                        rem.mode = value as 'task' | 'timeblock';
+                        rem.useSmartOffset = value;
+                        durationOffsetWrapper.style.display = value ? '' : 'none';
+                        await this.plugin.saveSettings();
+                        descSpan.textContent = this.buildRuleDesc(rem);
+                    }));
+
+            new Setting(durationOffsetWrapper)
+                .setName('Duration Property')
+                .setDesc('Frontmatter property containing the duration value (e.g. timeEstimate).')
+                .addText(text => text
+                    .setPlaceholder('timeEstimate')
+                    .setValue(rem.smartOffsetProperty || '')
+                    .onChange(async (value) => {
+                        rem.smartOffsetProperty = value;
+                        await this.plugin.saveSettings();
+                        descSpan.textContent = this.buildRuleDesc(rem);
+                    }));
+
+            new Setting(durationOffsetWrapper)
+                .setName('Direction')
+                .setDesc('"After" fires duration-time after the trigger base. "Before" fires duration-time before.')
+                .addDropdown(drop => drop
+                    .addOption('add', 'After (base + duration)')
+                    .addOption('subtract', 'Before (base − duration)')
+                    .setValue(rem.smartOffsetOperator || 'add')
+                    .onChange(async (value) => {
+                        rem.smartOffsetOperator = value as any;
                         await this.plugin.saveSettings();
                     }));
 
-            // All-day filter
-            new Setting(triggerContent)
+            // ── All-Day Events ───────────────────────────────────────────────
+            new Setting(ruleContent).setName('All-Day Events').setHeading();
+
+            new Setting(ruleContent)
                 .setName('All-Day Filter')
+                .setDesc('Restrict this rule to all-day or timed events only.')
                 .addDropdown(drop => drop
                     .addOption('any', 'Any')
-                    .addOption('true', 'All-day only')
-                    .addOption('false', 'Non-all-day only')
+                    .addOption('true', 'All-day events only')
+                    .addOption('false', 'Timed events only')
                     .setValue(rem.allDayFilter || 'any')
                     .onChange(async (value) => {
                         rem.allDayFilter = value as any;
                         await this.plugin.saveSettings();
                     }));
 
-            // All-day base time
-            if (rem.allDayFilter === 'true' || rem.allDayFilter === 'any') {
-                new Setting(triggerContent)
-                    .setName('All-Day Base Time')
-                    .setDesc('Time of day to use as base for all-day events (HH:MM).')
-                    .addText(text => text
-                        .setPlaceholder('09:00')
-                        .setValue(rem.allDayBaseTime || '')
-                        .onChange(async (value) => {
-                            rem.allDayBaseTime = value;
-                            await this.plugin.saveSettings();
-                        }));
-            }
-
-            // Smart offset
-            new Setting(triggerContent)
-                .setName('Use Smart Offset')
-                .setDesc('Add/subtract another property value to calculate trigger time.')
-                .addToggle(toggle => toggle
-                    .setValue(!!rem.useSmartOffset)
-                    .onChange(async (value) => {
-                        rem.useSmartOffset = value;
-                        await this.plugin.saveSettings();
-                        this.renderReminderRules(container);
-                    }));
-
-            if (rem.useSmartOffset) {
-                new Setting(triggerContent)
-                    .setName('Smart Offset Property')
-                    .addText(text => text
-                        .setPlaceholder('timeEstimate')
-                        .setValue(rem.smartOffsetProperty || '')
-                        .onChange(async (value) => {
-                            rem.smartOffsetProperty = value;
-                            await this.plugin.saveSettings();
-                        }));
-
-                new Setting(triggerContent)
-                    .setName('Smart Offset Operator')
-                    .addDropdown(drop => drop
-                        .addOption('add', 'Add')
-                        .addOption('subtract', 'Subtract')
-                        .setValue(rem.smartOffsetOperator || 'add')
-                        .onChange(async (value) => {
-                            rem.smartOffsetOperator = value as any;
-                            await this.plugin.saveSettings();
-                        }));
-            }
-
-            // ── Repeat & Stop ────────────────────────────────
-            const repeatGroup = ruleContent.createEl('details');
-            const repeatSummary = repeatGroup.createEl('summary');
-            repeatSummary.textContent = rem.repeatUntilComplete
-                ? `Repeat & Stop — every ${rem.repeatIntervalMinutes}min`
-                : 'Repeat & Stop — single notification';
-            const repeatContent = repeatGroup.createDiv();
-
-            // Repeat
-            new Setting(repeatContent)
-                .setName('Repeat Until Complete')
-                .addToggle(toggle => toggle
-                    .setValue(rem.repeatUntilComplete)
-                    .onChange(async (value) => {
-                        rem.repeatUntilComplete = value;
-                        await this.plugin.saveSettings();
-                        this.renderReminderRules(container);
-                    }));
-
-            if (rem.repeatUntilComplete) {
-                new Setting(repeatContent)
-                    .setName('Repeat Interval (minutes)')
-                    .addText(text => text
-                        .setValue(String(rem.repeatIntervalMinutes))
-                        .onChange(async (value) => {
-                            const num = parseInt(value, 10);
-                            if (!isNaN(num) && num > 0) {
-                                rem.repeatIntervalMinutes = num;
-                                await this.plugin.saveSettings();
-                            }
-                        }));
-            }
-
-            // Stop conditions
-            new Setting(repeatContent)
-                .setName('Stop Conditions')
-                .setDesc('Comma-separated (e.g. "status: complete, status: wont-do").')
+            new Setting(ruleContent)
+                .setName('All-Day Base Time')
+                .setDesc('Time of day (HH:MM) used as the trigger base for all-day events. Leave blank to use the global default.')
                 .addText(text => text
-                    .setValue((rem.stopConditions || []).join(', '))
+                    .setPlaceholder('(uses global default)')
+                    .setValue(rem.allDayBaseTime || '')
                     .onChange(async (value) => {
-                        rem.stopConditions = value.split(',').map(s => s.trim()).filter(Boolean);
+                        rem.allDayBaseTime = value.trim();
                         await this.plugin.saveSettings();
                     }));
 
-            // ── Filtering ────────────────────────────────────
-            const filterGroup = ruleContent.createEl('details');
-            const filterSummary = filterGroup.createEl('summary', { text: 'Filtering' });
-            const filterContent = filterGroup.createDiv();
+            // ── Filtering ────────────────────────────────────────────────────
+            new Setting(ruleContent).setName('Filtering').setHeading();
 
-            // Required statuses
-            new Setting(filterContent)
+            new Setting(ruleContent)
                 .setName('Required Statuses')
-                .setDesc('Only trigger for files with one of these statuses (comma-separated).')
+                .setDesc('Only trigger for files with one of these statuses. Comma-separated (e.g. scheduled, in-progress).')
                 .addText(text => text
                     .setValue((rem.requiredStatuses || []).join(', '))
                     .onChange(async (value) => {
                         rem.requiredStatuses = value.split(',').map(s => s.trim()).filter(Boolean);
                         await this.plugin.saveSettings();
+                        descSpan.textContent = this.buildRuleDesc(rem);
                     }));
 
-            // Required paths (NEW)
-            new Setting(filterContent)
+            new Setting(ruleContent)
                 .setName('Required Folders')
-                .setDesc('Only trigger for files inside these folders (comma-separated prefixes). Leave empty for all folders.')
+                .setDesc('Only trigger for files inside these folders. Comma-separated prefixes. Empty = all folders.')
                 .addText(text => text
                     .setPlaceholder('Action Items, Markdown/Projects')
                     .setValue((rem.requiredPaths || []).join(', '))
@@ -636,10 +639,9 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // Ignore paths
-            new Setting(filterContent)
+            new Setting(ruleContent)
                 .setName('Ignore Paths')
-                .setDesc('Skip matching files (comma-separated). Supports wildcards (*/Trash/*) and regex (re:^System/).')
+                .setDesc('Skip matching files. Comma-separated. Supports wildcards (*/Trash/*) and regex (re:^System/).')
                 .addText(text => text
                     .setValue((rem.ignorePaths || []).join(', '))
                     .onChange(async (value) => {
@@ -647,10 +649,9 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // Ignore tags
-            new Setting(filterContent)
+            new Setting(ruleContent)
                 .setName('Ignore Tags')
-                .setDesc('Skip files with these tags (comma-separated).')
+                .setDesc('Skip files with these tags. Comma-separated.')
                 .addText(text => text
                     .setValue((rem.ignoreTags || []).join(', '))
                     .onChange(async (value) => {
@@ -658,10 +659,9 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // Ignore statuses
-            new Setting(filterContent)
+            new Setting(ruleContent)
                 .setName('Ignore Statuses')
-                .setDesc('Skip files with these statuses (comma-separated).')
+                .setDesc('Skip files with these statuses. Comma-separated.')
                 .addText(text => text
                     .setValue((rem.ignoreStatuses || []).join(', '))
                     .onChange(async (value) => {
@@ -669,13 +669,63 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // ── Notification ─────────────────────────────────
-            const notifGroup = ruleContent.createEl('details');
-            const notifSummary = notifGroup.createEl('summary', { text: 'Notification Template' });
-            const notifContent = notifGroup.createDiv();
+            // ── Repeat & Stop ────────────────────────────────────────────────
+            new Setting(ruleContent).setName('Repeat & Stop').setHeading();
 
-            // Title / Body templates
-            new Setting(notifContent)
+            // Repeat interval/maxRepeats — shown/hidden without full re-render
+            const repeatWrapper = ruleContent.createDiv();
+            repeatWrapper.style.display = rem.repeatUntilComplete ? '' : 'none';
+
+            new Setting(ruleContent)
+                .setName('Repeat Until Complete')
+                .setDesc('Re-send the notification on an interval until a stop condition is met.')
+                .addToggle(toggle => toggle
+                    .setValue(rem.repeatUntilComplete)
+                    .onChange(async (value) => {
+                        rem.repeatUntilComplete = value;
+                        repeatWrapper.style.display = value ? '' : 'none';
+                        await this.plugin.saveSettings();
+                    }));
+
+            new Setting(repeatWrapper)
+                .setName('Repeat Interval (minutes)')
+                .addText(text => text
+                    .setValue(String(rem.repeatIntervalMinutes))
+                    .onChange(async (value) => {
+                        const num = parseInt(value, 10);
+                        if (!isNaN(num) && num > 0) {
+                            rem.repeatIntervalMinutes = num;
+                            await this.plugin.saveSettings();
+                        }
+                    }));
+
+            new Setting(repeatWrapper)
+                .setName('Max Repeats')
+                .setDesc('Maximum number of repeat notifications. −1 = unlimited.')
+                .addText(text => text
+                    .setValue(String(rem.maxRepeats ?? -1))
+                    .onChange(async (value) => {
+                        const num = parseInt(value, 10);
+                        if (!isNaN(num) && (num === -1 || num > 0)) {
+                            rem.maxRepeats = num;
+                            await this.plugin.saveSettings();
+                        }
+                    }));
+
+            new Setting(ruleContent)
+                .setName('Stop Conditions')
+                .setDesc('Stop repeating when any condition matches. Format: "property: value" (e.g. status: complete). Comma-separated.')
+                .addText(text => text
+                    .setValue((rem.stopConditions || []).join(', '))
+                    .onChange(async (value) => {
+                        rem.stopConditions = value.split(',').map(s => s.trim()).filter(Boolean);
+                        await this.plugin.saveSettings();
+                    }));
+
+            // ── Notification ────────────────────────────────────────────────
+            new Setting(ruleContent).setName('Notification').setHeading();
+
+            new Setting(ruleContent)
                 .setName('Title')
                 .setDesc('Supports {filename}, {time}, {remaining}.')
                 .addText(text => text
@@ -685,7 +735,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            new Setting(notifContent)
+            new Setting(ruleContent)
                 .setName('Body')
                 .setDesc('Supports {filename}, {time}, {remaining}.')
                 .addText(text => text
@@ -695,7 +745,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // Delete button
+            // ── Actions ──────────────────────────────────────────────────────
             new Setting(ruleContent)
                 .addButton(btn => btn
                     .setButtonText('Delete Rule')
@@ -706,6 +756,20 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         this.renderReminderRules(container);
                     }));
         });
+    }
+
+    private buildRuleDesc(rem: PropertyReminder): string {
+        const parts: string[] = [rem.property];
+        if (rem.useSmartOffset && rem.smartOffsetProperty) {
+            const dir = rem.smartOffsetOperator === 'subtract' ? '−' : '+';
+            parts.push(`${dir}${rem.smartOffsetProperty}`);
+        } else {
+            parts.push(`${rem.offsetMinutes >= 0 ? '+' : ''}${rem.offsetMinutes}min`);
+        }
+        if (rem.requiredStatuses?.length) parts.push(rem.requiredStatuses.join('/'));
+        if (rem.triggerAtEnd) parts.push('at end');
+        if (rem.mode && rem.mode !== 'task') parts.push(rem.mode);
+        return parts.join(' • ');
     }
 
 
@@ -868,6 +932,38 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     .onChange(async (val) => {
                         calendar.autoCreateTemplate = val;
                         await save();
+                    }));
+        });
+    }
+
+    renderSnoozeOptions(container: HTMLElement): void {
+        container.empty();
+        const options = this.plugin.settings.snoozeOptions || [];
+        options.forEach((opt, index) => {
+            new Setting(container)
+                .setName(`Preset ${index + 1}`)
+                .addText(text => text
+                    .setPlaceholder('Label')
+                    .setValue(opt.label)
+                    .onChange(async (value) => {
+                        opt.label = value;
+                        await this.plugin.saveSettings();
+                    }))
+                .addText(text => text
+                    .setPlaceholder('Minutes')
+                    .setValue(String(opt.minutes))
+                    .onChange(async (value) => {
+                        const num = parseInt(value);
+                        if (!isNaN(num) && num > 0) {
+                            opt.minutes = num;
+                            await this.plugin.saveSettings();
+                        }
+                    }))
+                .addExtraButton(btn =>
+                    btn.setIcon('trash').setTooltip('Remove').onClick(async () => {
+                        options.splice(index, 1);
+                        await this.plugin.saveSettings();
+                        this.renderSnoozeOptions(container);
                     }));
         });
     }

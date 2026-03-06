@@ -245,6 +245,7 @@ export interface CalendarEntry {
   cssClasses?: string[];
   backgroundColor?: string;
   borderColor?: string;
+  isTask?: boolean;
 }
 
 interface CalendarReactViewProps {
@@ -272,6 +273,8 @@ interface CalendarReactViewProps {
     oldEnd?: Date,
   ) => Promise<void>;
   onCreateSelection?: (start: Date, end: Date) => Promise<void>;
+  unscheduledEntries?: { filePath: string; title: string }[];
+  onUnscheduledEntryClick?: (filePath: string) => void;
   onExternalDrop?: (filePath: string, start: Date, allDay: boolean) => Promise<void>;
   editable: boolean;
 
@@ -308,6 +311,7 @@ interface CalendarReactViewProps {
   dayHeaderShowDate?: boolean;
   timeFormatSetting?: "12h" | "24h";
   slotDurationMinutes?: number;
+  minEventHeight?: number;
   snapDurationMinutes?: number;
   defaultScrollTimeSetting?: string;
   showNowIndicator?: boolean;
@@ -345,6 +349,8 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   onEventDrop,
   onEventResize,
   onCreateSelection,
+  unscheduledEntries,
+  onUnscheduledEntryClick,
   onExternalDrop,
   editable,
 
@@ -381,6 +387,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   dayHeaderShowDate = true,
   timeFormatSetting = "12h",
   slotDurationMinutes = 30,
+  minEventHeight = 20,
   snapDurationMinutes = 5,
   defaultScrollTimeSetting = "08:00",
   showNowIndicator = true,
@@ -850,6 +857,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
     entries,
     allDayProperty,
     defaultEventDuration,
+    minEventHeight,
     tick,
   });
 
@@ -1410,6 +1418,12 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
       if (event.extendedProps.entryPath) {
         element.setAttribute('data-path', event.extendedProps.entryPath);
         element.classList.add('tps-calendar-entry');
+      }
+      if (!event.allDay) {
+        const eventMinHeight = event.extendedProps.minEventHeight as number | undefined;
+        if (typeof eventMinHeight === "number" && Number.isFinite(eventMinHeight) && eventMinHeight > 0) {
+          element.style.minHeight = `${eventMinHeight}px`;
+        }
       }
 
       let top = element.querySelector(".bases-calendar-time-top") as HTMLElement;
@@ -2148,6 +2162,8 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
         viewMode={viewMode}
         onViewModeChange={onViewModeChange}
         onCreateNow={onCreateSelection ? handleCreateNow : undefined}
+        onUnscheduledEntries={unscheduledEntries}
+        onUnscheduledEntryClick={onUnscheduledEntryClick}
       />
 
       {shouldEnableScrollHoursToggle && !hiddenTimeVisible && (

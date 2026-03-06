@@ -36,7 +36,20 @@ export class SyncRequestService {
         if (existing) {
             await this.app.vault.modify(existing as any, content);
         } else {
-            await this.app.vault.create(this.requestPath, content);
+            try {
+                await this.app.vault.create(this.requestPath, content);
+            } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                if (msg.toLowerCase().includes("already exists")) {
+                    // Race: another process created the file between the check and create.
+                    const nowExisting = this.app.vault.getAbstractFileByPath(this.requestPath);
+                    if (nowExisting) {
+                        await this.app.vault.modify(nowExisting as any, content);
+                    }
+                } else {
+                    throw e;
+                }
+            }
         }
 
         logger.log(`Sync request written: ${scope.join(", ")}`);

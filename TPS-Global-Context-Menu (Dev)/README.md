@@ -27,6 +27,8 @@ A richly featured context menu and note management system that attaches to every
 - Reorders checklist items on drag or button press.
 - Prompt to carry over incomplete checklist items to the next recurrence.
 - `ChecklistPromptModal` handles the interactive selection.
+- **Promote** — converts a checklist item into a linked child note using the configurable default status and priority (`defaultNewSubitemStatus` / `defaultNewSubitemPriority`).
+- **Checklist completion property** — automatically writes a boolean frontmatter property (`allChecked` by default, configurable) that is `true` only when every checklist item in the note is checked `[x]` or canceled `[-]`. Unchecked `[ ]` and question-mark `[?]` items keep it `false`. Enable and configure the key under **Automation & Features → Checklists & Tasks** in settings.
 
 ### Bulk Edit (`BulkEditService`)
 - Apply a frontmatter property change to many notes at once.
@@ -42,7 +44,7 @@ A richly featured context menu and note management system that attaches to every
 
 ### Mobile & Gesture Support
 - `GestureHandler` — long-press on mobile triggers the context menu.
-- Keyboard visibility detection suppresses menu pop-ups when the soft keyboard is open.
+- Keyboard visibility detection suppresses both the inline context menu bar and the subitems panel when the soft keyboard is open (controlled by the **Suppress menu on mobile keyboard** setting).
 
 ---
 

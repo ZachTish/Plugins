@@ -1,5 +1,5 @@
 {
-    "name": "tps-notifier",
+    "name": "tps-messager",
     "version": "1.0.0",
     "description": "Obsidian plugin for Telegram notifications",
     "main": "main.js",

@@ -200,6 +200,30 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           }),
       );
 
+    new Setting(generalSection)
+      .setName("Show unscheduled notes button")
+      .setDesc("Display a dropdown button in the calendar header listing notes in the current Base that have no start date set.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableUnscheduledView ?? true)
+          .onChange(async (value) => {
+            this.plugin.settings.enableUnscheduledView = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(generalSection)
+      .setName("Auto-focus backlinks panel on note open")
+      .setDesc("When you open a markdown note, automatically reveal the Backlinks panel in the sidebar.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.autoFocusBacklinksOnMdOpen ?? false)
+          .onChange(async (value) => {
+            this.plugin.settings.autoFocusBacklinksOnMdOpen = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
     const viewBehaviorSection = createCollapsibleSection(containerEl, {
       title: "🗓️ Calendar View Defaults",
       defaultOpen: false
@@ -397,9 +421,86 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           }),
       );
 
-    // 4. Appearance
+    // 4. Task Items
+    const taskItemsSection = createCollapsibleSection(containerEl, {
+      title: "📋 Task Items",
+      defaultOpen: false,
+    });
+
+    new Setting(taskItemsSection)
+      .setName("Show task items")
+      .setDesc("Render inline task checkboxes (- [ ]) that have Tasks-plugin date annotations as calendar events.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showTaskItems)
+          .onChange(async (value) => {
+            this.plugin.settings.showTaskItems = value;
+            await this.plugin.saveSettings();
+            taskItemDetails.style.display = value ? "" : "none";
+          }),
+      );
+
+    const taskItemDetails = taskItemsSection.createDiv({ cls: "tps-settings-indent" });
+    taskItemDetails.style.display = this.plugin.settings.showTaskItems ? "" : "none";
+
+    new Setting(taskItemDetails)
+      .setName("Date field")
+      .setDesc("Which date annotation to use to place tasks on the calendar.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({
+            any: "Any (due \u{1F4C5} \u2192 scheduled \u23F3 \u2192 start \u{1F6EB})",
+            due: "Due (\u{1F4C5})",
+            scheduled: "Scheduled (\u23F3)",
+            start: "Start (\u{1F6EB})",
+          })
+          .setValue(this.plugin.settings.taskDateField)
+          .onChange(async (value) => {
+            this.plugin.settings.taskDateField = value as any;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(taskItemDetails)
+      .setName("Show completed tasks")
+      .setDesc("Include tasks marked [x] as calendar events.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showCompletedTaskItems)
+          .onChange(async (value) => {
+            this.plugin.settings.showCompletedTaskItems = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(taskItemDetails)
+      .setName("Task color")
+      .setDesc("Default background color for task events.")
+      .addColorPicker((picker) =>
+        picker
+          .setValue(this.plugin.settings.taskItemColor)
+          .onChange(async (value) => {
+            this.plugin.settings.taskItemColor = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(taskItemDetails)
+      .setName("Folder filter")
+      .setDesc("Only scan notes in these folders (comma-separated). Leave blank to scan all notes.")
+      .addText((text) =>
+        text
+          .setPlaceholder("Markdown/Action Items, Markdown/Notes")
+          .setValue(this.plugin.settings.taskItemFolderFilter || "")
+          .onChange(async (value) => {
+            this.plugin.settings.taskItemFolderFilter = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    // 5. Appearance
     const appearanceSection = createCollapsibleSection(containerEl, {
-      title: "🎨 Appearance",
+      title: "\u{1F3A8} Appearance",
       defaultOpen: false
     });
 
@@ -458,6 +559,20 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           .setValue(String(this.plugin.settings.slotDuration))
           .onChange(async (value) => {
             this.plugin.settings.slotDuration = Number(value);
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(appearanceSection)
+      .setName("Minimum Event Height")
+      .setDesc("Minimum pixel height for timed events in the calendar grid.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(0, 120, 2)
+          .setValue(this.plugin.settings.minEventHeight)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.minEventHeight = value;
             await this.plugin.saveSettings();
           }),
       );

@@ -4,14 +4,18 @@ import { RRule } from 'rrule';
 
 export class RecurrenceModal extends Modal {
     currentRule: string;
-    onSubmit: (rule: string) => void;
+    onSubmit: (rule: string, endsOn: string | null) => void;
     previewEl: HTMLElement | null = null;
     startDate: Date;
+    private currentEndsOn: string;
+    private endsOnValue: string;
 
-    constructor(app: App, currentRule: string, startDate: Date, onSubmit: (rule: string) => void) {
+    constructor(app: App, currentRule: string, startDate: Date, currentEndsOn: string, onSubmit: (rule: string, endsOn: string | null) => void) {
         super(app);
         this.currentRule = currentRule;
         this.startDate = startDate;
+        this.currentEndsOn = currentEndsOn;
+        this.endsOnValue = currentEndsOn;
         this.onSubmit = onSubmit;
     }
 
@@ -79,7 +83,7 @@ export class RecurrenceModal extends Modal {
                     e.stopPropagation();
                     if (e.key === 'Enter') {
                         this.close();
-                        this.onSubmit(ruleInput.getValue());
+                        this.onSubmit(ruleInput.getValue(), this.endsOnValue.trim() || null);
                     }
                 });
                 text.inputEl.addEventListener('input', () => {
@@ -107,12 +111,24 @@ export class RecurrenceModal extends Modal {
         this.updatePreview(this.currentRule);
 
         new Setting(contentEl)
+            .setName('Ends on (optional)')
+            .setDesc('Stop creating new instances after this date. Leave blank to recur forever.')
+            .addText((text) => {
+                text.setValue(this.currentEndsOn);
+                text.setPlaceholder('YYYY-MM-DD');
+                text.inputEl.type = 'date';
+                text.inputEl.style.width = '100%';
+                text.inputEl.addEventListener('change', () => { this.endsOnValue = text.getValue(); });
+                text.inputEl.addEventListener('input', () => { this.endsOnValue = text.getValue(); });
+            });
+
+        new Setting(contentEl)
             .addButton((btn) => {
                 btn.setButtonText('Clear')
                     .setWarning()
                     .onClick(() => {
                         this.close();
-                        this.onSubmit('');
+                        this.onSubmit('', null);
                     });
             })
             .addButton((btn) => {
@@ -120,7 +136,7 @@ export class RecurrenceModal extends Modal {
                     .setCta()
                     .onClick(() => {
                         this.close();
-                        this.onSubmit(ruleInput.getValue());
+                        this.onSubmit(ruleInput.getValue(), this.endsOnValue.trim() || null);
                     });
             });
     }

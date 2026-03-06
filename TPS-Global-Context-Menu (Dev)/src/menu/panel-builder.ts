@@ -3268,11 +3268,13 @@ export class PanelBuilder {
 
     const targetPath = this.getUniqueMarkdownPath(folderPath, cleanedTitle);
     const escapedTitle = cleanedTitle.replace(/"/g, '\\"');
+    const defaultStatus = String(this.plugin.settings.defaultNewSubitemStatus || 'open').replace(/"/g, '\\"');
+    const defaultPriority = String(this.plugin.settings.defaultNewSubitemPriority || 'normal').replace(/"/g, '\\"');
     const frontmatterLines = [
       '---',
       `title: "${escapedTitle}"`,
-      'status: open',
-      'priority: normal',
+      `status: "${defaultStatus}"`,
+      `priority: "${defaultPriority}"`,
     ];
     if (this.plugin.settings.autoSaveFolderPath) {
       frontmatterLines.push(`folderPath: "${(folderPath || '/').replace(/"/g, '\\"')}"`);

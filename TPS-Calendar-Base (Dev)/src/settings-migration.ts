@@ -40,6 +40,8 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     previousStatusKey: "tpsCalendarPrevStatus",
     startProperty: "scheduled",
     endProperty: "timeEstimate",
+    enableUnscheduledView: true,
+    autoFocusBacklinksOnMdOpen: false,
     viewMode: "week",
     filterRangeAuto: false,
     contextDateEnabled: false,
@@ -58,11 +60,19 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     dayHeaderShowDate: true,
     timeFormat: "12h",
     slotDuration: 30,
+    minEventHeight: 20,
     snapDuration: 5,
     defaultScrollTime: "08:00",
     showNowIndicator: true,
     pastEventOpacity: 55,
     eventFontSize: "default",
+
+    // Task items
+    showTaskItems: false,
+    taskDateField: "any",
+    showCompletedTaskItems: false,
+    taskItemColor: "#f59e0b",
+    taskItemFolderFilter: "",
 };
 
 export function migrateSettings(stored: any): CalendarPluginSettings {
@@ -119,6 +129,11 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         : "monday";
     const navStepRaw = Number(stored?.navStep);
     const navStep = Number.isFinite(navStepRaw) && navStepRaw > 0 ? Math.round(navStepRaw) : 1;
+    const storedMinEventHeight = stored?.minEventHeight;
+    const minEventHeight =
+        typeof storedMinEventHeight === "number" && Number.isFinite(storedMinEventHeight)
+            ? Math.max(0, Math.min(120, storedMinEventHeight))
+            : 20;
 
     return {
         sidebarBasePath: stored?.sidebarBasePath ?? null,
@@ -173,10 +188,22 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         dayHeaderShowDate: stored?.dayHeaderShowDate ?? true,
         timeFormat: stored?.timeFormat === "24h" ? "24h" : "12h",
         slotDuration: [15, 30, 60].includes(stored?.slotDuration) ? stored.slotDuration : 30,
+        minEventHeight,
         snapDuration: [1, 5, 10, 15].includes(stored?.snapDuration) ? stored.snapDuration : 5,
         defaultScrollTime: typeof stored?.defaultScrollTime === "string" ? stored.defaultScrollTime : "08:00",
         showNowIndicator: stored?.showNowIndicator ?? true,
         pastEventOpacity: typeof stored?.pastEventOpacity === "number" ? Math.max(0, Math.min(100, stored.pastEventOpacity)) : 55,
         eventFontSize: ["small", "default", "large"].includes(stored?.eventFontSize) ? stored.eventFontSize : "default",
+
+        // Task items
+        showTaskItems: stored?.showTaskItems ?? false,
+        taskDateField: ["any", "due", "scheduled", "start"].includes(stored?.taskDateField) ? stored.taskDateField : "any",
+        showCompletedTaskItems: stored?.showCompletedTaskItems ?? false,
+        taskItemColor: typeof stored?.taskItemColor === "string" && stored.taskItemColor ? stored.taskItemColor : "#f59e0b",
+        taskItemFolderFilter: typeof stored?.taskItemFolderFilter === "string" ? stored.taskItemFolderFilter : "",
+
+        // Unscheduled view
+        enableUnscheduledView: stored?.enableUnscheduledView ?? true,
+        autoFocusBacklinksOnMdOpen: stored?.autoFocusBacklinksOnMdOpen ?? false,
     };
 }

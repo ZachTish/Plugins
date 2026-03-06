@@ -1360,10 +1360,15 @@ export class PersistentMenuManager {
   }
 
   private applyMenuVisibility(menuEl: HTMLElement): void {
+    const keyboardHidden =
+      this.keyboardVisible &&
+      Platform.isMobile &&
+      (this.plugin.settings.suppressMobileKeyboard ?? true);
     menuEl.classList.toggle('tps-gcm-gesture-collapsed', this.swipeCollapsed);
-    
-    // Also set inline styles for collapsed state to ensure consistency
-    if (this.swipeCollapsed) {
+    menuEl.classList.toggle('tps-gcm-menu--keyboard-hidden', keyboardHidden);
+
+    // Also set inline styles for collapsed/keyboard-hidden state to ensure consistency
+    if (this.swipeCollapsed || keyboardHidden) {
       menuEl.style.visibility = 'hidden';
       menuEl.style.opacity = '0';
       menuEl.style.pointerEvents = 'none';

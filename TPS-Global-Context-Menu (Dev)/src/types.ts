@@ -131,6 +131,8 @@ export interface TPSGlobalContextMenuSettings {
 
   // Checkbox behavior
   enableTaskCheckboxCycle: boolean;
+  enableChecklistCompletionProperty: boolean;
+  checklistCompletionPropertyKey: string;
 
   // Archive tag automation
   enableArchiveTagMove: boolean;
@@ -159,6 +161,8 @@ export interface TPSGlobalContextMenuSettings {
   // Default paths for new items
   defaultAttachmentsPath: string;
   defaultSubitemsPath: string;
+  defaultNewSubitemStatus: string;
+  defaultNewSubitemPriority: string;
 
   // Appearance (Navigator-style controls)
   menuTextScale: number;

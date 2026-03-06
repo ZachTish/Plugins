@@ -1,7 +1,7 @@
 import { App, TFile, normalizePath } from "obsidian";
 import * as logger from "../logger";
 import { mergeTagInputs, parseTagInput } from "../utils/tag-utils";
-import { getPluginSettings } from "../core";
+import { getPluginSettings, getPluginById } from "../core";
 
 /**
  * Tracks in-progress frontmatter operations to prevent race conditions
@@ -12,7 +12,10 @@ const pendingOperations = new Map<string, Promise<void>>();
 type ParentLinkFormat = "wikilink" | "markdown-title";
 
 function getGlobalContextMenuSettings(app: App): Record<string, any> {
-    return getPluginSettings(app, 'tps-global-context-menu');
+    // Try both legacy plugin ID and current (Dev) folder name
+    const plugin = getPluginById(app, 'tps-global-context-menu')
+                || getPluginById(app, 'TPS-Global-Context-Menu (Dev)');
+    return (plugin as any)?.settings || {};
 }
 
 function getParentLinkFormat(app: App): ParentLinkFormat {

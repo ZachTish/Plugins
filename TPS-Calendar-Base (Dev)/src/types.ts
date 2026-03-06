@@ -121,9 +121,21 @@ export interface CalendarPluginSettings {
     dayHeaderShowDate: boolean;
     timeFormat: "12h" | "24h";
     slotDuration: number;
+    minEventHeight: number;
     snapDuration: number;
     defaultScrollTime: string;
     showNowIndicator: boolean;
     pastEventOpacity: number;
     eventFontSize: "small" | "default" | "large";
+
+    // Task items
+    showTaskItems: boolean;
+    taskDateField: "any" | "due" | "scheduled" | "start";
+    showCompletedTaskItems: boolean;
+    taskItemColor: string;
+    taskItemFolderFilter: string;
+
+    // Unscheduled view
+    enableUnscheduledView: boolean;
+    autoFocusBacklinksOnMdOpen: boolean;
 }

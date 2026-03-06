@@ -46,6 +46,7 @@ interface UseCalendarEventsOptions {
   entries: CalendarEntry[];
   allDayProperty?: BasesPropertyId | null;
   defaultEventDuration: number;
+  minEventHeight: number;
   tick: number;
 }
 
@@ -57,6 +58,7 @@ export function useCalendarEvents({
   entries,
   allDayProperty,
   defaultEventDuration,
+  minEventHeight,
   tick,
 }: UseCalendarEventsOptions) {
   const basesEntryMap = useMemo(() => {
@@ -88,7 +90,9 @@ export function useCalendarEvents({
         ? tryGetValue(calEntry.entry, allDayProperty)
         : null;
       const normalizedAllDaySource = normalizeValue(allDaySource).trim().toLowerCase();
-      const isAllDay = calEntry.isExternal
+      const isAllDay = calEntry.isTask
+        ? true
+        : calEntry.isExternal
         ? !!calEntry.externalEvent?.isAllDay
         : ["true", "yes", "y", "1"].includes(normalizedAllDaySource);
 
@@ -111,19 +115,21 @@ export function useCalendarEvents({
           calEntryTitle: calEntry.title,
           status: calEntry.status,
           priorityColor: backgroundColor,
+          minEventHeight,
           isExternal: calEntry.isExternal,
           externalEvent: calEntry.externalEvent,
           isGhost: calEntry.isGhost,
           ghostDate: calEntry.ghostDate ? calEntry.ghostDate.toISOString() : undefined,
+          isTask: calEntry.isTask,
         },
         display: "block",
-        backgroundColor: calEntry.isGhost ? "rgba(100, 100, 100, 0.3)" : backgroundColor,
-        borderColor: calEntry.isGhost ? "rgba(100, 100, 100, 0.5)" : borderColor,
+        backgroundColor: backgroundColor,
+        borderColor: borderColor,
         textColor: "#ffffff",
         "data-priority-color": backgroundColor,
       };
     });
-  }, [entries, allDayProperty, tick]);
+  }, [entries, allDayProperty, minEventHeight, tick]);
 
   return { basesEntryMap, events };
 }

@@ -18,7 +18,7 @@
   "clearIconWhenNoMatch": true,
   "clearColorWhenNoMatch": true,
   "autoRemoveHiddenWhenNoMatch": true,
-  "debugLogging": false,
+  "debugLogging": true,
   "rules": [
     {
       "id": "rule-1770935476138-q9npl05",
@@ -37,6 +37,26 @@
           "field": "",
           "operator": "contains",
           "value": "archive"
+        }
+      ]
+    },
+    {
+      "id": "rule-1772492075794-iaajh7p",
+      "name": "",
+      "enabled": true,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide:file-question",
+      "color": "#b16159",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "folderPath",
+          "operator": "is",
+          "value": "/"
         }
       ]
     },
@@ -402,14 +422,8 @@
         {
           "source": "path",
           "field": "",
-          "operator": "starts",
-          "value": "Markdown/Action Items"
-        },
-        {
-          "source": "frontmatter",
-          "field": "status",
-          "operator": "is",
-          "value": ""
+          "operator": "contains",
+          "value": "Action Items"
         }
       ]
     },
@@ -500,7 +514,7 @@
         {
           "source": "extension",
           "field": "",
-          "operator": "is",
+          "operator": "contains",
           "value": "base"
         }
       ]
@@ -520,7 +534,7 @@
         {
           "source": "extension",
           "field": "",
-          "operator": "is",
+          "operator": "contains",
           "value": "canvas"
         }
       ]

@@ -23,6 +23,21 @@ A FullCalendar-powered time-grid calendar view that renders inside Obsidian **Ba
 - `ExternalEventModal` allows manually importing an external event as a vault note.
 - Parent-child links are written to the new note's frontmatter via `parent-child-link.ts`.
 
+### Task Items
+- Toggle on in Settings → 📋 Task Items to show inline checkbox tasks as all-day calendar events.
+- Parses Tasks-plugin emoji date annotations: 📅 due, ⏳ scheduled, 🛫 start.
+- Configurable: choose which date field to use (any / due / scheduled / start), whether to show completed tasks, a custom color, and an optional folder filter.
+- Task events appear in the all-day row with a □ icon; clicking opens the source note.
+- Uses Obsidian's metadata cache for a fast pre-filter (only files with checkbox list items are read).
+
+### Unscheduled Notes Sidebar
+- A dedicated sidebar view (icon: calendar-x) listing all notes in the current Base's filter that have no start date set.
+- Activated by clicking the calendar-x icon button that appears in the calendar header when the Base is open.
+- Can also be opened via the command "Open unscheduled notes sidebar".
+- The list auto-refreshes whenever the calendar data updates (e.g. after any frontmatter change).
+- Toggle the header button on/off in Settings → 🔄 General → "Show unscheduled notes button" (default: on).
+- Clicking any entry in the sidebar opens that note in the main editor.
+
 ### Style Rules
 - Define visual rules in settings: match frontmatter conditions → apply a color or CSS class.
 - `StyleRuleService` evaluates rules at render time for per-event styling without modifying files.

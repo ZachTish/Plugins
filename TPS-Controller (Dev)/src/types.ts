@@ -80,6 +80,17 @@ export interface AlertState {
     };
 }
 
+export interface OverdueItem {
+    file: TFile;
+    reminder: PropertyReminder;
+    propertyTime: number;
+    diff: string;
+    id: string;
+    title?: string;
+    body?: string;
+    snoozedUntil?: number;
+}
+
 // ============================================================================
 // Controller Settings
 // ============================================================================
@@ -113,6 +124,9 @@ export interface TPSControllerSettings {
     globalIgnoreTags: string[];
     globalIgnoreStatuses: string[];
     snoozeProperty: string;
+    snoozeOptions: { label: string; minutes: number }[];
+    /** Fallback base time (HH:MM) used for all-day events when no per-reminder allDayBaseTime is set. */
+    defaultAllDayBaseTime: string;
 
     // Companion Automation
     companionStartupScanEnabled: boolean;
@@ -155,6 +169,13 @@ export const DEFAULT_CONTROLLER_SETTINGS: TPSControllerSettings = {
     globalIgnoreTags: ["archive", "template"],
     globalIgnoreStatuses: ["complete", "wont-do"],
     snoozeProperty: "reminderSnooze",
+    defaultAllDayBaseTime: "09:00",
+    snoozeOptions: [
+        { label: '15 Minutes', minutes: 15 },
+        { label: '1 Hour', minutes: 60 },
+        { label: '4 Hours', minutes: 240 },
+        { label: '1 Day', minutes: 1440 },
+    ],
 
     // Companion Automation (DISABLED - companion plugin auto-applies on each device to prevent sync race conditions)
     companionStartupScanEnabled: false,

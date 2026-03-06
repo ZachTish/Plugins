@@ -99,8 +99,12 @@ export class ReminderEngine {
 
                     const isAllDaySafe = isAllDayEvent(propValue, fm);
 
-                    if (!reminder.triggerAtEnd && isAllDaySafe && reminder.allDayBaseTime) {
-                        const match = reminder.allDayBaseTime.match(/^(\d{1,2}):(\d{2})$/);
+                    // Per-reminder allDayBaseTime takes precedence; fall back to the global default.
+                    // Without this, all-day events parse to midnight and fire immediately.
+                    const effectiveAllDayBaseTime = reminder.allDayBaseTime || settings.defaultAllDayBaseTime;
+
+                    if (!reminder.triggerAtEnd && isAllDaySafe && effectiveAllDayBaseTime) {
+                        const match = effectiveAllDayBaseTime.match(/^(\d{1,2}):(\d{2})$/);
                         if (match) {
                             const [_, h, m] = match;
                             finalTriggerBase = moment(finalTriggerBase).set({
@@ -113,14 +117,19 @@ export class ReminderEngine {
                     }
 
                     // Smart Offset Logic
+                    // Only apply the smart offset when parseDuration returns a positive value.
+                    // If the property is missing or unparseable (returns 0), keep the
+                    // original offsetMinutes-based offset so the rule still fires on time.
                     if (reminder.useSmartOffset && reminder.smartOffsetProperty) {
                         const offsetVal = fm[reminder.smartOffsetProperty];
                         const durationMins = parseDuration(offsetVal);
-                        const smartMs = durationMins * 60 * 1000;
-                        if (reminder.smartOffsetOperator === 'add') {
-                            offsetMs = smartMs;
-                        } else {
-                            offsetMs = -smartMs;
+                        if (durationMins > 0) {
+                            const smartMs = durationMins * 60 * 1000;
+                            if (reminder.smartOffsetOperator === 'add') {
+                                offsetMs = smartMs;
+                            } else {
+                                offsetMs = -smartMs;
+                            }
                         }
                     }
 

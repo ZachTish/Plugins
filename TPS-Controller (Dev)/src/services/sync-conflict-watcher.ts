@@ -183,7 +183,13 @@ export class SyncConflictWatcher {
             if (parent) {
                 await this.ensureFolderExists(parent);
             }
-            await this.app.vault.createFolder(normalizedPath);
+            try {
+                await this.app.vault.createFolder(normalizedPath);
+            } catch (e: any) {
+                if (!(typeof e.message === "string" && e.message.toLowerCase().includes("already exists"))) {
+                    throw e;
+                }
+            }
         }
     }
 }
