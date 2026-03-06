@@ -1005,7 +1005,10 @@ export class BulkEditService {
                 return false;
             }
 
-            const newStatus = this.plugin.settings.recurrenceDefaultStatus || 'open';
+            // Only use a configured default status — never fall back to a hardcoded value.
+            // If the setting is empty the new instance inherits whatever the template had
+            // (or nothing, if the template has no status field).
+            const newStatus = (this.plugin.settings.recurrenceDefaultStatus || '').trim();
 
             // Validate inputs before writing to frontmatter
             if (!newScheduled || typeof newScheduled !== 'string') {
@@ -1014,14 +1017,17 @@ export class BulkEditService {
             if (!baseName || typeof baseName !== 'string' || baseName.length > 255) {
                 throw new Error(`Invalid title value: ${baseName}`);
             }
-            if (!newStatus || typeof newStatus !== 'string') {
-                throw new Error(`Invalid status value: ${newStatus}`);
-            }
 
             await this.plugin.app.fileManager.processFrontMatter(newFile, (fm) => {
                 this.setFrontmatterValueCaseInsensitive(fm, 'scheduled', newScheduled);
                 this.setFrontmatterValueCaseInsensitive(fm, 'title', baseName);
-                this.setFrontmatterValueCaseInsensitive(fm, 'status', newStatus);
+                // Only write status if a default was explicitly configured
+                if (newStatus) {
+                    this.setFrontmatterValueCaseInsensitive(fm, 'status', newStatus);
+                } else {
+                    // Ensure no stale status is inherited from the template file content
+                    this.deleteFrontmatterValueCaseInsensitive(fm, 'status');
+                }
 
                 // Restore the recurrenceTemplate back-link (may be absent if content
                 // was read from the series template which intentionally omits it).

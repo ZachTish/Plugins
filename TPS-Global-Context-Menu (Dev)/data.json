@@ -237,7 +237,7 @@
     "note",
     "blocked"
   ],
-  "recurrenceDefaultStatus": "open",
+  "recurrenceDefaultStatus": "",
   "recurringTemplateFolder": "Templates",
   "enableAutoRename": true,
   "autoSyncTitleFromFilename": true,
