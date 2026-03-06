@@ -1,0 +1,9 @@
+.tps-kanban-root { padding: 8px; }
+.tps-kanban-board { display:flex; gap:12px; align-items:flex-start; }
+.tps-kanban-lane { background: var(--background-secondary); padding:8px; border-radius:6px; width:280px; min-height:120px; display:flex; flex-direction:column; }
+.tps-kanban-lane-header { font-weight:600; margin-bottom:6px }
+.tps-kanban-cards { display:flex; flex-direction:column; gap:6px }
+.tps-kanban-card { background: var(--background-primary); padding:8px; border-radius:4px; cursor:grab; box-shadow: var(--background-modifier-shadow); }
+.tps-kanban-drop-target { outline: 2px dashed var(--interactive-accent); }
+.tps-kanban-lane-drop-target { outline: 3px dashed var(--interactive-accent); }
+.tps-kanban-controls { margin-top:12px }
