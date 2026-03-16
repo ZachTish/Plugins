@@ -45,21 +45,23 @@ function getFrontmatterValueCaseInsensitive(target: Record<string, any>, key: st
 }
 
 function setFrontmatterValueCaseInsensitive(target: Record<string, any>, key: string, value: any): void {
-    const existing = findFrontmatterKeyCaseInsensitive(target, key);
-    if (existing) {
-        target[existing] = value;
-        if (existing !== key && key in target) {
-            delete target[key];
+    const normalized = normalizeFrontmatterKey(key);
+    if (!normalized) return;
+    for (const candidate of Object.keys(target || {})) {
+        if (normalizeFrontmatterKey(candidate) === normalized) {
+            delete target[candidate];
         }
-        return;
     }
     target[key] = value;
 }
 
 function deleteFrontmatterValueCaseInsensitive(target: Record<string, any>, key: string): void {
-    const existing = findFrontmatterKeyCaseInsensitive(target, key);
-    if (existing) {
-        delete target[existing];
+    const normalized = normalizeFrontmatterKey(key);
+    if (!normalized) return;
+    for (const candidate of Object.keys(target || {})) {
+        if (normalizeFrontmatterKey(candidate) === normalized) {
+            delete target[candidate];
+        }
     }
 }
 

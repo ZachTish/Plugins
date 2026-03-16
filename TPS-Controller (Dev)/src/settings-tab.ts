@@ -2,10 +2,32 @@ import { App, Notice, PluginSettingTab, Setting, debounce } from 'obsidian';
 import type TPSControllerPlugin from './main';
 import type { PropertyReminder, ExternalCalendarConfig } from './types';
 import { normalizeCalendarUrl } from './utils';
-import { createCollapsibleSection } from './utils/section-helpers';
 import { renderListWithControls } from './utils/list-renderer';
 
 const createCalendarId = () => `calendar-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+const createCollapsibleSection = (
+    parent: HTMLElement,
+    title: string,
+    description?: string,
+    defaultOpen = false
+): HTMLElement => {
+    const details = parent.createEl('details', { cls: 'tps-collapsible-section' });
+    if (defaultOpen) {
+        details.setAttr('open', 'true');
+    }
+
+    const summary = details.createEl('summary', { cls: 'tps-collapsible-section-summary' });
+    summary.createSpan({ cls: 'tps-collapsible-section-title', text: title });
+
+    if (description) {
+        details.createEl('p', {
+            cls: 'tps-collapsible-section-description',
+            text: description
+        });
+    }
+
+    return details.createDiv({ cls: 'tps-collapsible-section-content' });
+};
 
 // ============================================================================
 // Controller Settings Tab
@@ -26,12 +48,29 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         const debouncedSave = debounce(() => this.plugin.saveSettings(), 300);
 
         containerEl.createEl('h2', { text: 'TPS Controller Settings' });
+        containerEl.createEl('p', {
+            text: 'This is the suite-level owner for background automation, calendar sync, reminders, and shared calendar field mappings. Other TPS plugins should stay focused on UI and local interaction.',
+            cls: 'setting-item-description'
+        });
+
+        const createMainCategory = (title: 'Features' | 'Rules' | 'Interaction' | 'UI Display'): HTMLElement => {
+            const category = containerEl.createDiv({ cls: 'tps-settings-main-category' });
+            category.createEl('h3', { text: title });
+            return category.createDiv({ cls: 'tps-settings-main-content' });
+        };
+
+        const featuresCategory = createMainCategory('Features');
+        const rulesCategory = createMainCategory('Rules');
+        const interactionCategory = createMainCategory('Interaction');
+        const uiDisplayCategory = createMainCategory('UI Display');
 
         // ── Device Role ─────────────────────────────────────────────
-        const roleSection = createCollapsibleSection(containerEl, {
-            title: 'Device Role',
-            defaultOpen: false
-        });
+        const roleSection = createCollapsibleSection(
+            interactionCategory,
+            'Device Role',
+            'Choose whether this device runs suite-level automation or stays in normal user mode.',
+            true
+        );
 
         const roleDesc = roleSection.createDiv({ cls: 'tps-controller-role-desc' });
         const updateRoleDesc = (role: string) => {
@@ -62,10 +101,12 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                 }));
 
         // ── External Calendars ─────────────────────────────────────
-        const extCalSection = createCollapsibleSection(containerEl, {
-            title: 'External Calendars',
-            defaultOpen: false
-        });
+        const extCalSection = createCollapsibleSection(
+            featuresCategory,
+            'External Calendars',
+            'Calendar sources and auto-create destinations. These are the controller settings most users will change first.',
+            true
+        );
         const calendarsContainer = extCalSection.createDiv();
         this.renderExternalCalendars(calendarsContainer);
 
@@ -93,10 +134,12 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                 }));
 
         // ── Calendar Sync Rules ────────────────────────────────────
-        const calSection = createCollapsibleSection(containerEl, {
-            title: 'Calendar Sync Rules',
-            defaultOpen: false
-        });
+        const calSection = createCollapsibleSection(
+            rulesCategory,
+            'Calendar Sync Rules',
+            'Global sync behavior for external calendars.',
+            true
+        );
 
         new Setting(calSection)
             .setName('Sync Interval (minutes)')
@@ -166,10 +209,12 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     void debouncedSave();
                 }));
 
-        // Calendar Frontmatter Keys (collapsible)
-        const fmDetails = calSection.createEl('details', { cls: 'tps-collapsible-subsection' });
-        const fmSummary = fmDetails.createEl('summary', { text: 'Frontmatter Keys' });
-        const fmContent = fmDetails.createDiv({ cls: 'tps-rule-content' });
+        const fmContent = createCollapsibleSection(
+            calSection,
+            'Frontmatter Keys',
+            'All shared calendar field names are grouped together here.',
+            true
+        );
 
         const fmKeys: { key: keyof typeof this.plugin.settings; label: string; placeholder: string }[] = [
             { key: 'eventIdKey', label: 'Event ID Key', placeholder: 'externalEventId' },
@@ -213,12 +258,34 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                 }));
 
         // ── Reminder Rules ──────────────────────────────────────────
-        const remSection = createCollapsibleSection(containerEl, {
-            title: 'Reminder Rules',
-            defaultOpen: false
-        });
+        const remSection = createCollapsibleSection(
+            rulesCategory,
+            'Reminder Rules',
+            'Polling, ignore lists, and per-rule reminders.',
+            true
+        );
+
+        const reminderConfigContent = remSection.createDiv({ cls: 'tps-reminder-config-content' });
 
         new Setting(remSection)
+            .setName('Enable Reminders')
+            .setDesc('Master toggle for reminder evaluation and notifications.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.enableReminders ?? true)
+                .onChange(async (value) => {
+                    this.plugin.settings.enableReminders = value;
+                    await this.plugin.saveSettings();
+                    this.display();
+                }));
+
+        if (!(this.plugin.settings.enableReminders ?? true)) {
+            remSection.createEl('p', {
+                text: 'Reminders are disabled. Enable the master toggle to show reminder configuration.',
+                cls: 'setting-item-description'
+            });
+        } else {
+
+        new Setting(reminderConfigContent)
             .setName('Check Interval (minutes)')
             .setDesc('How often to evaluate reminder rules.')
             .addSlider(slider => slider
@@ -230,7 +297,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(remSection)
+        new Setting(reminderConfigContent)
             .setName('Batch Notifications')
             .setDesc('Send one combined notification for multiple triggers.')
             .addToggle(toggle => toggle
@@ -240,7 +307,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(remSection)
+        new Setting(reminderConfigContent)
             .setName('Default All-Day Base Time')
             .setDesc('Time of day (HH:MM) used as the trigger base for all-day events when a reminder has no per-rule "All-Day Base Time" set. Without this, all-day events default to midnight and notifications fire at the start of the day.')
             .addText(text => text
@@ -251,10 +318,138 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        // Global ignore lists (collapsible)
-        const ignoreDetails = remSection.createEl('details', { cls: 'tps-collapsible-subsection' });
-        const ignoreSummary = ignoreDetails.createEl('summary', { text: 'Global Ignore Lists' });
-        const ignoreContent = ignoreDetails.createDiv({ cls: 'tps-rule-content' });
+        const kanbanReminderContent = createCollapsibleSection(
+            reminderConfigContent,
+            'Kanban Task Reminders',
+            'Configure how checkbox cards in Kanban board notes are interpreted for reminders and overdue actions.',
+            false
+        );
+
+        new Setting(kanbanReminderContent)
+            .setName('Enable Kanban Task Targets')
+            .setDesc('When enabled, reminder rules evaluate checkbox card lines inside Kanban board files as independent reminder targets.')
+            .addToggle(toggle => toggle
+                .setValue(!!this.plugin.settings.kanbanTaskReminders.enabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.enabled = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(kanbanReminderContent)
+            .setName('Include Board File Target')
+            .setDesc('Also evaluate the Kanban board note frontmatter itself as a reminder target. Disable for strictly card-level reminders.')
+            .addToggle(toggle => toggle
+                .setValue(!!this.plugin.settings.kanbanTaskReminders.includeBoardFileTarget)
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.includeBoardFileTarget = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(kanbanReminderContent)
+            .setName('Parse Inline Properties')
+            .setDesc('Read card-level inline properties (e.g. [scheduled:: 2026-03-13 09:00]).')
+            .addToggle(toggle => toggle
+                .setValue(!!this.plugin.settings.kanbanTaskReminders.parseInlineProperties)
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.parseInlineProperties = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(kanbanReminderContent)
+            .setName('Parse Kanban Date Tokens')
+            .setDesc('Read Kanban scheduling tokens (@{date} and @@{time}) as reminder trigger dates.')
+            .addToggle(toggle => toggle
+                .setValue(!!this.plugin.settings.kanbanTaskReminders.parseKanbanDateTokens)
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.parseKanbanDateTokens = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(kanbanReminderContent)
+            .setName('Parse Tasks Emoji Dates')
+            .setDesc('Read Tasks-style emoji dates on cards (📅 due, ⏳ scheduled, 🛫 start).')
+            .addToggle(toggle => toggle
+                .setValue(!!this.plugin.settings.kanbanTaskReminders.parseTasksEmojiDates)
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.parseTasksEmojiDates = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(kanbanReminderContent)
+            .setName('Status Property Key')
+            .setDesc('Inline property key used for task status writes and status filtering on Kanban task cards.')
+            .addText(text => text
+                .setPlaceholder('status')
+                .setValue(this.plugin.settings.kanbanTaskReminders.statusProperty || 'status')
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.statusProperty = value.trim() || 'status';
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(kanbanReminderContent)
+            .setName('Complete Status Value')
+            .setDesc('Status value written when marking a Kanban task reminder complete.')
+            .addText(text => text
+                .setPlaceholder('complete')
+                .setValue(this.plugin.settings.kanbanTaskReminders.completeStatusValue || 'complete')
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.completeStatusValue = value.trim() || 'complete';
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(kanbanReminderContent)
+            .setName("Won't-Do Status Value")
+            .setDesc("Status value written when marking a Kanban task reminder won't-do.")
+            .addText(text => text
+                .setPlaceholder('wont-do')
+                .setValue(this.plugin.settings.kanbanTaskReminders.wontDoStatusValue || 'wont-do')
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.wontDoStatusValue = value.trim() || 'wont-do';
+                    await this.plugin.saveSettings();
+                }));
+
+        const parseCsv = (value: string): string[] =>
+            value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+        new Setting(kanbanReminderContent)
+            .setName('Scheduled Property Aliases')
+            .setDesc('Comma-separated property names that should map to scheduled time parsing for Kanban cards.')
+            .addText(text => text
+                .setPlaceholder('scheduled, start')
+                .setValue((this.plugin.settings.kanbanTaskReminders.scheduledPropertyAliases || []).join(', '))
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.scheduledPropertyAliases = parseCsv(value);
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(kanbanReminderContent)
+            .setName('Due Property Aliases')
+            .setDesc('Comma-separated property names that should map to due-date parsing for Kanban cards.')
+            .addText(text => text
+                .setPlaceholder('due, duedate')
+                .setValue((this.plugin.settings.kanbanTaskReminders.duePropertyAliases || []).join(', '))
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.duePropertyAliases = parseCsv(value);
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(kanbanReminderContent)
+            .setName('Start Property Aliases')
+            .setDesc('Comma-separated property names that should map to start-date parsing for Kanban cards.')
+            .addText(text => text
+                .setPlaceholder('start, startdate')
+                .setValue((this.plugin.settings.kanbanTaskReminders.startPropertyAliases || []).join(', '))
+                .onChange(async (value) => {
+                    this.plugin.settings.kanbanTaskReminders.startPropertyAliases = parseCsv(value);
+                    await this.plugin.saveSettings();
+                }));
+
+        const ignoreContent = createCollapsibleSection(
+            reminderConfigContent,
+            'Global Ignore Lists',
+            'Shared filters applied before individual reminder rules.',
+            false
+        );
 
         new Setting(ignoreContent)
             .setName('Ignore Paths')
@@ -290,10 +485,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                 }));
 
         // Individual reminder rules
-        const rulesContainer = remSection.createDiv({ cls: 'tps-controller-reminder-rules' });
+        const rulesContainer = reminderConfigContent.createDiv({ cls: 'tps-controller-reminder-rules' });
         this.renderReminderRules(rulesContainer);
 
-        new Setting(remSection)
+        new Setting(reminderConfigContent)
             .addButton(btn => btn
                 .setButtonText('Add Reminder Rule')
                 .setCta()
@@ -303,7 +498,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     this.renderReminderRules(rulesContainer);
                 }));
 
-        new Setting(remSection)
+        new Setting(reminderConfigContent)
             .setName('Run Reminder Check')
             .setDesc('Evaluate all reminder rules now.')
             .addButton(btn => btn
@@ -320,12 +515,15 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     btn.setButtonText('Check Now');
                     btn.setDisabled(false);
                 }));
+        }
 
         // ── Snooze ─────────────────────────────────────────────────
-        const snoozeSection = createCollapsibleSection(containerEl, {
-            title: 'Snooze',
-            defaultOpen: false
-        });
+        const snoozeSection = createCollapsibleSection(
+            rulesCategory,
+            'Snooze',
+            'Reminder snooze field configuration and presets.',
+            false
+        );
 
         new Setting(snoozeSection)
             .setName('Snooze Property')
@@ -338,7 +536,12 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     void debouncedSave();
                 }));
 
-        const snoozePresetsEl = createCollapsibleSection(snoozeSection, { title: 'Snooze Presets', cssClass: 'tps-collapsible-subsection' } as any);
+        const snoozePresetsEl = createCollapsibleSection(
+            snoozeSection,
+            'Snooze Presets',
+            'Quick snooze durations shown in the reminder UI.',
+            true
+        );
         this.renderSnoozeOptions(snoozePresetsEl);
         new Setting(snoozePresetsEl)
             .addButton((btn) =>
@@ -351,10 +554,12 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             );
 
         // ── Companion Scan ──────────────────────────────────────────
-        const compSection = createCollapsibleSection(containerEl, {
-            title: 'Companion Automation',
-            defaultOpen: false
-        });
+        const compSection = createCollapsibleSection(
+            featuresCategory,
+            'Companion Automation',
+            'Optional integration that lets Controller trigger companion scans.',
+            false
+        );
 
         new Setting(compSection)
             .setName('Enable Controller Companion Scans')
@@ -366,43 +571,47 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(compSection)
-            .setName('Startup Delay (ms)')
-            .setDesc('Delay before the startup vault scan begins.')
-            .addText(text => text
-                .setPlaceholder('800')
-                .setValue(String(this.plugin.settings.companionStartupDelayMs))
-                .onChange(async (value) => {
-                    const parsed = parseInt(value, 10);
-                    if (!isNaN(parsed) && parsed >= 0) {
-                        this.plugin.settings.companionStartupDelayMs = Math.min(parsed, 30000);
-                        await this.plugin.saveSettings();
-                    }
-                }));
+        if (this.plugin.settings.companionStartupScanEnabled) {
+            new Setting(compSection)
+                .setName('Startup Delay (ms)')
+                .setDesc('Delay before the startup vault scan begins.')
+                .addText(text => text
+                    .setPlaceholder('800')
+                    .setValue(String(this.plugin.settings.companionStartupDelayMs))
+                    .onChange(async (value) => {
+                        const parsed = parseInt(value, 10);
+                        if (!isNaN(parsed) && parsed >= 0) {
+                            this.plugin.settings.companionStartupDelayMs = Math.min(parsed, 30000);
+                            await this.plugin.saveSettings();
+                        }
+                    }));
 
-        new Setting(compSection)
-            .setName('Run Companion Scan')
-            .setDesc('Trigger a companion vault scan now.')
-            .addButton(btn => btn
-                .setButtonText('Scan Now')
-                .onClick(async () => {
-                    btn.setButtonText('Scanning…');
-                    btn.setDisabled(true);
-                    try {
-                        await (this.plugin as any).runCompanionScan();
-                        new Notice('Companion scan complete.');
-                    } catch (e) {
-                        new Notice('Companion scan failed.');
-                    }
-                    btn.setButtonText('Scan Now');
-                    btn.setDisabled(false);
-                }));
+            new Setting(compSection)
+                .setName('Run Companion Scan')
+                .setDesc('Trigger a companion vault scan now.')
+                .addButton(btn => btn
+                    .setButtonText('Scan Now')
+                    .onClick(async () => {
+                        btn.setButtonText('Scanning…');
+                        btn.setDisabled(true);
+                        try {
+                            await (this.plugin as any).runCompanionScan();
+                            new Notice('Companion scan complete.');
+                        } catch (e) {
+                            new Notice('Companion scan failed.');
+                        }
+                        btn.setButtonText('Scan Now');
+                        btn.setDisabled(false);
+                    }));
+        }
 
         // ── Debug ───────────────────────────────────────────────────
-        const debugSection = createCollapsibleSection(containerEl, {
-            title: 'Debug',
-            defaultOpen: false
-        });
+        const debugSection = createCollapsibleSection(
+            uiDisplayCategory,
+            'Debug',
+            'Low-frequency troubleshooting controls.',
+            false
+        );
 
         new Setting(debugSection)
             .setName('Enable Logging')
@@ -463,12 +672,11 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         }
 
         reminders.forEach((rem, index) => {
-            const ruleEl = container.createEl('details', { cls: 'tps-controller-reminder-rule' });
-
-            const ruleSummary = ruleEl.createEl('summary');
-            const labelSpan = ruleSummary.createSpan({ cls: 'tps-rule-label' });
+            const ruleEl = container.createDiv({ cls: 'tps-controller-reminder-rule' });
+            const ruleHeader = ruleEl.createDiv({ cls: 'tps-rule-summary-row' });
+            const labelSpan = ruleHeader.createSpan({ cls: 'tps-rule-label' });
             labelSpan.textContent = `${rem.enabled ? '🟢' : '⚫'} ${rem.label || `Rule ${index + 1}`}`;
-            const descSpan = ruleSummary.createSpan({ cls: 'tps-rule-desc' });
+            const descSpan = ruleHeader.createSpan({ cls: 'tps-rule-desc' });
             descSpan.textContent = this.buildRuleDesc(rem);
 
             const ruleContent = ruleEl.createDiv({ cls: 'tps-rule-content' });
@@ -867,19 +1075,12 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await save();
                     }));
 
-            // Auto-Create Config (The missing piece!)
-            const acDetails = card.createEl("details");
-            acDetails.style.marginTop = "8px";
-            acDetails.style.border = "1px solid var(--background-modifier-border)";
-            acDetails.style.padding = "8px";
-            acDetails.style.borderRadius = "4px";
-
-            const acSummary = acDetails.createEl("summary", { text: "Auto-Create Settings" });
-            acSummary.style.cursor = "pointer";
-            acSummary.style.fontWeight = "600";
-
-            const acContent = acDetails.createDiv();
-            acContent.style.paddingTop = "8px";
+            const acContent = card.createDiv();
+            acContent.style.marginTop = "8px";
+            acContent.style.border = "1px solid var(--background-modifier-border)";
+            acContent.style.padding = "8px";
+            acContent.style.borderRadius = "4px";
+            acContent.createEl("h5", { text: "Auto-Create Settings" });
 
             new Setting(acContent)
                 .setName("Enable Auto-Create")

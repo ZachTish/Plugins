@@ -1,31 +1,6 @@
 {
   "version": 1,
   "ops": {
-    "rc-1wcajy7|2026-02-27T00:00:00": {
-      "state": "complete",
-      "targetPath": "Action Items/Events/timesheet 2026-02-27.md",
-      "updatedAt": 1771605959863
-    },
-    "medication|2026-02-25T16:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Medication 2026-02-25.md",
-      "updatedAt": 1772047768668
-    },
-    "medication|2026-02-26T16:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Medication 2026-02-26.md",
-      "updatedAt": 1772051102643
-    },
-    "medication|2026-03-01 16:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Events/Medication 2026-03-01.md",
-      "updatedAt": 1772317748606
-    },
-    "medication|2026-03-02 16:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Events/Medication 2026-03-02.md",
-      "updatedAt": 1772387942672
-    },
     "medication|2026-03-06 16:15:00": {
       "state": "complete",
       "targetPath": "Markdown/Action Items/Events/Medication 2026-03-06.md",
@@ -40,6 +15,36 @@
       "state": "complete",
       "targetPath": "Markdown/Action Items/Reminders/Medication 2026-03-07.md",
       "updatedAt": 1772808657043
+    },
+    "medication|2026-03-10 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Medication 2026-03-10.md",
+      "updatedAt": 1773067019670
+    },
+    "take out trash|2026-03-16 18:40:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Take Out Trash 2026-03-16.md",
+      "updatedAt": 1773101352685
+    },
+    "medication|2026-03-11 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Medication 2026-03-11.md",
+      "updatedAt": 1773179767013
+    },
+    "medication|2026-03-15 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Medication 2026-03-15.md",
+      "updatedAt": 1773500606291
+    },
+    "medication|2026-03-16 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Medication 2026-03-16.md",
+      "updatedAt": 1773599527190
+    },
+    "medication|2026-03-17 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Medication 2026-03-17.md",
+      "updatedAt": 1773669946134
     }
   }
 }

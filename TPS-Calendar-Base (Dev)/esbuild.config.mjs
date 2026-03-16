@@ -1,6 +1,7 @@
 import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
+import { copyFile, stat } from "node:fs/promises";
 
 const banner =
 	`/*
@@ -10,6 +11,21 @@ if you want to view the source, please visit the github repository of this plugi
 `;
 
 const prod = (process.argv[2] === "production");
+
+const syncStylesheet = {
+	name: "sync-stylesheet",
+	setup(build) {
+		build.onEnd(async (result) => {
+			if (result.errors.length > 0) return;
+			try {
+				await stat("main.css");
+				await copyFile("main.css", "styles.css");
+			} catch (error) {
+				console.warn("[tps-calendar-base] Failed to sync main.css -> styles.css", error);
+			}
+		});
+	},
+};
 
 const context = await esbuild.context({
 	banner: {
@@ -39,6 +55,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: prod,
+	plugins: [syncStylesheet],
 });
 
 if (prod) {

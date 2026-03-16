@@ -1,4 +1,58 @@
 {
+  "iconKey": "icon",
+  "colorKey": "color",
+  "frontmatterColorTarget": "both",
+  "ungroupedPosition": "first",
+  "laneOrderByView": {
+    "unknown-base::HCA unscheduled Kanban": [
+      "ungrouped",
+      "key:working",
+      "key:waiting",
+      "key:blocked",
+      "key:complete",
+      "key:wont-do"
+    ],
+    "unknown-base::Kanban all": [
+      "ungrouped",
+      "key:working",
+      "key:blocked",
+      "key:complete",
+      "key:wont-do"
+    ],
+    "unknown-base::Subitems": [
+      "ungrouped",
+      "key:working",
+      "key:blocked",
+      "key:complete",
+      "key:wont-do"
+    ],
+    "unknown-base::Area Items": [
+      "ungrouped",
+      "key:working",
+      "key:blocked",
+      "key:complete",
+      "key:wont-do"
+    ]
+  },
+  "kanbanTaskCardPosition": "top",
+  "scale": 0.7,
+  "layoutModeByView": {
+    "unknown-base::Subitems": "board",
+    "unknown-base::3 day": "list",
+    "unknown-base::View": "board"
+  },
+  "dynamicEmptyLaneWidth": false,
+  "enableKanbanTaskCards": true,
+  "laneLabelAliasesByView": {
+    "unknown-base::Subitems": {
+      "key:blocked": "blocked or waiting",
+      "ungrouped": "Working"
+    },
+    "unknown-base::Area Items": {
+      "key:blocked": "waiting or blocked",
+      "ungrouped": "open"
+    }
+  },
   "boards": {
     "board_TishOS": [
       {

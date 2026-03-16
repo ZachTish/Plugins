@@ -9,7 +9,7 @@ A FullCalendar-powered time-grid calendar view that renders inside Obsidian **Ba
 ### Calendar View (Bases Integration)
 - Registers a custom **Bases view type** — drop it into any Base layout to show a time-grid calendar.
 - Renders notes as events using configurable frontmatter fields (date, startTime, endTime, title, etc.).
-- Supports week, day, and continuous-scroll display modes.
+- Supports week, day, continuous-scroll, and **filter-based** display modes.
 - Navigation controls (previous/next/today) and condensed event display levels.
 
 ### External Calendar Sync
@@ -44,6 +44,12 @@ A FullCalendar-powered time-grid calendar view that renders inside Obsidian **Ba
 
 ### Embed Renderer
 - Register a markdown post-processor so `calendar` code blocks in notes render a mini calendar embed.
+
+### Filter-Based View Mode
+- New view mode option that automatically adjusts the calendar display based on your filtered data range.
+- When selected, the calendar analyzes the date range of visible events and chooses the optimal view (day, 3d, 4d, 5d, 7d, week, or month).
+- Unlike the legacy "Auto view mode from visible local events" toggle, filter-based mode doesn't persist manual view changes — it always recalculates the best view based on current data.
+- Particularly useful for filtered views where you want the calendar to adapt to the time span of your query results.
 
 ---
 
@@ -86,6 +92,21 @@ src/
     section-helpers.ts
     list-renderer.ts
 ```
+
+---
+
+## Recent Improvements
+
+### Filter-Based View Mode (New)
+- Added new `"filter-based"` view mode option that always auto-calculates the optimal view based on filtered data range.
+- Resolves issue where manual navigation would persist and override auto-viewmode behavior.
+- When selected, the calendar continuously adapts to show the best time span for your filtered events.
+
+### Continuous View Enhancements
+- Improved current day highlighting with subtle background tint and enhanced "Today" badge.
+- Better initial scroll positioning that centers on today's date when loading.
+- Enhanced current time indicator (red line) visibility and styling.
+- Smoother scroll behavior for better user experience.
 
 ---
 

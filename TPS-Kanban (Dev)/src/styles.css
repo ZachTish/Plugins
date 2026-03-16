@@ -1,9 +1,38 @@
 .tps-kanban-root { padding: 8px; }
 .tps-kanban-board { display:flex; gap:12px; align-items:flex-start; }
 .tps-kanban-lane { background: var(--background-secondary); padding:8px; border-radius:6px; width:280px; min-height:120px; display:flex; flex-direction:column; }
-.tps-kanban-lane-header { font-weight:600; margin-bottom:6px }
+.tps-kanban-lane-header { font-weight:600; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+.tps-kanban-lane-handle,
+.tps-kanban-lane-label-edit { border:0; background:transparent; color:var(--text-muted); padding:2px; display:inline-flex; align-items:center; justify-content:center; cursor:grab; opacity:0; pointer-events:none; transition: opacity 120ms ease, color 120ms ease, background 120ms ease; }
+.tps-kanban-lane-label-edit { cursor:pointer; }
+.tps-kanban-lane-header:hover .tps-kanban-lane-handle,
+.tps-kanban-lane-header:hover .tps-kanban-lane-label-edit,
+.tps-kanban-lane-handle:focus-visible,
+.tps-kanban-lane-label-edit:focus-visible { opacity:1; pointer-events:auto; }
+.tps-kanban-lane-handle:hover { color: var(--text-normal); }
+.tps-kanban-lane-handle:active { cursor:grabbing; }
+.tps-kanban-lane-handle.is-disabled,
+.tps-kanban-lane-label-edit.is-disabled {
+  opacity: 0.35 !important;
+  pointer-events: none !important;
+  cursor: not-allowed !important;
+}
+.tps-kanban-lane-title { flex: 1; }
 .tps-kanban-cards { display:flex; flex-direction:column; gap:6px }
 .tps-kanban-card { background: var(--background-primary); padding:8px; border-radius:4px; cursor:grab; box-shadow: var(--background-modifier-shadow); }
 .tps-kanban-drop-target { outline: 2px dashed var(--interactive-accent); }
 .tps-kanban-lane-drop-target { outline: 3px dashed var(--interactive-accent); }
+.tps-kanban-board--lane-drag .tps-kanban-lane { position: relative; }
+.tps-kanban-lane--drop-before::before,
+.tps-kanban-lane--drop-after::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--interactive-accent);
+}
+.tps-kanban-lane--drop-before::before { left: -7px; }
+.tps-kanban-lane--drop-after::after { right: -7px; }
 .tps-kanban-controls { margin-top:12px }

@@ -1,0 +1,76 @@
+{
+  "enabled": true,
+  "enableCanvasEmbeds": true,
+  "renderMode": "inline",
+  "inlinePlacement": "after-title",
+  "rules": [
+    {
+      "id": "rule-1773432939212",
+      "basePath": "scheduled.base",
+      "enabled": true,
+      "conditions": {
+        "requireProperty": "scheduled",
+        "excludeFolders": [
+          "_templates"
+        ],
+        "excludeTags": [
+          "dailynote"
+        ]
+      },
+      "initialState": "collapsed"
+    },
+    {
+      "id": "rule-1773435009274",
+      "basePath": "Project.base",
+      "enabled": true,
+      "conditions": {
+        "requireProperty": "parentOf",
+        "excludeFolders": [
+          "_templates"
+        ],
+        "excludeTagMatchingNoteName": true
+      }
+    },
+    {
+      "id": "rule-1773438593857",
+      "basePath": "scheduled.base",
+      "enabled": true,
+      "conditions": {
+        "tags": [
+          "dailynote"
+        ],
+        "excludeFolders": [
+          "_templates",
+          "_attachments"
+        ]
+      }
+    },
+    {
+      "id": "rule-1773502375379",
+      "basePath": "Area.base",
+      "enabled": true,
+      "conditions": {
+        "requireTagMatchingNoteName": true
+      }
+    },
+    {
+      "id": "rule-1773608648106",
+      "basePath": "Project feed.base",
+      "enabled": true,
+      "conditions": {
+        "requireProperty": "parentOf"
+      }
+    }
+  ],
+  "excludeFiles": "",
+  "defaultExpanded": false,
+  "accordionMode": true,
+  "manualExpansionState": {
+    "Stretched 5d calendar.base": true,
+    "Tagpage base.base": true,
+    "scheduled.base": true,
+    "Area.base": true,
+    "Project.base": false,
+    "Project feed.base": false
+  }
+}

@@ -8,7 +8,8 @@ export type CalendarViewMode =
     | "7d"
     | "week"
     | "month"
-    | "continuous";
+    | "continuous"
+    | "filter-based";
 export type WeekStartDay =
     | "sunday"
     | "monday"
@@ -74,15 +75,13 @@ export interface ExternalCalendarConfig {
 }
 
 export interface CalendarPluginSettings {
+    enableExternalCalendars: boolean;
     syncIntervalMinutes: number;
     sidebarBasePath: string | null;
     dailyDateLinkTarget: "daily-note" | "daily-canvas";
 
     primaryControllerId: string | null; // Synced setting to identify the controller device
 
-    colorRules: CalendarStyleRule[];
-    textRules: CalendarStyleRule[];
-    calendarStyleRules: CalendarStyleRule[];
     priorityValues: string[];
     statusValues: string[];
     defaultCondenseLevel: number;
@@ -103,6 +102,8 @@ export interface CalendarPluginSettings {
     previousStatusKey: string;
     startProperty: string;
     endProperty: string;
+    frontmatterColorField: string;
+    frontmatterIconField: string;
     viewMode: CalendarViewMode;
     filterRangeAuto: boolean;
     contextDateEnabled: boolean;
@@ -114,6 +115,9 @@ export interface CalendarPluginSettings {
     showHiddenHoursToggle: boolean;
 
     // Calendar appearance
+    noteEventColorSource: "frontmatter" | "off";
+    noteEventIconSource: "frontmatter" | "off";
+    noteEventFrontmatterColorTarget: "card" | "icon" | "both" | "off";
     allDayEventHeight: number;
     allDayMaxRows: number;
     allDayStickyScroll: boolean;
@@ -127,6 +131,7 @@ export interface CalendarPluginSettings {
     showNowIndicator: boolean;
     pastEventOpacity: number;
     eventFontSize: "small" | "default" | "large";
+    activeEventHighlightColor: string;
 
     // Task items
     showTaskItems: boolean;

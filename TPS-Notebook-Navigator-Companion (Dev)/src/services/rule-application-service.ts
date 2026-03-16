@@ -1,4 +1,4 @@
-import { App, TFile } from "obsidian";
+import { App, TFile, normalizePath, setIcon } from "obsidian";
 import { Logger } from "./logger";
 import { RuleEngine } from "./rule-engine";
 import { MetadataManager } from "./metadata-manager";
@@ -18,6 +18,10 @@ import {
  * Extracted from main.ts to keep the main class under 500 lines.
  */
 export class RuleApplicationService {
+    private bulkAppliedRuleReasons = new Set(["create", "startup-scan", "startup-auto", "bulk-scan", "bulk-apply"]);
+    private pendingAppliedRuleSummary = new Map<string, number>();
+    private appliedRuleSummaryTimer: number | null = null;
+
     constructor(
         private app: App,
         private ruleEngine: RuleEngine,
@@ -32,13 +36,15 @@ export class RuleApplicationService {
 
     async applyRulesToFile(
         file: TFile,
-        options: { reason: string; force?: boolean },
+        options: { reason: string; force?: boolean; bypassCreationGrace?: boolean },
     ): Promise<boolean> {
         const settings = this.getSettings();
         if (!settings.enabled) return false;
 
         if (!this.isMarkdownFile(file)) return false;
-        if (this.exclusionService.shouldIgnore(file)) return false;
+        if (this.exclusionService.shouldIgnore(file, {
+            bypassCreationGrace: options.bypassCreationGrace,
+        })) return false;
 
         if (!options.force && this.metadataManager.shouldIgnoreFileEvent(file.path)) return false;
 
@@ -76,6 +82,24 @@ export class RuleApplicationService {
                 changed = this.applyFrontmatterMutation(mutableFrontmatter, colorField, desiredColor) || changed;
             }
 
+            if (settings.writeBasesIconFields) {
+                const resolvedIcon = desiredIcon !== undefined
+                    ? desiredIcon
+                    : this.readFrontmatterString(mutableFrontmatter, iconField);
+                const resolvedColor = desiredColor !== undefined
+                    ? desiredColor
+                    : this.readFrontmatterString(mutableFrontmatter, colorField);
+                const basesIcon = this.composeBasesIconValues(resolvedIcon, resolvedColor);
+                changed = this.applyFrontmatterMutation(mutableFrontmatter, settings.basesIconMarkdownField, basesIcon.markdown) || changed;
+                changed = this.applyFrontmatterMutation(mutableFrontmatter, settings.basesIconUriField, basesIcon.uri) || changed;
+            } else {
+                // If Bases helper fields are disabled, actively clear legacy keys so they stop reappearing.
+                const markdownField = String(settings.basesIconMarkdownField || "").trim() || "iconDisplay";
+                const uriField = String(settings.basesIconUriField || "").trim() || "iconDisplayUri";
+                changed = this.applyFrontmatterMutation(mutableFrontmatter, markdownField, null) || changed;
+                changed = this.applyFrontmatterMutation(mutableFrontmatter, uriField, null) || changed;
+            }
+
             if (desiredSortKey !== undefined) {
                 changed = this.applyFrontmatterMutation(mutableFrontmatter, settings.smartSort.field, desiredSortKey) || changed;
             }
@@ -85,25 +109,53 @@ export class RuleApplicationService {
             }
 
             if (changed) {
-                this.logger.debug("Applied rules to file", {
-                    file: file.path,
-                    reason: options.reason,
-                    iconRule: visualOutputs.icon.ruleId,
-                    colorRule: visualOutputs.color.ruleId,
-                    sortField: settings.smartSort.enabled ? settings.smartSort.field : "",
-                    hideAdded: hideChanges.add,
-                    hideRemoved: hideChanges.remove,
-                });
+                if (this.shouldBatchAppliedRuleLog(options.reason)) {
+                    this.enqueueAppliedRuleSummary(options.reason);
+                } else {
+                    this.logger.debug("Applied rules to file", {
+                        file: file.path,
+                        reason: options.reason,
+                        iconRule: visualOutputs.icon.ruleId,
+                        colorRule: visualOutputs.color.ruleId,
+                        sortField: settings.smartSort.enabled ? settings.smartSort.field : "",
+                        hideAdded: hideChanges.add,
+                        hideRemoved: hideChanges.remove,
+                    });
+                }
             }
 
             return changed;
         });
     }
 
+    private shouldBatchAppliedRuleLog(reason: string): boolean {
+        return this.bulkAppliedRuleReasons.has(reason);
+    }
+
+    private enqueueAppliedRuleSummary(reason: string): void {
+        this.pendingAppliedRuleSummary.set(reason, (this.pendingAppliedRuleSummary.get(reason) ?? 0) + 1);
+        if (this.appliedRuleSummaryTimer !== null) {
+            return;
+        }
+
+        this.appliedRuleSummaryTimer = window.setTimeout(() => {
+            for (const [queuedReason, count] of this.pendingAppliedRuleSummary.entries()) {
+                this.logger.debug("Applied rules to files", {
+                    reason: queuedReason,
+                    count,
+                });
+            }
+
+            this.pendingAppliedRuleSummary.clear();
+            this.appliedRuleSummaryTimer = null;
+        }, 250);
+    }
+
     buildRuleContext(
         file: TFile,
         frontmatterOverride: Record<string, unknown> | null | undefined,
         includeBacklinks = true,
+        includeParent = true,
     ): RuleEvaluationContext {
         const cache = this.app.metadataCache.getFileCache(file);
         const frontmatter = frontmatterOverride ?? this.toFrontmatterRecord(cache?.frontmatter);
@@ -121,7 +173,7 @@ export class RuleApplicationService {
             }
         }
 
-        return {
+        const context: RuleEvaluationContext = {
             file: {
                 path: file.path,
                 name: file.name,
@@ -132,6 +184,15 @@ export class RuleApplicationService {
             tags: this.collectTagsFromCache(file, frontmatter),
             backlinks,
         };
+
+        if (includeParent) {
+            const parent = this.resolveParentContext(file, frontmatter);
+            if (parent) {
+                context.parent = parent;
+            }
+        }
+
+        return context;
     }
 
     // ── Private helpers ────────────────────────────────────────────────────
@@ -139,11 +200,12 @@ export class RuleApplicationService {
     private async buildRuleContextWithBody(
         file: TFile,
         frontmatterOverride: Record<string, unknown> | null | undefined,
-        options?: { includeBody?: boolean; includeBacklinks?: boolean },
+        options?: { includeBody?: boolean; includeBacklinks?: boolean; includeParent?: boolean },
     ): Promise<RuleEvaluationContext> {
         const includeBody = options?.includeBody ?? true;
         const includeBacklinks = options?.includeBacklinks ?? true;
-        const context = this.buildRuleContext(file, frontmatterOverride, includeBacklinks);
+        const includeParent = options?.includeParent ?? true;
+        const context = this.buildRuleContext(file, frontmatterOverride, includeBacklinks, includeParent);
 
         if (includeBody && file.extension.toLowerCase() === "md") {
             try {
@@ -172,13 +234,91 @@ export class RuleApplicationService {
         return smartSort.clearWhenNoMatch ? null : undefined;
     }
 
+    private readFrontmatterString(frontmatter: Record<string, unknown>, key: string): string | null {
+        const value = this.getFrontmatterValue(frontmatter, key);
+        if (typeof value !== "string") return null;
+        const trimmed = value.trim();
+        return trimmed || null;
+    }
+
+    private composeBasesIconValues(
+        iconValue: string | null | undefined,
+        colorValue: string | null | undefined,
+    ): { markdown: string | null | undefined; uri: string | null | undefined } {
+        if (iconValue === undefined) {
+            return { markdown: undefined, uri: undefined };
+        }
+        if (iconValue === null || !String(iconValue).trim()) {
+            return { markdown: null, uri: null };
+        }
+
+        const iconId = this.normalizeLucideIconId(iconValue);
+        if (!iconId) {
+            return { markdown: null, uri: null };
+        }
+
+        const iconContainer = document.createElement("span");
+        try {
+            setIcon(iconContainer, iconId);
+        } catch (_error) {
+            return { markdown: null, uri: null };
+        }
+
+        const svg = iconContainer.querySelector("svg");
+        if (!svg) {
+            return { markdown: null, uri: null };
+        }
+
+        svg.setAttribute("width", "18");
+        svg.setAttribute("height", "18");
+        svg.setAttribute("viewBox", svg.getAttribute("viewBox") || "0 0 24 24");
+        svg.setAttribute("fill", "none");
+        svg.setAttribute("stroke-width", svg.getAttribute("stroke-width") || "2");
+        svg.setAttribute("stroke-linecap", "round");
+        svg.setAttribute("stroke-linejoin", "round");
+
+        const safeColor = this.normalizeCssColorForSvg(colorValue ?? "");
+        if (safeColor) {
+            svg.setAttribute("stroke", safeColor);
+        } else {
+            svg.setAttribute("stroke", "currentColor");
+        }
+
+        const encodedSvg = encodeURIComponent(svg.outerHTML);
+        const uri = `data:image/svg+xml;utf8,${encodedSvg}`;
+        return {
+            uri,
+            markdown: `![](${uri})`,
+        };
+    }
+
+    private normalizeLucideIconId(rawValue: string): string {
+        const value = String(rawValue || "").trim();
+        if (!value) return "";
+        if (value.startsWith("lucide:")) return value.slice("lucide:".length).trim();
+        if (value.startsWith("lucide-")) return value.slice("lucide-".length).trim();
+        return value;
+    }
+
+    private normalizeCssColorForSvg(rawValue: string): string | null {
+        const value = String(rawValue || "").trim();
+        if (!value) return null;
+        if (/[<>{}\n\r;]/.test(value)) return null;
+        try {
+            if (typeof CSS !== "undefined" && CSS.supports("color", value)) {
+                return value;
+            }
+        } catch (_error) {
+            // no-op fallback below
+        }
+        return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value) ? value : null;
+    }
+
     private applyFrontmatterMutation(
         mutableFrontmatter: Record<string, unknown>,
         key: string,
         desiredValue: string | null | undefined,
     ): boolean {
-        if (desiredValue === undefined) return false;
-
         if (this.isProtectedKey(key)) {
             this.logger.warn("Skipping mutation on protected calendar identity key", { key });
             return false;
@@ -189,25 +329,66 @@ export class RuleApplicationService {
             return false;
         }
 
-        const normalizedTarget = key.toLowerCase();
-        let actualKey = key;
-        for (const existingKey of Object.keys(mutableFrontmatter)) {
-            if (existingKey.toLowerCase() === normalizedTarget) {
-                actualKey = existingKey;
-                break;
-            }
+        const normalizedTarget = key.trim().toLowerCase();
+        const matchingKeys = Object.keys(mutableFrontmatter).filter(
+            (existingKey) => existingKey.trim().toLowerCase() === normalizedTarget,
+        );
+        const exactKey = matchingKeys.find((existingKey) => existingKey === key) ?? null;
+        const preferredExistingKey = exactKey ?? matchingKeys[0] ?? null;
+        const previousCanonicalValue = String(mutableFrontmatter[key] ?? "");
+        const preferredExistingValue = preferredExistingKey
+            ? mutableFrontmatter[preferredExistingKey]
+            : undefined;
+
+        if (desiredValue === null && matchingKeys.length === 0) {
+            return false;
+        }
+        if (
+            desiredValue !== undefined &&
+            desiredValue !== null &&
+            matchingKeys.length === 1 &&
+            matchingKeys[0] === key &&
+            previousCanonicalValue === desiredValue
+        ) {
+            return false;
+        }
+        if (desiredValue === undefined && matchingKeys.length === 0) {
+            return false;
+        }
+        if (desiredValue === undefined && matchingKeys.length === 1 && matchingKeys[0] === key) {
+            return false;
+        }
+
+        let changed = false;
+        // Remove all existing case-variant duplicates so writes always converge to one key.
+        for (const existingKey of matchingKeys) {
+            delete mutableFrontmatter[existingKey];
+            changed = true;
         }
 
         if (desiredValue === null) {
-            if (!Object.prototype.hasOwnProperty.call(mutableFrontmatter, actualKey)) return false;
-            delete mutableFrontmatter[actualKey];
-            return true;
+            return changed;
         }
 
-        const currentValue = String(mutableFrontmatter[actualKey] ?? "");
-        if (currentValue === desiredValue) return false;
+        const finalValue = desiredValue !== undefined
+            ? desiredValue
+            : (() => {
+                if (preferredExistingValue === undefined) return undefined;
+                const existingValue = preferredExistingValue;
+                return typeof existingValue === "string" ? existingValue : String(existingValue ?? "");
+            })();
 
-        mutableFrontmatter[actualKey] = desiredValue;
+        if (finalValue === undefined) {
+            return changed;
+        }
+
+        mutableFrontmatter[key] = finalValue;
+
+        // If we only rewrote the same canonical key with the same value, treat as unchanged.
+        if (!changed && preferredExistingKey === key && previousCanonicalValue === finalValue) {
+            return false;
+        }
+
         return true;
     }
 
@@ -253,11 +434,50 @@ export class RuleApplicationService {
         return undefined;
     }
 
-    private getRuleContextRequirements(): { includeBody: boolean; includeBacklinks: boolean } {
+    private getRuleContextRequirements(): { includeBody: boolean; includeBacklinks: boolean; includeParent: boolean } {
         return {
             includeBody: this.settingsUseConditionSource("body"),
             includeBacklinks: this.settingsUseConditionSource("backlink"),
+            includeParent: this.settingsUseParentConditionSources(),
         };
+    }
+
+    private settingsUseParentConditionSources(): boolean {
+        const parentSources = new Set<RuleConditionSource>([
+            "parent-frontmatter",
+            "parent-tag",
+            "parent-name",
+            "parent-path",
+        ]);
+
+        const settings = this.getSettings();
+        const usesParent = (conditions: RuleCondition[] | undefined): boolean => {
+            if (!Array.isArray(conditions) || conditions.length === 0) return false;
+            return conditions.some((condition) => parentSources.has(condition.source));
+        };
+
+        for (const rule of settings.rules) {
+            if (rule.enabled && usesParent(rule.conditions)) return true;
+        }
+        for (const hideRule of settings.hideRules) {
+            if (hideRule.enabled && usesParent(hideRule.conditions)) return true;
+        }
+        if (settings.smartSort.enabled) {
+            for (const bucket of settings.smartSort.buckets) {
+                if (!bucket.enabled) continue;
+                if (usesParent(bucket.conditions)) return true;
+                if (Array.isArray(bucket.conditionGroups)) {
+                    for (const group of bucket.conditionGroups) {
+                        if (usesParent(group.conditions)) return true;
+                    }
+                }
+                if (bucket.sortCriteria.some((criteria) => parentSources.has(criteria.source))) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private settingsUseConditionSource(source: RuleConditionSource): boolean {
@@ -286,6 +506,212 @@ export class RuleApplicationService {
     private conditionsUseSource(conditions: RuleCondition[] | undefined, source: RuleConditionSource): boolean {
         if (!Array.isArray(conditions) || conditions.length === 0) return false;
         return conditions.some((condition) => condition.source === source);
+    }
+
+    private resolveParentContext(
+        file: TFile,
+        frontmatter: Record<string, unknown> | null,
+    ): RuleEvaluationContext["parent"] | undefined {
+        const parentFile = this.resolveParentFile(file, frontmatter);
+        if (!parentFile) return undefined;
+
+        const parentFrontmatter = this.toFrontmatterRecord(this.app.metadataCache.getFileCache(parentFile)?.frontmatter);
+        return {
+            file: {
+                path: parentFile.path,
+                name: parentFile.name,
+                basename: parentFile.basename,
+                extension: parentFile.extension,
+            },
+            frontmatter: parentFrontmatter,
+            tags: this.collectTagsFromCache(parentFile, parentFrontmatter),
+        };
+    }
+
+    private resolveParentFile(file: TFile, frontmatter: Record<string, unknown> | null): TFile | null {
+        if (!frontmatter) return null;
+
+        const configured = this.getSettings().upstreamLinkKeys || [];
+        const keys = Array.from(new Set([
+            ...configured,
+            "childOf",
+            "parent",
+        ].map((k) => String(k || "").trim()).filter(Boolean)));
+
+        for (const key of keys) {
+            const raw = this.getFrontmatterValue(frontmatter, key);
+            const candidates = this.collectParentLinkCandidates(raw);
+            for (const candidate of candidates) {
+                const resolved = this.resolveLinkTargetToFile(candidate, file.path);
+                if (resolved && resolved.path !== file.path) {
+                    return resolved;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private collectParentLinkCandidates(raw: unknown): string[] {
+        const output: string[] = [];
+        const seen = new Set<string>();
+
+        const add = (value: string): void => {
+            const normalized = this.normalizeLinkTarget(value);
+            if (!normalized) return;
+            const key = normalized.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            output.push(normalized);
+        };
+
+        const walk = (value: unknown): void => {
+            if (value == null) return;
+            if (Array.isArray(value)) {
+                for (const item of value) walk(item);
+                return;
+            }
+            if (typeof value === "object") {
+                for (const item of Object.values(value as Record<string, unknown>)) walk(item);
+                return;
+            }
+            const text = String(value).trim();
+            if (!text) return;
+            const extracted = this.extractLinkTargetsFromText(text, true);
+            if (extracted.length === 0) add(text);
+            else extracted.forEach(add);
+        };
+
+        walk(raw);
+        return output;
+    }
+
+    private extractLinkTargetsFromText(text: string, allowWhole = false): string[] {
+        const result: string[] = [];
+        const seen = new Set<string>();
+        const push = (value: string): void => {
+            const normalized = this.normalizeLinkTarget(value);
+            if (!normalized) return;
+            const key = normalized.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            result.push(normalized);
+        };
+
+        const wiki = /!?\[\[([^[\]]+)]]/g;
+        let wikiMatch: RegExpExecArray | null;
+        while ((wikiMatch = wiki.exec(text)) !== null) {
+            push(wikiMatch[1]);
+        }
+
+        for (const mdTarget of this.extractMarkdownLinkTargets(text)) {
+            push(mdTarget);
+        }
+
+        if (allowWhole && result.length === 0) {
+            push(text);
+        }
+
+        return result;
+    }
+
+    private extractMarkdownLinkTargets(text: string): string[] {
+        const targets: string[] = [];
+        let i = 0;
+        while (i < text.length) {
+            const open = text.indexOf("[", i);
+            if (open === -1) break;
+            let close = open + 1;
+            let escaped = false;
+            while (close < text.length) {
+                const ch = text[close];
+                if (!escaped && ch === "]") break;
+                escaped = !escaped && ch === "\\";
+                close += 1;
+            }
+            if (close >= text.length || text[close + 1] !== "(") {
+                i = close + 1;
+                continue;
+            }
+
+            let cursor = close + 2;
+            let depth = 1;
+            let inAngles = false;
+            escaped = false;
+            while (cursor < text.length) {
+                const ch = text[cursor];
+                if (!escaped) {
+                    if (ch === "<") inAngles = true;
+                    else if (ch === ">") inAngles = false;
+                    else if (!inAngles && ch === "(") depth += 1;
+                    else if (!inAngles && ch === ")") {
+                        depth -= 1;
+                        if (depth === 0) break;
+                    }
+                }
+                escaped = !escaped && ch === "\\";
+                cursor += 1;
+            }
+            if (depth === 0 && cursor < text.length) {
+                const target = text.slice(close + 2, cursor).trim();
+                if (target) targets.push(target);
+                i = cursor + 1;
+            } else {
+                i = close + 1;
+            }
+        }
+        return targets;
+    }
+
+    private normalizeLinkTarget(raw: string): string | null {
+        let value = String(raw || "").trim();
+        if (!value) return null;
+        if (value.startsWith("<") && value.endsWith(">")) {
+            value = value.slice(1, -1).trim();
+        }
+        if (!value) return null;
+        if (value.includes("|")) {
+            value = value.split("|")[0].trim();
+        }
+        if (value.includes("#")) {
+            value = value.split("#")[0].trim();
+        }
+        value = value.replace(/^\.\/+/, "").trim();
+        if (!value) return null;
+        try {
+            value = decodeURI(value);
+        } catch (_error) {
+            // Keep original value if URI decode fails.
+        }
+        return value || null;
+    }
+
+    private resolveLinkTargetToFile(target: string, sourcePath: string): TFile | null {
+        const normalized = this.normalizeLinkTarget(target);
+        if (!normalized) return null;
+
+        const rawPath = normalized;
+        const noMd = rawPath.replace(/\.md$/i, "");
+        const linkResolved =
+            this.app.metadataCache.getFirstLinkpathDest(rawPath, sourcePath) ||
+            this.app.metadataCache.getFirstLinkpathDest(noMd, sourcePath);
+        if (linkResolved instanceof TFile) {
+            return linkResolved;
+        }
+
+        const abs = normalizePath(rawPath);
+        const direct = this.app.vault.getAbstractFileByPath(abs);
+        if (direct instanceof TFile) {
+            return direct;
+        }
+
+        const withMd = abs.endsWith(".md") ? abs : `${abs}.md`;
+        const directMd = this.app.vault.getAbstractFileByPath(withMd);
+        if (directMd instanceof TFile) {
+            return directMd;
+        }
+
+        return null;
     }
 
     private computeHideChanges(context: RuleEvaluationContext): { add: string[]; remove: string[] } {

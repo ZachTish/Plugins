@@ -1,6 +1,6 @@
 {
   "name": "tps-global-context-menu",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Define a single reusable context menu for every note link across the vault.",
   "main": "main.js",
@@ -26,6 +26,7 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "monkey-around": "^3.0.0",
     "rrule": "^2.8.1"
   }
 }

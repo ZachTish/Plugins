@@ -1,0 +1,10 @@
+{
+    "id": "tps",
+    "name": "TPS",
+    "version": "2.0.0",
+    "minAppVersion": "1.8.7",
+    "description": "Unified productivity suite: calendar, reminders, context menus, kanban, and automation for Obsidian",
+    "author": "Zach Tisherman",
+    "authorUrl": "https://github.com/StartAutomating",
+    "isDesktopOnly": false
+}

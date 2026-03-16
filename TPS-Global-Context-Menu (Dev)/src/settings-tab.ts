@@ -2,17 +2,81 @@ import { App, PluginSettingTab, Setting, debounce } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from './main';
 import type { AppearanceSettingKey, ViewModeConditionOperator, ViewModeConditionType, ViewModeRule, ViewModeRuleCondition } from './types';
 import { PropertyProfilesModal } from './modals/property-profile-modal';
-import { createCollapsibleSection } from './utils/section-helpers';
+
+const createCollapsibleSection = (
+  parent: HTMLElement,
+  title: string,
+  description?: string,
+  defaultOpen = false
+): HTMLElement => {
+  const details = parent.createEl('details', { cls: 'tps-collapsible-section' });
+  if (defaultOpen) {
+    details.setAttr('open', 'true');
+  }
+
+  const summary = details.createEl('summary', { cls: 'tps-collapsible-section-summary' });
+  summary.createSpan({ cls: 'tps-collapsible-section-title', text: title });
+
+  if (description) {
+    details.createEl('p', {
+      cls: 'tps-collapsible-section-description',
+      text: description
+    });
+  }
+
+  return details.createDiv({ cls: 'tps-collapsible-section-content' });
+};
 
 /**
  * Settings tab for the plugin
  */
 export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
   plugin: TPSGlobalContextMenuPlugin;
+  private static readonly SETTINGS_BUILD_STAMP = '2026-03-11 18:12';
+  private readonly sectionState = new Map<string, boolean>();
 
   constructor(app: App, plugin: TPSGlobalContextMenuPlugin) {
     super(app, plugin);
     this.plugin = plugin;
+  }
+
+  private getSectionStateKey(parent: HTMLElement, title: string): string {
+    const categoryTitle = parent.closest('.tps-settings-main-category')?.querySelector('h3')?.textContent?.trim() ?? 'root';
+    return `${categoryTitle}::${title.trim()}`;
+  }
+
+  private createTrackedSection(
+    parent: HTMLElement,
+    title: string,
+    description?: string,
+    defaultOpen = false
+  ): HTMLElement {
+    const key = this.getSectionStateKey(parent, title);
+    const content = createCollapsibleSection(
+      parent,
+      title,
+      description,
+      this.sectionState.get(key) ?? defaultOpen
+    );
+    const details = content.parentElement as HTMLDetailsElement | null;
+    if (details) {
+      this.sectionState.set(key, details.open);
+      details.addEventListener('toggle', () => {
+        this.sectionState.set(key, details.open);
+      });
+    }
+    return content;
+  }
+
+  private getWorkspaceNames(): string[] {
+    const internal = (this.app as any).internalPlugins;
+    if (!internal) return [];
+    const wp = internal.plugins?.['workspaces'] ?? internal.getPluginById?.('workspaces');
+    if (!wp || wp.enabled === false) return [];
+    const instance = wp.instance;
+    if (!instance) return [];
+    const workspaces: Record<string, unknown> = instance.workspaces ?? {};
+    return Object.keys(workspaces).sort();
   }
 
   display(): void {
@@ -33,22 +97,68 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
 
     // Appearance sync mode is handled by TPS-Controller.
     const getAppearanceModeText = (_key: AppearanceSettingKey): string => 'Sync handled by TPS-Controller.';
-    const attachAppearanceSyncToggle = (_setting: Setting, _key: AppearanceSettingKey) => {};
+    const attachAppearanceSyncToggle = (_setting: Setting, _key: AppearanceSettingKey) => { };
 
-    const createSection = (title: string) =>
-      createCollapsibleSection(containerEl, { title, defaultOpen: false });
+    const createMainCategory = (title: 'Features' | 'Rules' | 'Interaction' | 'UI Display'): HTMLElement => {
+      const category = containerEl.createDiv({ cls: 'tps-settings-main-category' });
+      category.createEl('h3', { text: title });
+      return category.createDiv({ cls: 'tps-settings-main-content' });
+    };
 
-    const createPopout = (parent: HTMLElement, title: string, description?: string) =>
-      createCollapsibleSection(parent, { title, description, cssClass: 'tps-collapsible-subsection', defaultOpen: false });
+    let featuresCategory: HTMLElement;
+    let rulesCategory: HTMLElement;
+    let interactionCategory: HTMLElement;
+    let uiDisplayCategory: HTMLElement;
 
-    containerEl.createEl('h2', { text: 'TPS Global Context Menu' });
+    const createSection = (parent: HTMLElement, title: string, description?: string, defaultOpen = false): HTMLElement =>
+      this.createTrackedSection(parent, title, description, defaultOpen);
+
+    const createPopout = (parent: HTMLElement, title: string, description?: string, defaultOpen = false): HTMLElement =>
+      this.createTrackedSection(parent, title, description, defaultOpen);
+
+    const pluginsRegistry = (this.app as any)?.plugins;
+    const hasController = Boolean(
+      pluginsRegistry?.getPlugin?.('tps-controller') || pluginsRegistry?.plugins?.['tps-controller']
+    );
+    const hasCompanion = Boolean(
+      pluginsRegistry?.getPlugin?.('tps-notebook-navigator-companion') ||
+      pluginsRegistry?.plugins?.['tps-notebook-navigator-companion']
+    );
+
+    containerEl.createEl('h2', { text: `TPS Global Context Menu (${TPSGlobalContextMenuSettingTab.SETTINGS_BUILD_STAMP})` });
 
     containerEl.createEl('p', {
       text: 'Define a single context menu that can be reused throughout the vault. Menu items accept JSON definitions to keep the configuration portable and extendable.',
     });
 
+    if (hasController || hasCompanion) {
+      const ownershipNote = containerEl.createDiv({ cls: 'setting-item-description' });
+      ownershipNote.style.marginBottom = '16px';
+      ownershipNote.style.padding = '10px 12px';
+      ownershipNote.style.border = '1px solid var(--background-modifier-border)';
+      ownershipNote.style.borderRadius = '8px';
+      ownershipNote.style.background = 'var(--background-secondary)';
+      ownershipNote.setText(
+        [
+          hasController ? 'TPS Controller should own suite automation, archive behavior, and shared calendar fields.' : '',
+          hasCompanion ? 'Notebook Navigator Companion should own icon/color/sort automation.' : '',
+          'GCM should stay focused on menus, properties, and note interaction.'
+        ].filter(Boolean).join(' ')
+      );
+    }
+
+    featuresCategory = createMainCategory('Features');
+    rulesCategory = createMainCategory('Rules');
+    interactionCategory = createMainCategory('Interaction');
+    uiDisplayCategory = createMainCategory('UI Display');
+
     // --- General Settings ---
-    const general = createSection('General Settings');
+    const general = createSection(
+      interactionCategory,
+      'General Settings',
+      'Common menu behavior, default paths, and archive basics.',
+      true
+    );
 
     new Setting(general)
       .setName('Enable console logging')
@@ -60,53 +170,69 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(general)
+    const archiveAutomation = createPopout(
+      general,
+      'Archive Automation',
+      hasController
+        ? 'Advanced. Prefer TPS Controller for archive ownership so the suite has one source of truth.'
+        : 'Advanced archive automation for tag-based moves.'
+    );
+
+    new Setting(archiveAutomation)
       .setName('Daily archive tag sweep')
-      .setDesc('At 12:05am, move files with the archive tag into the archive folder.')
+      .setDesc('Runs after 12:05am and catches up later on startup if that day was missed. Moves files with the archive tag into the archive folder.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.enableArchiveTagMove).onChange(async (value) => {
           this.plugin.settings.enableArchiveTagMove = value;
           await this.plugin.saveSettings();
+          this.display();
         }),
       );
 
-    new Setting(general)
-      .setName('Archive tag')
-      .setDesc('Tag that triggers auto-archive (case-insensitive, with or without #).')
-      .addText((text) =>
-        text
-          .setPlaceholder('archive')
-          .setValue(this.plugin.settings.archiveTag)
-          .onChange((value) => {
-            this.plugin.settings.archiveTag = value.trim() || 'archive';
-            void debouncedSave();
-          })
-      );
+    if (this.plugin.settings.enableArchiveTagMove) {
+      new Setting(archiveAutomation)
+        .setName('Archive tag')
+        .setDesc('Tag that triggers auto-archive (case-insensitive, with or without #).')
+        .addText((text) =>
+          text
+            .setPlaceholder('archive')
+            .setValue(this.plugin.settings.archiveTag)
+            .onChange((value) => {
+              this.plugin.settings.archiveTag = value.trim() || 'archive';
+              void debouncedSave();
+            })
+        );
 
-    new Setting(general)
-      .setName('Archive folder')
-      .setDesc('Destination folder for archived files.')
-      .addText((text) =>
-        text
-          .setPlaceholder('System/Archive')
-          .setValue(this.plugin.settings.archiveFolderPath)
-          .onChange((value) => {
-            this.plugin.settings.archiveFolderPath = value.trim();
-            void debouncedSave();
-          })
-      );
+      new Setting(archiveAutomation)
+        .setName('Archive folder')
+        .setDesc('Destination folder for archived files.')
+        .addText((text) =>
+          text
+            .setPlaceholder('System/Archive')
+            .setValue(this.plugin.settings.archiveFolderPath)
+            .onChange((value) => {
+              this.plugin.settings.archiveFolderPath = value.trim();
+              void debouncedSave();
+            })
+        );
 
-    new Setting(general)
-      .setName('Use daily archive folders')
-      .setDesc('When enabled, archived files will be placed in a daily subfolder (YYYY-MM-DD) within the archive folder instead of directly in the archive folder.')
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.archiveUseDailyFolder)
-          .onChange(async (value) => {
-            this.plugin.settings.archiveUseDailyFolder = value;
-            await this.plugin.saveSettings();
-          })
-      );
+      new Setting(archiveAutomation)
+        .setName('Use daily archive folders')
+        .setDesc('When enabled, archived files will be placed in a daily subfolder (YYYY-MM-DD) within the archive folder instead of directly in the archive folder.')
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.archiveUseDailyFolder)
+            .onChange(async (value) => {
+              this.plugin.settings.archiveUseDailyFolder = value;
+              await this.plugin.saveSettings();
+            })
+        );
+    } else {
+      archiveAutomation.createEl('p', {
+        text: 'Archive automation is disabled. Enable Daily archive tag sweep to configure archive tag/folder behavior.',
+        cls: 'setting-item-description',
+      });
+    }
 
     // Default paths for new items
     new Setting(general)
@@ -137,27 +263,44 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
 
     new Setting(general)
       .setName('Default new subitem status')
-      .setDesc('Status applied to newly promoted/created subitems. Leave empty to use "open".')
+      .setDesc('Status applied to newly promoted/created subitems. Leave empty to write no status.')
       .addText((text) =>
         text
           .setPlaceholder('open')
-          .setValue(this.plugin.settings.defaultNewSubitemStatus ?? 'open')
+          .setValue(this.plugin.settings.defaultNewSubitemStatus ?? '')
           .onChange((value) => {
-            this.plugin.settings.defaultNewSubitemStatus = value.trim() || 'open';
+            this.plugin.settings.defaultNewSubitemStatus = value.trim();
             void debouncedSave();
           })
       );
 
     new Setting(general)
       .setName('Default new subitem priority')
-      .setDesc('Priority applied to newly promoted/created subitems. Leave empty to use "normal".')
+      .setDesc('Priority applied to newly promoted/created subitems. Leave empty to write no priority.')
       .addText((text) =>
         text
           .setPlaceholder('normal')
-          .setValue(this.plugin.settings.defaultNewSubitemPriority ?? 'normal')
+          .setValue(this.plugin.settings.defaultNewSubitemPriority ?? '')
           .onChange((value) => {
-            this.plugin.settings.defaultNewSubitemPriority = value.trim() || 'normal';
+            this.plugin.settings.defaultNewSubitemPriority = value.trim();
             void debouncedSave();
+          })
+      );
+
+    new Setting(general)
+      .setName('Checklist promote behavior')
+      .setDesc('When promoting a checklist item to a subitem, choose whether to remove the line, complete + link it, or keep it open as a link.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('complete-and-link', 'Mark complete + link')
+          .addOption('link-only', 'Link only')
+          .addOption('remove', 'Remove checklist line')
+          .setValue(this.plugin.settings.checklistPromotionBehavior ?? 'complete-and-link')
+          .onChange((value) => {
+            if (value === 'remove' || value === 'complete-and-link' || value === 'link-only') {
+              this.plugin.settings.checklistPromotionBehavior = value;
+              void debouncedSave();
+            }
           })
       );
 
@@ -192,7 +335,141 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.enableInSidePanels)
         .onChange(async v => { this.plugin.settings.enableInSidePanels = v; await this.plugin.saveSettings(); }));
 
-    const inlineUi = createSection('Inline UI');
+
+    // --- Canvas & Bases Settings ---
+    const pomodoroSection = createSection(
+      featuresCategory,
+      'Pomodoro Timer',
+      'Optional timer feature. Its detailed settings stay below the master toggle.',
+      false
+    );
+
+    new Setting(pomodoroSection)
+      .setName('Enable Pomodoro Timer')
+      .setDesc('Adds a configurable Pomodoro timer to the Global Context Menu.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enablePomodoro)
+          .onChange(async (value) => {
+            this.plugin.settings.enablePomodoro = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    if (this.plugin.settings.enablePomodoro) {
+      new Setting(pomodoroSection)
+        .setName('Work Duration (minutes)')
+        .addText((text) =>
+          text
+            .setPlaceholder('25')
+            .setValue(String(this.plugin.settings.pomodoroWorkDuration))
+            .onChange(async (value) => {
+              const num = parseInt(value, 10);
+              if (!isNaN(num) && num > 0) {
+                this.plugin.settings.pomodoroWorkDuration = num;
+                void debouncedSave();
+              }
+            })
+        );
+
+      new Setting(pomodoroSection)
+        .setName('Short Break Duration (minutes)')
+        .addText((text) =>
+          text
+            .setPlaceholder('5')
+            .setValue(String(this.plugin.settings.pomodoroBreakDuration))
+            .onChange(async (value) => {
+              const num = parseInt(value, 10);
+              if (!isNaN(num) && num > 0) {
+                this.plugin.settings.pomodoroBreakDuration = num;
+                void debouncedSave();
+              }
+            })
+        );
+
+      new Setting(pomodoroSection)
+        .setName('Long Break Duration (minutes)')
+        .addText((text) =>
+          text
+            .setPlaceholder('15')
+            .setValue(String(this.plugin.settings.pomodoroLongBreakDuration))
+            .onChange(async (value) => {
+              const num = parseInt(value, 10);
+              if (!isNaN(num) && num > 0) {
+                this.plugin.settings.pomodoroLongBreakDuration = num;
+                void debouncedSave();
+              }
+            })
+        );
+
+      new Setting(pomodoroSection)
+        .setName('Long Break Interval')
+        .setDesc('How many work sessions before a long break.')
+        .addText((text) =>
+          text
+            .setPlaceholder('4')
+            .setValue(String(this.plugin.settings.pomodoroLongBreakInterval))
+            .onChange(async (value) => {
+              const num = parseInt(value, 10);
+              if (!isNaN(num) && num > 0) {
+                this.plugin.settings.pomodoroLongBreakInterval = num;
+                void debouncedSave();
+              }
+            })
+        );
+
+      new Setting(pomodoroSection)
+        .setName('Pomodoro Event Folder')
+        .setDesc('Where tracking events will be created (e.g. Action Items/Events).')
+        .addText((text) =>
+          text
+            .setPlaceholder('Action Items/Events')
+            .setValue(String(this.plugin.settings.pomodoroEventFolder))
+            .onChange(async (value) => {
+              this.plugin.settings.pomodoroEventFolder = value.trim();
+              void debouncedSave();
+            })
+        );
+
+      new Setting(pomodoroSection)
+        .setName('Pomodoro Default Tags')
+        .setDesc('Comma-separated list of tags added to the generated pomodoro events.')
+        .addText((text) =>
+          text
+            .setPlaceholder('pomodoro, timebox')
+            .setValue(String(this.plugin.settings.pomodoroDefaultTags))
+            .onChange(async (value) => {
+              this.plugin.settings.pomodoroDefaultTags = value;
+              void debouncedSave();
+            })
+        );
+    }
+
+    const canvasBases = createSection(
+      featuresCategory,
+      'Canvas & Bases',
+      'Behavior for opening notes from Canvas and Bases.',
+      false
+    );
+
+    new Setting(canvasBases)
+      .setName('Open notes in split tab (Desktop only)')
+      .setDesc('When you click a note card in a Canvas or a row in a Bases view, open it in a vertical split tab to the right instead of replacing the current tab. Keeps the canvas/base visible while you work in the note.')
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.enableCanvasBaseSplit).onChange(async (value) => {
+          this.plugin.settings.enableCanvasBaseSplit = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    const inlineUi = createSection(
+      interactionCategory,
+      'Inline UI',
+      'Persistent inline surfaces. Graph and subitems behavior are grouped here.',
+      true
+    );
+
+
 
     new Setting(inlineUi)
       .setName('Show inline context menu')
@@ -201,9 +478,11 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         toggle.setValue(this.plugin.settings.enableInlinePersistentMenus).onChange(async (value) => {
           this.plugin.settings.enableInlinePersistentMenus = value;
           await this.plugin.saveSettings();
+          this.display();
         }),
       );
 
+    if (this.plugin.settings.enableInlinePersistentMenus) {
     new Setting(inlineUi)
       .setName('Inline menu only')
       .setDesc('Disable TPS additions in native/right-click menus and keep the plugin limited to inline persistent surfaces.')
@@ -235,8 +514,8 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
 
     new Setting(inlineUi)
-      .setName('Show references in subitems panel')
-      .setDesc('Show outgoing and incoming references in the subitems panel.')
+      .setName('Show references at bottom of note')
+      .setDesc('Show outgoing and incoming references in an inline footer after the note content.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.showReferencesInSubitemsPanel).onChange(async (value) => {
           this.plugin.settings.showReferencesInSubitemsPanel = value;
@@ -245,13 +524,79 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
 
     new Setting(inlineUi)
-      .setName('Show unlinked mentions in subitems panel')
-      .setDesc('Show exact-title unlinked mentions with a one-click Link action.')
+      .setName('Show unlinked mentions at bottom of note')
+      .setDesc('Show exact-title unlinked mentions in the inline references footer with a one-click Link action.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.showMentionsInSubitemsPanel).onChange(async (value) => {
           this.plugin.settings.showMentionsInSubitemsPanel = value;
           await this.plugin.saveSettings();
         }),
+      );
+
+    new Setting(inlineUi)
+      .setName('Show note graph')
+      .setDesc('Show the compact inline graph panel at the top-right of the note.')
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.showInlineNoteGraph).onChange(async (value) => {
+          this.plugin.settings.showInlineNoteGraph = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(inlineUi)
+      .setName('Graph depth')
+      .setDesc('How many link steps away from the current note the graph should include. Higher values are slower and noisier.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(1, 3, 1)
+          .setDynamicTooltip()
+          .setValue(this.plugin.settings.noteGraphDepth ?? 1)
+          .onChange(async (value) => {
+            this.plugin.settings.noteGraphDepth = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(inlineUi)
+      .setName('Max incoming graph nodes')
+      .setDesc('Maximum incoming-linked notes to show in the graph.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(1, 12, 1)
+          .setDynamicTooltip()
+          .setValue(this.plugin.settings.noteGraphMaxIncoming ?? 3)
+          .onChange(async (value) => {
+            this.plugin.settings.noteGraphMaxIncoming = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(inlineUi)
+      .setName('Max outgoing graph nodes')
+      .setDesc('Maximum outgoing-linked notes to show in the graph.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(1, 12, 1)
+          .setDynamicTooltip()
+          .setValue(this.plugin.settings.noteGraphMaxOutgoing ?? 3)
+          .onChange(async (value) => {
+            this.plugin.settings.noteGraphMaxOutgoing = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(inlineUi)
+      .setName('Max mention graph nodes')
+      .setDesc('Maximum mention-based nodes to show in the graph.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(0, 8, 1)
+          .setDynamicTooltip()
+          .setValue(this.plugin.settings.noteGraphMaxMentions ?? 2)
+          .onChange(async (value) => {
+            this.plugin.settings.noteGraphMaxMentions = value;
+            await this.plugin.saveSettings();
+          }),
       );
 
     new Setting(inlineUi)
@@ -270,7 +615,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
 
     new Setting(inlineUi)
       .setName('Auto-collapse when empty')
-      .setDesc('Collapse the subitems panel on file open when it has no children, attachments, or references to show.')
+      .setDesc('Collapse the subitems panel on file open when it has no children, attachments, or checklist items to show.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.subitemsPanelAutoCollapse ?? true).onChange(async (value) => {
           this.plugin.settings.subitemsPanelAutoCollapse = value;
@@ -278,8 +623,15 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }),
       );
 
+    } else {
+      inlineUi.createEl('p', {
+        text: 'Inline UI is disabled. Enable the master toggle to configure subitems, references, and note graph options.',
+        cls: 'setting-item-description',
+      });
+    }
+
     // --- Appearance Settings ---
-    const appearance = createSection('Appearance');
+    const appearance = createSection(uiDisplayCategory, 'Appearance');
     appearance.createEl('p', {
       text: 'Use the cloud/monitor button on each row to switch between synced and this-device-only behavior.',
       cls: 'setting-item-description',
@@ -516,66 +868,81 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
 
 
-    // --- View Mode Settings ---
-    const viewMode = createSection('View Mode Settings');
-
-    new Setting(viewMode)
-      .setName('Enable View Mode Switching')
-      .setDesc('Automatically switch between Source, Live Preview, and Reading modes based on frontmatter.')
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.enableViewModeSwitching)
-          .onChange(async (value) => {
-            this.plugin.settings.enableViewModeSwitching = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(viewMode)
-      .setName('Inline manual view mode controls')
-      .setDesc('Show Reading / Live / Source buttons in the inline menu panel only (not right-click menu).')
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.enableInlineManualViewMode)
-          .onChange(async (value) => {
-            this.plugin.settings.enableInlineManualViewMode = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(viewMode)
-      .setName('Frontmatter Key')
-      .setDesc('The frontmatter property used to determine view mode (e.g. "viewmode")')
-      .addText((text) =>
-        text
-          .setValue(this.plugin.settings.viewModeFrontmatterKey)
-          .setPlaceholder('viewmode')
-          .onChange(async (value) => {
-            this.plugin.settings.viewModeFrontmatterKey = value || 'viewmode';
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(viewMode)
-      .setName('Ignored Folders')
-      .setDesc('One path per line. Files in these folders will generally keep their current view mode.')
-      .addTextArea((text) => {
-        text
-          .setPlaceholder('Bases\nAtlas/Views')
-          .setValue(this.plugin.settings.viewModeIgnoredFolders || '')
-          .onChange(async (value) => {
-            this.plugin.settings.viewModeIgnoredFolders = value;
-            await this.plugin.saveSettings();
-          });
-        text.inputEl.rows = 3;
-        text.inputEl.cols = 30;
-      });
-
-    const viewRulesPopout = createPopout(
-      viewMode,
-      'View Mode Rules',
-      'Define condition rules with AND/OR matching (path contains, scheduled past, daily-note date rules, etc).'
+    // --- Custom Property Configuration ---
+    const propertyConfig = createSection(
+      rulesCategory,
+      'Custom Property Configuration',
+      'Define editable frontmatter fields and per-property behavior. Placement toggles live under Features > Menu Configuration.',
+      false
     );
+
+    propertyConfig.createEl('p', {
+      text: `${(this.plugin.settings.properties || []).length} properties configured. Use the Features toggle section to choose where they appear.`,
+      cls: 'setting-item-description',
+    });
+
+    const propertiesConfigContainer = propertyConfig.createDiv();
+    this.renderProperties(propertiesConfigContainer);
+    new Setting(propertyConfig)
+      .addButton(btn => btn.setButtonText('Add Property').setCta().onClick(async () => {
+        this.plugin.settings.properties.push({ id: Date.now().toString(), label: 'New Property', key: 'new_prop', type: 'text' });
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+
+    // --- View Mode Settings ---
+    const viewMode = createSection(
+      rulesCategory,
+      'View Mode Configuration',
+      'Frontmatter key, ignored folders, and automatic rules. Master toggles live under Features > Automation & Features.',
+      false
+    );
+
+    if (!this.plugin.settings.enableViewModeSwitching) {
+      viewMode.createEl('p', {
+        text: 'Automatic view mode switching is off. Re-enable it under Features > Automation & Features to edit the frontmatter key, ignored folders, and rules.',
+        cls: 'setting-item-description',
+      });
+    }
+
+    const viewModeConfigContainer = viewMode.createDiv();
+    let viewRulesPopout: HTMLElement = viewModeConfigContainer;
+
+    if (this.plugin.settings.enableViewModeSwitching) {
+      new Setting(viewModeConfigContainer)
+        .setName('Frontmatter Key')
+        .setDesc('The frontmatter property used to determine view mode (e.g. "viewmode")')
+        .addText((text) =>
+          text
+            .setValue(this.plugin.settings.viewModeFrontmatterKey)
+            .setPlaceholder('viewmode')
+            .onChange(async (value) => {
+              this.plugin.settings.viewModeFrontmatterKey = value || 'viewmode';
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(viewModeConfigContainer)
+        .setName('Ignored Folders')
+        .setDesc('One path per line. Files in these folders will generally keep their current view mode.')
+        .addTextArea((text) => {
+          text
+            .setPlaceholder('Bases\nAtlas/Views')
+            .setValue(this.plugin.settings.viewModeIgnoredFolders || '')
+            .onChange(async (value) => {
+              this.plugin.settings.viewModeIgnoredFolders = value;
+              await this.plugin.saveSettings();
+            });
+          text.inputEl.rows = 3;
+          text.inputEl.cols = 30;
+        });
+
+      viewRulesPopout = createPopout(
+        viewModeConfigContainer,
+        'View Mode Rules',
+        'Define condition rules with AND/OR matching (path contains, scheduled past, daily-note date rules, etc).'
+      );
+    }
 
     const ensureViewModeRules = (): ViewModeRule[] => {
       if (!Array.isArray(this.plugin.settings.viewModeRules)) {
@@ -711,189 +1078,191 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       ];
     };
 
-    new Setting(viewRulesPopout)
-      .setName('Rules')
-      .setDesc('Add and combine conditions per rule.')
-      .addButton(btn => btn
-        .setButtonText('Add Rule')
-        .setCta()
-        .onClick(async () => {
-          const rules = ensureViewModeRules();
-          rules.push({
-            mode: 'reading',
-            match: 'all',
-            conditions: [createCondition('frontmatter')],
-          });
-          await this.plugin.saveSettings();
-          this.display();
-        }))
-      .addButton(btn => btn
-        .setButtonText('Add Daily Rule')
-        .onClick(async () => {
-          const rules = ensureViewModeRules();
-          rules.push({
-            mode: 'reading',
-            match: 'all',
-            conditions: [{ type: 'daily-note', operator: 'not-today' }],
-          });
-          await this.plugin.saveSettings();
-          this.display();
-        }))
-      .addButton(btn => btn
-        .setButtonText('Add Path/Past OR')
-        .onClick(async () => {
-          const rules = ensureViewModeRules();
-          rules.push({
-            mode: 'reading',
-            match: 'any',
-            conditions: [
-              { type: 'path', operator: 'contains', value: '' },
-              { type: 'scheduled', key: 'scheduled', operator: 'past' },
-            ],
-          });
-          await this.plugin.saveSettings();
-          this.display();
-        }));
-
-    const rules = ensureViewModeRules();
-    let migratedRules = false;
-    rules.forEach((rule, index) => {
-      const normalized = ensureRuleShape(rule);
-      if (normalized.changed) migratedRules = true;
-      const currentRule = normalized.normalizedRule;
-
-      const card = viewRulesPopout.createDiv({ cls: 'tps-gcm-viewmode-rule' });
-      card.style.border = '1px solid var(--background-modifier-border)';
-      card.style.borderRadius = '8px';
-      card.style.padding = '10px';
-      card.style.marginBottom = '10px';
-
-      new Setting(card)
-        .setName(`Rule ${index + 1}`)
-        .setDesc('Conditions must match before applying mode.')
-        .addDropdown(drop => drop
-          .addOption('all', 'Match all (AND)')
-          .addOption('any', 'Match any (OR)')
-          .setValue(currentRule.match || 'all')
-          .onChange(async v => {
-            currentRule.match = v === 'any' ? 'any' : 'all';
+    if (this.plugin.settings.enableViewModeSwitching) {
+      new Setting(viewRulesPopout)
+        .setName('Rules')
+        .setDesc('Add and combine conditions per rule.')
+        .addButton(btn => btn
+          .setButtonText('Add Rule')
+          .setCta()
+          .onClick(async () => {
+            const rules = ensureViewModeRules();
+            rules.push({
+              mode: 'reading',
+              match: 'all',
+              conditions: [createCondition('frontmatter')],
+            });
             await this.plugin.saveSettings();
-          }))
-        .addDropdown(drop => drop
-          .addOption('reading', 'Reading')
-          .addOption('source', 'Source')
-          .addOption('live', 'Live')
-          .setValue(currentRule.mode)
-          .onChange(async v => {
-            currentRule.mode = v;
-            await this.plugin.saveSettings();
+            this.display();
           }))
         .addButton(btn => btn
-          .setButtonText('Add Condition')
+          .setButtonText('Add Daily Rule')
           .onClick(async () => {
-            currentRule.conditions = currentRule.conditions || [];
-            currentRule.conditions.push(createCondition('frontmatter'));
+            const rules = ensureViewModeRules();
+            rules.push({
+              mode: 'reading',
+              match: 'all',
+              conditions: [{ type: 'daily-note', operator: 'not-today' }],
+            });
             await this.plugin.saveSettings();
             this.display();
           }))
-        .addExtraButton(btn => btn
-          .setIcon('trash')
-          .setTooltip('Delete rule')
+        .addButton(btn => btn
+          .setButtonText('Add Path/Past OR')
           .onClick(async () => {
-            rules.splice(index, 1);
-            await this.plugin.saveSettings();
-            this.display();
-          }));
-
-      const conditions = currentRule.conditions || [];
-      conditions.forEach((condition, conditionIndex) => {
-        const type = normalizeConditionType(condition.type);
-        const operator = normalizeConditionOperator(type, condition.operator);
-        const conditionRow = card.createDiv();
-        conditionRow.style.display = 'grid';
-        conditionRow.style.gridTemplateColumns = 'minmax(110px, 1fr) minmax(110px, 1fr) minmax(120px, 1.3fr) minmax(160px, 2fr) auto';
-        conditionRow.style.gap = '8px';
-        conditionRow.style.alignItems = 'center';
-        conditionRow.style.marginTop = '8px';
-
-        const typeSetting = new Setting(conditionRow).setClass('tps-gcm-no-border');
-        typeSetting.addDropdown(drop => drop
-          .addOption('frontmatter', 'Frontmatter')
-          .addOption('path', 'Path')
-          .addOption('scheduled', 'Scheduled')
-          .addOption('daily-note', 'Daily Note')
-          .setValue(type)
-          .onChange(async v => {
-            const nextType = normalizeConditionType(v);
-            const nextCondition = createCondition(nextType);
-            currentRule.conditions![conditionIndex] = nextCondition;
-            await this.plugin.saveSettings();
-            this.display();
-          }));
-
-        const keySetting = new Setting(conditionRow).setClass('tps-gcm-no-border');
-        if (type === 'frontmatter' || type === 'scheduled') {
-          keySetting.addText(text => text
-            .setPlaceholder(type === 'frontmatter' ? 'key' : 'scheduled')
-            .setValue(String(condition.key || (type === 'scheduled' ? 'scheduled' : '')))
-            .onChange(async value => {
-              condition.key = type === 'scheduled' ? (value.trim() || 'scheduled') : value.trim();
-              await this.plugin.saveSettings();
-            }));
-        } else {
-          keySetting.setName('');
-        }
-
-        const operatorSetting = new Setting(conditionRow).setClass('tps-gcm-no-border');
-        operatorSetting.addDropdown(drop => {
-          getOperatorOptions(type).forEach(option => drop.addOption(option.value, option.label));
-          drop
-            .setValue(operator)
-            .onChange(async value => {
-              condition.operator = normalizeConditionOperator(type, value);
-              if (!operatorNeedsValue(type, condition.operator)) {
-                condition.value = '';
-              }
-              await this.plugin.saveSettings();
-              this.display();
+            const rules = ensureViewModeRules();
+            rules.push({
+              mode: 'reading',
+              match: 'any',
+              conditions: [
+                { type: 'path', operator: 'contains', value: '' },
+                { type: 'scheduled', key: 'scheduled', operator: 'past' },
+              ],
             });
-        });
+            await this.plugin.saveSettings();
+            this.display();
+          }));
 
-        const valueSetting = new Setting(conditionRow).setClass('tps-gcm-no-border');
-        if (operatorNeedsValue(type, operator)) {
-          valueSetting.addText(text => text
-            .setPlaceholder(type === 'path' ? 'text to match in path' : 'value')
-            .setValue(String(condition.value || ''))
-            .onChange(async value => {
-              condition.value = value;
+      const rules = ensureViewModeRules();
+      let migratedRules = false;
+      rules.forEach((rule, index) => {
+        const normalized = ensureRuleShape(rule);
+        if (normalized.changed) migratedRules = true;
+        const currentRule = normalized.normalizedRule;
+
+        const card = viewRulesPopout.createDiv({ cls: 'tps-gcm-viewmode-rule' });
+        card.style.border = '1px solid var(--background-modifier-border)';
+        card.style.borderRadius = '8px';
+        card.style.padding = '10px';
+        card.style.marginBottom = '10px';
+
+        new Setting(card)
+          .setName(`Rule ${index + 1}`)
+          .setDesc('Conditions must match before applying mode.')
+          .addDropdown(drop => drop
+            .addOption('all', 'Match all (AND)')
+            .addOption('any', 'Match any (OR)')
+            .setValue(currentRule.match || 'all')
+            .onChange(async v => {
+              currentRule.match = v === 'any' ? 'any' : 'all';
               await this.plugin.saveSettings();
-            }));
-        } else {
-          valueSetting.setName('');
-        }
-
-        new Setting(conditionRow)
-          .setClass('tps-gcm-no-border')
-          .addExtraButton(btn => btn
-            .setIcon('x')
-            .setTooltip('Remove condition')
+            }))
+          .addDropdown(drop => drop
+            .addOption('reading', 'Reading')
+            .addOption('source', 'Source')
+            .addOption('live', 'Live')
+            .setValue(currentRule.mode)
+            .onChange(async v => {
+              currentRule.mode = v;
+              await this.plugin.saveSettings();
+            }))
+          .addButton(btn => btn
+            .setButtonText('Add Condition')
             .onClick(async () => {
-              currentRule.conditions!.splice(conditionIndex, 1);
-              if (!currentRule.conditions!.length) {
-                currentRule.conditions = [createCondition('frontmatter')];
-              }
+              currentRule.conditions = currentRule.conditions || [];
+              currentRule.conditions.push(createCondition('frontmatter'));
+              await this.plugin.saveSettings();
+              this.display();
+            }))
+          .addExtraButton(btn => btn
+            .setIcon('trash')
+            .setTooltip('Delete rule')
+            .onClick(async () => {
+              rules.splice(index, 1);
               await this.plugin.saveSettings();
               this.display();
             }));
-      });
-    });
 
-    if (migratedRules) {
-      void this.plugin.saveSettings();
+        const conditions = currentRule.conditions || [];
+        conditions.forEach((condition, conditionIndex) => {
+          const type = normalizeConditionType(condition.type);
+          const operator = normalizeConditionOperator(type, condition.operator);
+          const conditionRow = card.createDiv();
+          conditionRow.style.display = 'grid';
+          conditionRow.style.gridTemplateColumns = 'minmax(110px, 1fr) minmax(110px, 1fr) minmax(120px, 1.3fr) minmax(160px, 2fr) auto';
+          conditionRow.style.gap = '8px';
+          conditionRow.style.alignItems = 'center';
+          conditionRow.style.marginTop = '8px';
+
+          const typeSetting = new Setting(conditionRow).setClass('tps-gcm-no-border');
+          typeSetting.addDropdown(drop => drop
+            .addOption('frontmatter', 'Frontmatter')
+            .addOption('path', 'Path')
+            .addOption('scheduled', 'Scheduled')
+            .addOption('daily-note', 'Daily Note')
+            .setValue(type)
+            .onChange(async v => {
+              const nextType = normalizeConditionType(v);
+              const nextCondition = createCondition(nextType);
+              currentRule.conditions![conditionIndex] = nextCondition;
+              await this.plugin.saveSettings();
+              this.display();
+            }));
+
+          const keySetting = new Setting(conditionRow).setClass('tps-gcm-no-border');
+          if (type === 'frontmatter' || type === 'scheduled') {
+            keySetting.addText(text => text
+              .setPlaceholder(type === 'frontmatter' ? 'key' : 'scheduled')
+              .setValue(String(condition.key || (type === 'scheduled' ? 'scheduled' : '')))
+              .onChange(async value => {
+                condition.key = type === 'scheduled' ? (value.trim() || 'scheduled') : value.trim();
+                await this.plugin.saveSettings();
+              }));
+          } else {
+            keySetting.setName('');
+          }
+
+          const operatorSetting = new Setting(conditionRow).setClass('tps-gcm-no-border');
+          operatorSetting.addDropdown(drop => {
+            getOperatorOptions(type).forEach(option => drop.addOption(option.value, option.label));
+            drop
+              .setValue(operator)
+              .onChange(async value => {
+                condition.operator = normalizeConditionOperator(type, value);
+                if (!operatorNeedsValue(type, condition.operator)) {
+                  condition.value = '';
+                }
+                await this.plugin.saveSettings();
+                this.display();
+              });
+          });
+
+          const valueSetting = new Setting(conditionRow).setClass('tps-gcm-no-border');
+          if (operatorNeedsValue(type, operator)) {
+            valueSetting.addText(text => text
+              .setPlaceholder(type === 'path' ? 'text to match in path' : 'value')
+              .setValue(String(condition.value || ''))
+              .onChange(async value => {
+                condition.value = value;
+                await this.plugin.saveSettings();
+              }));
+          } else {
+            valueSetting.setName('');
+          }
+
+          new Setting(conditionRow)
+            .setClass('tps-gcm-no-border')
+            .addExtraButton(btn => btn
+              .setIcon('x')
+              .setTooltip('Remove condition')
+              .onClick(async () => {
+                currentRule.conditions!.splice(conditionIndex, 1);
+                if (!currentRule.conditions!.length) {
+                  currentRule.conditions = [createCondition('frontmatter')];
+                }
+                await this.plugin.saveSettings();
+                this.display();
+              }));
+        });
+      });
+
+      if (migratedRules) {
+        void this.plugin.saveSettings();
+      }
     }
 
     // --- Overlay Ignore Rules ---
-    const overlayIgnore = createSection('Overlay Ignore Rules');
+    const overlayIgnore = createSection(rulesCategory, 'Overlay Ignore Rules');
     overlayIgnore.createEl('p', {
       text: 'Define rules to hide the context menu/subitems overlay for notes that match certain conditions.',
       cls: 'setting-item-description'
@@ -1057,7 +1426,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     createIgnoreRulesUI(inlineMenuIgnorePopout, this.plugin.settings.inlineMenu_IgnoreRules as ViewModeRule[]);
 
     // --- Menu Configuration (Consolidated) ---
-    const menuConfig = createSection('Menu Configuration');
+    const menuConfig = createSection(featuresCategory, 'Menu Configuration');
     const systemCommandsPopout = createPopout(
       menuConfig,
       'System Commands',
@@ -1101,25 +1470,56 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     const propertiesPopout = createPopout(
       menuConfig,
       'Custom Properties',
-      'Manage editable frontmatter fields shown by inline/right-click menus.'
+      'Feature toggles only. Define labels, keys, types, options, and per-property placement under Rules > Custom Property Configuration.'
     );
-    const propertiesContainer = propertiesPopout.createDiv();
-    this.renderProperties(propertiesContainer);
+
+    propertiesPopout.createEl('p', {
+      text: `${(this.plugin.settings.properties || []).length} properties configured in Rules > Custom Property Configuration.`,
+      cls: 'setting-item-description',
+    });
+
     new Setting(propertiesPopout)
-      .addButton(btn => btn.setButtonText('Add Property').setCta().onClick(() => {
-        this.plugin.settings.properties.push({ id: Date.now().toString(), label: 'New Property', key: 'new_prop', type: 'text' });
-        this.plugin.saveSettings();
-        this.renderProperties(propertiesContainer);
-      }));
+      .setName('Show custom properties in inline UI')
+      .setDesc('Display configured custom properties in the inline header/context strip.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.showCustomPropertiesInInlineUi !== false)
+        .onChange(async (value) => {
+          this.plugin.settings.showCustomPropertiesInInlineUi = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(propertiesPopout)
+      .setName('Show custom properties in context menu')
+      .setDesc('Display configured custom properties in the right-click context menu.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.showCustomPropertiesInContextMenu !== false)
+        .onChange(async (value) => {
+          this.plugin.settings.showCustomPropertiesInContextMenu = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(propertiesPopout)
+      .setName('Inherit Notebook Navigator tag colors')
+      .setDesc('When enabled, tag chips in the inline menu adopt Notebook Navigator tag colors if available.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.inheritNotebookNavigatorTagColors !== false)
+        .onChange(async (value) => {
+          this.plugin.settings.inheritNotebookNavigatorTagColors = value;
+          await this.plugin.saveSettings();
+        }));
 
     // --- Automation Features (Consolidated) ---
-    const automation = createSection('Automation & Features');
+    const automation = createSection(featuresCategory, 'Automation & Features');
 
-    // Checklists & Tasks
-    automation.createEl('h4', { text: 'Checklists & Tasks' });
-    new Setting(automation).setName('Check pending items').setDesc('Warn on completion if items unchecked').addToggle(t => t.setValue(this.plugin.settings.checkOpenChecklistItems).onChange(async v => { this.plugin.settings.checkOpenChecklistItems = v; await this.plugin.saveSettings(); }));
-    new Setting(automation).setName('Check parent-linked notes').setDesc('Warn when completing if any notes with parent links are still open').addToggle(t => t.setValue(this.plugin.settings.checkParentLinkStatuses).onChange(async v => { this.plugin.settings.checkParentLinkStatuses = v; await this.plugin.saveSettings(); }));
-    new Setting(automation)
+    automation.createEl('p', {
+      text: 'Keep these focused on note interaction. Higher-impact automation stays under the advanced subsections below.',
+      cls: 'setting-item-description'
+    });
+
+    const taskAutomation = createPopout(automation, 'Checklists & Task State');
+    new Setting(taskAutomation).setName('Check pending items').setDesc('Warn on completion if items unchecked').addToggle(t => t.setValue(this.plugin.settings.checkOpenChecklistItems).onChange(async v => { this.plugin.settings.checkOpenChecklistItems = v; await this.plugin.saveSettings(); }));
+    new Setting(taskAutomation).setName('Check parent-linked notes').setDesc('Warn when completing if any notes with parent links are still open').addToggle(t => t.setValue(this.plugin.settings.checkParentLinkStatuses).onChange(async v => { this.plugin.settings.checkParentLinkStatuses = v; await this.plugin.saveSettings(); }));
+    new Setting(taskAutomation)
       .setName('Checklist completion property')
       .setDesc('When enabled, automatically writes a boolean frontmatter property that is true only when every checklist item is checked [x] or canceled [-]. Unchecked [ ] and question-mark [?] items keep it false.')
       .addToggle((t) =>
@@ -1128,21 +1528,49 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
       );
-    new Setting(automation)
-      .setName('Completion property key')
-      .setDesc('Frontmatter key used for the checklist completion boolean (e.g. "allChecked").')
+    if (this.plugin.settings.enableChecklistCompletionProperty) {
+      new Setting(taskAutomation)
+        .setName('Completion property key')
+        .setDesc('Frontmatter key used for the checklist completion boolean (e.g. "allChecked").')
+        .addText((t) =>
+          t
+            .setPlaceholder('allChecked')
+            .setValue(this.plugin.settings.checklistCompletionPropertyKey || 'allChecked')
+            .onChange(async (v) => {
+              this.plugin.settings.checklistCompletionPropertyKey = v.trim() || 'allChecked';
+              await this.plugin.saveSettings();
+            })
+        );
+    }
+    new Setting(taskAutomation)
+      .setName('Checkbox click cycle')
+      .setDesc('Cycle task states on normal click. Right-click or long-press opens a state selector.')
+      .addToggle(t => t.setValue(this.plugin.settings.enableTaskCheckboxCycle).onChange(async v => { this.plugin.settings.enableTaskCheckboxCycle = v; await this.plugin.saveSettings(); }));
+    new Setting(taskAutomation)
+      .setName('Final checklist prompt statuses')
+      .setDesc('When the last open checkbox is resolved, prompt to set one of these statuses (comma-separated).')
       .addText((t) =>
-        t
-          .setPlaceholder('allChecked')
-          .setValue(this.plugin.settings.checklistCompletionPropertyKey || 'allChecked')
+        t.setValue((this.plugin.settings.checklistFinalPromptStatuses || ['complete', 'wont-do']).join(', '))
           .onChange(async (v) => {
-            this.plugin.settings.checklistCompletionPropertyKey = v.trim() || 'allChecked';
+            const next = v.split(',').map((s) => s.trim()).filter(Boolean);
+            this.plugin.settings.checklistFinalPromptStatuses = next.length > 0 ? next : ['complete', 'wont-do'];
             await this.plugin.saveSettings();
           })
       );
-    new Setting(automation).setName('Parent frontmatter key').setDesc('Frontmatter key used to link a note to its parent (child → parent direction, e.g. "childOf")').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'childOf'; await this.plugin.saveSettings(); }));
-    new Setting(automation).setName('Child frontmatter key').setDesc('Frontmatter key written to the parent note listing its children (parent → child direction, e.g. "parentOf")').addText(t => t.setValue(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').onChange(async v => { this.plugin.settings.childLinkFrontmatterKey = v.trim() || 'parentOf'; await this.plugin.saveSettings(); }));
-    new Setting(automation)
+
+    const relationshipAutomation = createPopout(automation, 'Parent / Child Links');
+    new Setting(relationshipAutomation).setName('Parent frontmatter key').setDesc('Frontmatter key used to link a note to its parent (child → parent direction, e.g. "childOf")').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'childOf'; await this.plugin.saveSettings(); }));
+    new Setting(relationshipAutomation).setName('Child frontmatter key').setDesc('Frontmatter key written to the parent note listing its children (parent → child direction, e.g. "parentOf")').addText(t => t.setValue(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').onChange(async v => { this.plugin.settings.childLinkFrontmatterKey = v.trim() || 'parentOf'; await this.plugin.saveSettings(); }));
+    new Setting(relationshipAutomation)
+      .setName('Auto self-link parent in parent key')
+      .setDesc('When enabled, parent notes keep a self-reference in the parent key (for example childOf: [[This Note]]).')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.autoSelfLinkParentInParentKey ?? false).onChange(async (v) => {
+          this.plugin.settings.autoSelfLinkParentInParentKey = v;
+          await this.plugin.saveSettings();
+        })
+      );
+    new Setting(relationshipAutomation)
       .setName('Parent link format')
       .setDesc('Store parent links as wikilinks or markdown links with explicit note-title display names.')
       .addDropdown((dropdown) =>
@@ -1155,7 +1583,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(automation)
+    new Setting(relationshipAutomation)
       .setName('Tag parent when child linked')
       .setDesc('Applied to parent notes when linking children. Use # or plain tag. Leave empty to disable.')
       .addText((text) =>
@@ -1167,12 +1595,21 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(automation).setName('Page parent navigation').setDesc('Show a parent navigation button at the top of the page above the title').addToggle(t => t.setValue(this.plugin.settings.enableTopParentNav).onChange(async v => { this.plugin.settings.enableTopParentNav = v; await this.plugin.saveSettings(); this.plugin.persistentMenuManager.ensureMenus(); }));
-    new Setting(automation).setName('Completion statuses').setDesc('Statuses treated as complete for parent-linked notes').addText(t => t.setValue((this.plugin.settings.parentCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.parentCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
+    new Setting(relationshipAutomation).setName('Top page connections navigation').setDesc('Show a navigation button displaying all incoming and outgoing links at the top of the page above the title').addToggle(t => t.setValue(this.plugin.settings.enableTopParentNav).onChange(async v => { this.plugin.settings.enableTopParentNav = v; await this.plugin.saveSettings(); this.plugin.persistentMenuManager.ensureMenus(); }));
+    new Setting(relationshipAutomation)
+      .setName('Ignore embedded children in top links')
+      .setDesc('When enabled, links created by embedded children and promoted checklist children are hidden from the top Links button.')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.ignoreEmbeddedChildrenInTopLinks ?? true).onChange(async (v) => {
+          this.plugin.settings.ignoreEmbeddedChildrenInTopLinks = v;
+          await this.plugin.saveSettings();
+          this.plugin.persistentMenuManager.ensureMenus();
+        })
+      );
+    new Setting(relationshipAutomation).setName('Completion statuses').setDesc('Statuses treated as complete for parent-linked notes').addText(t => t.setValue((this.plugin.settings.parentCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.parentCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
 
-    // Workspace Ribbon Buttons
-    automation.createEl('h4', { text: 'Workspace Ribbon Buttons', attr: { style: 'margin-top: 1.5em;' } });
-    new Setting(automation)
+    const workspaceFeatures = createPopout(automation, 'Workspace & Backlinks');
+    new Setting(workspaceFeatures)
       .setName('Workspace ribbon buttons')
       .setDesc(
         'Add a ribbon icon for each saved workspace in the core Workspaces plugin. ' +
@@ -1186,12 +1623,60 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.workspaceRibbonButtons = value;
             await this.plugin.saveSettings();
+            this.display();
           })
       );
 
-    // Backlinks Panel
-    automation.createEl('h4', { text: 'Backlinks Panel', attr: { style: 'margin-top: 1.5em;' } });
-    new Setting(automation)
+    if (this.plugin.settings.workspaceRibbonButtons) {
+      const workspaceIconSettings = workspaceFeatures.createDiv({ cls: 'tps-gcm-sub-settings' });
+      workspaceIconSettings.style.paddingLeft = '15px';
+      workspaceIconSettings.style.borderLeft = '2px solid var(--background-modifier-border)';
+
+      const workspaceNames = this.getWorkspaceNames();
+      if (workspaceNames.length === 0) {
+        workspaceIconSettings.createEl('p', {
+          cls: 'setting-item-description',
+          text: 'No saved workspaces found (or the core Workspaces plugin is disabled). Save at least one workspace to configure per-workspace icons.',
+        });
+      } else {
+        const iconMap = this.plugin.settings.workspaceRibbonIcons || {};
+        for (const workspaceName of workspaceNames) {
+          new Setting(workspaceIconSettings)
+            .setName(`Workspace icon: ${workspaceName}`)
+            .setDesc('Lucide icon name. Leave blank to use layout-dashboard.')
+            .addText((text) =>
+              text
+                .setPlaceholder('layout-dashboard')
+                .setValue(iconMap[workspaceName] || '')
+                .onChange(async (value) => {
+                  const next = value.trim();
+                  if (!this.plugin.settings.workspaceRibbonIcons || typeof this.plugin.settings.workspaceRibbonIcons !== 'object') {
+                    this.plugin.settings.workspaceRibbonIcons = {};
+                  }
+                  if (next) this.plugin.settings.workspaceRibbonIcons[workspaceName] = next;
+                  else delete this.plugin.settings.workspaceRibbonIcons[workspaceName];
+                  await this.plugin.saveSettings();
+                })
+            );
+        }
+
+        const staleMappings = Object.keys(iconMap).filter((name) => !workspaceNames.includes(name));
+        if (staleMappings.length > 0) {
+          new Setting(workspaceIconSettings)
+            .setName('Remove stale workspace icon mappings')
+            .setDesc(`You have ${staleMappings.length} icon mapping(s) for workspaces that no longer exist.`)
+            .addButton((button) =>
+              button.setButtonText('Remove stale mappings').onClick(async () => {
+                for (const name of staleMappings) delete this.plugin.settings.workspaceRibbonIcons[name];
+                await this.plugin.saveSettings();
+                this.display();
+              })
+            );
+        }
+      }
+    }
+
+    new Setting(workspaceFeatures)
       .setName('Ignored frontmatter keys')
       .setDesc('Comma-separated list of frontmatter keys to hide from the Frontmatter section in the Backlinks panel (e.g. "dateModified, dateCreated").')
       .addText(t => t
@@ -1202,14 +1687,18 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }));
 
-    new Setting(automation)
-      .setName('Checkbox click cycle')
-      .setDesc('Cycle task states on normal click: [ ] -> [x] -> [?] -> [-] -> [ ].')
-      .addToggle(t => t.setValue(this.plugin.settings.enableTaskCheckboxCycle).onChange(async v => { this.plugin.settings.enableTaskCheckboxCycle = v; await this.plugin.saveSettings(); }));
-    new Setting(automation).setName('Task Recurrence').setDesc('Auto-create next recurring task').addToggle(t => t.setValue(this.plugin.settings.enableRecurrence).onChange(async v => { this.plugin.settings.enableRecurrence = v; await this.plugin.saveSettings(); }));
+    const advancedAutomation = createPopout(
+      automation,
+      'Advanced Automation',
+      [
+        hasController ? 'Prefer TPS Controller for recurring/archive orchestration.' : '',
+        hasCompanion ? 'Prefer Companion for icon/color/sort ownership.' : '',
+      ].filter(Boolean).join(' ')
+    );
+    new Setting(advancedAutomation).setName('Task Recurrence').setDesc('Auto-create next recurring task').addToggle(t => t.setValue(this.plugin.settings.enableRecurrence).onChange(async v => { this.plugin.settings.enableRecurrence = v; await this.plugin.saveSettings(); }));
 
     if (this.plugin.settings.enableRecurrence) {
-      const sub = automation.createDiv({ cls: 'tps-gcm-sub-settings' });
+      const sub = advancedAutomation.createDiv({ cls: 'tps-gcm-sub-settings' });
       sub.style.paddingLeft = '15px';
       sub.style.borderLeft = '2px solid var(--background-modifier-border)';
       new Setting(sub).setName('Completion Triggers').setDesc('Statuses that trigger recurrence').addText(t => t.setValue((this.plugin.settings.recurrenceCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.recurrenceCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
@@ -1217,23 +1706,21 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       new Setting(sub).setName('Template Folder').setDesc('Folder for recurring event templates (copied when recurrence first set). Leave blank to disable.').addText(t => t.setPlaceholder('e.g. Recurring Templates').setValue(this.plugin.settings.recurringTemplateFolder || '').onChange(async v => { this.plugin.settings.recurringTemplateFolder = v.trim(); await this.plugin.saveSettings(); }));
     }
 
-    // Auto-Rename & File Naming
-    automation.createEl('h4', { text: 'File Naming', attr: { style: 'margin-top: 1.5em;' } });
-    new Setting(automation).setName('Auto-Rename Files').setDesc('Rename based on title/date criteria').addToggle(t => t.setValue(this.plugin.settings.enableAutoRename).onChange(async v => { this.plugin.settings.enableAutoRename = v; await this.plugin.saveSettings(); }));
-    new Setting(automation)
+    new Setting(advancedAutomation).setName('Auto-Rename Files').setDesc('Rename based on title/date criteria').addToggle(t => t.setValue(this.plugin.settings.enableAutoRename).onChange(async v => { this.plugin.settings.enableAutoRename = v; await this.plugin.saveSettings(); }));
+    new Setting(advancedAutomation)
       .setName('Auto-sync title from filename')
       .setDesc('Keep frontmatter `title` aligned to the current filename on open/rename. Disabled by default to avoid surprise metadata writes.')
       .addToggle(t => t.setValue(this.plugin.settings.autoSyncTitleFromFilename).onChange(async v => { this.plugin.settings.autoSyncTitleFromFilename = v; await this.plugin.saveSettings(); }));
-    new Setting(automation).setName('Auto-Save Folder').setDesc('Save path to frontmatter').addToggle(t => t.setValue(this.plugin.settings.autoSaveFolderPath).onChange(async v => { this.plugin.settings.autoSaveFolderPath = v; await this.plugin.saveSettings(); }));
-    new Setting(automation)
+    new Setting(advancedAutomation).setName('Auto-Save Folder').setDesc('Save path to frontmatter').addToggle(t => t.setValue(this.plugin.settings.autoSaveFolderPath).onChange(async v => { this.plugin.settings.autoSaveFolderPath = v; await this.plugin.saveSettings(); }));
+    new Setting(advancedAutomation)
       .setName('Seed new subitem visual metadata')
       .setDesc('When creating child notes, copy inferred icon/color defaults into frontmatter. Disabled by default so GCM does not claim visual field ownership.')
       .addToggle(t => t.setValue(this.plugin.settings.seedNewSubitemVisualMetadata).onChange(async v => { this.plugin.settings.seedNewSubitemVisualMetadata = v; await this.plugin.saveSettings(); }));
-    new Setting(automation)
+    new Setting(advancedAutomation)
       .setName('Apply companion rules on subitem create')
       .setDesc('Immediately invoke the Notebook Navigator Companion after GCM creates a subitem. Disabled by default to avoid unexpected icon/color/sort writes.')
       .addToggle(t => t.setValue(this.plugin.settings.applyCompanionRulesOnSubitemCreate).onChange(async v => { this.plugin.settings.applyCompanionRulesOnSubitemCreate = v; await this.plugin.saveSettings(); }));
-    new Setting(automation)
+    new Setting(advancedAutomation)
       .setName('Frontmatter auto-write exclusions')
       .setDesc('Skip automatic frontmatter writes for matching files. One pattern per line. Supports exact paths, folder prefixes (end with /), wildcards (*), name:<basename>, and re:<regex>. Example: Templates/, Templates/*.md, name:daily-template')
       .addTextArea(t => t
@@ -1244,9 +1731,38 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }));
 
-    // Daily Note Navigation
-    automation.createEl('h4', { text: 'Navigation', attr: { style: 'margin-top: 1.5em;' } });
-    new Setting(automation)
+    const viewModeFeatures = createPopout(
+      automation,
+      'View Mode Switching',
+      'Feature toggles only. Rule/frontmatter configuration lives under Rules > View Mode Configuration.'
+    );
+    new Setting(viewModeFeatures)
+      .setName('Enable automatic view mode switching')
+      .setDesc('Automatically switch between Source, Live Preview, and Reading modes based on frontmatter and configured rules.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableViewModeSwitching)
+          .onChange(async (value) => {
+            this.plugin.settings.enableViewModeSwitching = value;
+            await this.plugin.saveSettings();
+            this.display();
+          })
+      );
+
+    new Setting(viewModeFeatures)
+      .setName('Show inline manual view mode controls')
+      .setDesc('Show Reading / Live / Source buttons in the inline menu panel only.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableInlineManualViewMode)
+          .onChange(async (value) => {
+            this.plugin.settings.enableInlineManualViewMode = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    const navigationAutomation = createPopout(automation, 'Daily Note Navigation');
+    new Setting(navigationAutomation)
       .setName('Enable Daily Note Navigation')
       .setDesc('Show hovering Previous/Today/Next controls on daily notes.')
       .addToggle(t => t.setValue(this.plugin.settings.enableDailyNoteNav).onChange(async v => {
@@ -1257,7 +1773,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }
       }));
 
-    new Setting(automation)
+    new Setting(navigationAutomation)
       .setName('Show "Today" button')
       .setDesc('Show a Today shortcut between the prev/next arrows. Disable to show only the arrows.')
       .addToggle(t => t.setValue(this.plugin.settings.dailyNavShowToday !== false).onChange(async v => {
@@ -1309,7 +1825,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           this.plugin.settings.properties[index - 1] = prop;
           this.plugin.settings.properties[index] = temp;
           await this.plugin.saveSettings();
-          this.renderProperties(container);
+          this.display();
         };
       }
 
@@ -1321,7 +1837,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           this.plugin.settings.properties[index + 1] = prop;
           this.plugin.settings.properties[index] = temp;
           await this.plugin.saveSettings();
-          this.renderProperties(container);
+          this.display();
         };
       }
 
@@ -1329,7 +1845,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       delBtn.onclick = async () => {
         this.plugin.settings.properties.splice(index, 1);
         await this.plugin.saveSettings();
-        this.renderProperties(container);
+        this.display();
       };
 
       // Edit Fields
@@ -1374,7 +1890,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           .onChange(async (value: any) => {
             prop.type = value;
             await this.plugin.saveSettings();
-            this.renderProperties(container); // Re-render to show/hide options
+            this.display();
           }));
 
       // Icon
@@ -1388,27 +1904,29 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }));
 
-      // Show on inline menu
       new Setting(fields)
         .setName('Show on inline menu')
         .setDesc('Show this property in the inline header panel')
-        .addToggle(toggle => toggle
-          .setValue(prop.showInCollapsed !== false)
-          .onChange(async (value) => {
-            prop.showInCollapsed = value;
-            await this.plugin.saveSettings();
-          }));
+        .addToggle((toggle) =>
+          toggle
+            .setValue(prop.showInCollapsed !== false)
+            .onChange(async (value) => {
+              prop.showInCollapsed = value;
+              await this.plugin.saveSettings();
+            })
+        );
 
-      // Show in context menu
       new Setting(fields)
         .setName('Show in context menu')
         .setDesc('Show this property in the right-click context menu')
-        .addToggle(toggle => toggle
-          .setValue(prop.showInContextMenu !== false)
-          .onChange(async (value) => {
-            prop.showInContextMenu = value;
-            await this.plugin.saveSettings();
-          }));
+        .addToggle((toggle) =>
+          toggle
+            .setValue(prop.showInContextMenu !== false)
+            .onChange(async (value) => {
+              prop.showInContextMenu = value;
+              await this.plugin.saveSettings();
+            })
+        );
 
       // Options (only for selector)
       if (prop.type === 'selector') {
@@ -1439,4 +1957,5 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           }));
     });
   }
+
 }

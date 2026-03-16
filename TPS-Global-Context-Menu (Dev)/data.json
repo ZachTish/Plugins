@@ -1,5 +1,5 @@
 {
-  "enableLogging": true,
+  "enableLogging": false,
   "enableInlinePersistentMenus": true,
   "enableInLivePreview": true,
   "enableInPreview": true,
@@ -22,8 +22,9 @@
       "type": "selector",
       "pinned": true,
       "options": [
+        "todo",
         "working",
-        "blocked",
+        "holding",
         "wont-do",
         "complete"
       ],
@@ -44,6 +45,20 @@
           ],
           "hidden": true,
           "options": []
+        },
+        {
+          "id": "1773606650980",
+          "name": "New Profile",
+          "match": "all",
+          "conditions": [
+            {
+              "type": "frontmatter",
+              "operator": "equals",
+              "value": "note",
+              "key": "status"
+            }
+          ],
+          "hidden": true
         }
       ]
     },
@@ -165,11 +180,19 @@
       ]
     },
     {
+      "id": "1772572959938",
+      "label": "Duration",
+      "key": "timeEstimate",
+      "type": "number",
+      "icon": "calendar",
+      "showInCollapsed": false
+    },
+    {
       "id": "1764962088480",
       "label": "Recurrence",
       "key": "recurrenceRule",
       "type": "recurrence",
-      "icon": "refresh",
+      "icon": "calendar",
       "profiles": [
         {
           "id": "1771631223174",
@@ -218,16 +241,10 @@
       "icon": "tag",
       "label": "tags",
       "key": "tags"
-    },
-    {
-      "id": "1772572959938",
-      "label": "New Property",
-      "key": "timeEstimate",
-      "type": "number",
-      "icon": "lucide:clock",
-      "showInCollapsed": false
     }
   ],
+  "showCustomPropertiesInInlineUi": true,
+  "showCustomPropertiesInContextMenu": true,
   "enableRecurrence": true,
   "promptOnRecurrenceEdit": true,
   "recurrencePromptTimeout": 5,
@@ -238,20 +255,20 @@
     "blocked"
   ],
   "recurrenceDefaultStatus": "",
-  "recurringTemplateFolder": "Templates",
+  "recurringTemplateFolder": "Markdown/Action Items/_templates",
   "enableAutoRename": true,
   "autoSyncTitleFromFilename": true,
   "autoSaveFolderPath": true,
   "seedNewSubitemVisualMetadata": false,
   "applyCompanionRulesOnSubitemCreate": false,
-  "frontmatterAutoWriteExclusions": "Markdown/Templates/*.md",
+  "frontmatterAutoWriteExclusions": "re:(^|/)_templates(/|$)",
   "folderExclusions": "System/Templates",
   "checkOpenChecklistItems": true,
   "checkParentLinkStatuses": true,
   "parentLinkFrontmatterKey": "childOf",
   "childLinkFrontmatterKey": "parentOf",
   "parentLinkFormat": "markdown-title",
-  "parentTagOnChildLink": "project",
+  "parentTagOnChildLink": "",
   "parentCompletionStatuses": [
     "complete",
     "wont-do"
@@ -276,36 +293,10 @@
       "match": "all",
       "conditions": [
         {
-          "type": "path",
-          "operator": "contains",
-          "value": "Action Items"
-        },
-        {
           "type": "frontmatter",
-          "key": "status",
-          "operator": "not-equals",
-          "value": "working"
-        },
-        {
-          "type": "scheduled",
-          "key": "scheduled",
-          "operator": "past"
-        }
-      ]
-    },
-    {
-      "mode": "live",
-      "match": "all",
-      "conditions": [
-        {
-          "type": "path",
-          "operator": "contains",
-          "value": "Notes"
-        },
-        {
-          "type": "path",
-          "operator": "not-contains",
-          "value": "Daily Notes"
+          "key": "parentOf",
+          "operator": "exists",
+          "value": ""
         }
       ]
     },
@@ -319,23 +310,6 @@
           "value": ""
         }
       ]
-    },
-    {
-      "mode": "live",
-      "match": "all",
-      "conditions": [
-        {
-          "type": "frontmatter",
-          "key": "status",
-          "operator": "equals",
-          "value": "working"
-        },
-        {
-          "type": "path",
-          "operator": "contains",
-          "value": "Action Items"
-        }
-      ]
     }
   ],
   "systemCommands": [
@@ -346,13 +320,27 @@
   "enableTaskCheckboxCycle": true,
   "enableChecklistCompletionProperty": true,
   "checklistCompletionPropertyKey": "checklistDone",
+  "checklistFinalPromptStatuses": [
+    "complete",
+    "wont-do"
+  ],
   "enableArchiveTagMove": true,
   "archiveTag": "archive",
   "archiveFolderPath": "Archive",
   "archiveUseDailyFolder": true,
+  "lastArchiveTagSweepDate": "2026-03-16",
+  "enablePomodoro": false,
+  "pomodoroWorkDuration": 25,
+  "pomodoroBreakDuration": 5,
+  "pomodoroLongBreakDuration": 15,
+  "pomodoroLongBreakInterval": 4,
+  "pomodoroEventFolder": "Action Items/Events",
+  "pomodoroDefaultTags": "pomodoro, timebox",
   "workspaceRibbonButtons": true,
+  "enableCanvasBaseSplit": false,
   "enableDailyNoteNav": true,
   "enableTopParentNav": true,
+  "ignoreEmbeddedChildrenInTopLinks": true,
   "dailyNavShowToday": true,
   "ignoredBacklinksFrontmatterKeys": [
     "dateModified",
@@ -365,14 +353,15 @@
       "match": "any",
       "conditions": [
         {
-          "type": "path",
+          "type": "frontmatter",
+          "key": "tags",
           "operator": "contains",
-          "value": "Daily Notes"
+          "value": "dailynote"
         },
         {
           "type": "path",
           "operator": "contains",
-          "value": "Template"
+          "value": "_"
         }
       ]
     }
@@ -380,31 +369,31 @@
   "inlineMenu_IgnoreRules": [
     {
       "mode": "ignore",
-      "match": "all",
+      "match": "any",
       "conditions": [
         {
           "type": "path",
           "operator": "contains",
-          "value": "Daily Notes"
-        },
-        {
-          "type": "path",
-          "operator": "contains",
-          "value": "Templates"
+          "value": "_"
         }
       ]
     }
   ],
-  "enableSubitemsPanel": true,
+  "enableSubitemsPanel": false,
   "showChecklistInSubitemsPanel": false,
-  "showReferencesInSubitemsPanel": true,
-  "showMentionsInSubitemsPanel": true,
+  "showReferencesInSubitemsPanel": false,
+  "showMentionsInSubitemsPanel": false,
+  "showInlineNoteGraph": false,
+  "noteGraphDepth": 3,
+  "noteGraphMaxIncoming": 8,
+  "noteGraphMaxOutgoing": 8,
+  "noteGraphMaxMentions": 4,
   "subitemsPanelPosition": "below",
   "subitemsPanelAutoCollapse": true,
   "defaultAttachmentsPath": "Markdown/Notes",
   "defaultSubitemsPath": "Markdown/Action Items",
-  "defaultNewSubitemStatus": "open",
-  "defaultNewSubitemPriority": "normal",
+  "defaultNewSubitemStatus": "",
+  "defaultNewSubitemPriority": "",
   "menuTextScale": 0.95,
   "buttonScale": 1,
   "controlScale": 1,
@@ -413,7 +402,7 @@
   "inlinePanelMaxWidth": 1400,
   "liveMenuPosition": "center",
   "liveMenuOffsetX": 0,
-  "liveMenuOffsetY": -64,
+  "liveMenuOffsetY": -8,
   "modalWidth": 520,
   "modalMaxHeightVh": 80,
   "subitemsMarginBottom": 17,
@@ -1243,5 +1232,9 @@
       "enabled": true,
       "icon": "lucide-check-square"
     }
-  ]
+  ],
+  "inheritNotebookNavigatorTagColors": true,
+  "autoSelfLinkParentInParentKey": true,
+  "workspaceRibbonIcons": {},
+  "checklistPromotionBehavior": "remove"
 }

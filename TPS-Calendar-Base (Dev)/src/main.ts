@@ -4,13 +4,8 @@ import { CalendarView, CalendarViewType } from "./calendar-view";
 import { DEFAULT_CONDENSE_LEVEL } from "./utils";
 import { CalendarPluginBridge } from "./plugin-interface";
 import { ExternalCalendarService } from "./services/external-calendar-service";
-import { CalendarStyleRule } from "./types";
 import { CalendarPluginSettingsTab } from "./settings-tab";
 import { removeChildLinkFromParent } from "./services/parent-child-link";
-import {
-  createDefaultCondition,
-  findStyleOverride,
-} from "./services/style-rule-service";
 import { normalizeCalendarUrl, normalizeCalendarTag } from "./utils";
 import { ExternalCalendarConfig, CalendarPluginSettings } from "./types";
 import { DEFAULT_SETTINGS, migrateSettings } from "./settings-migration";
@@ -180,23 +175,14 @@ export default class ObsidianCalendarPlugin
     };
   }
 
-
-
-
-  getCalendarStyleOverride(data: Record<string, any>) {
-    return findStyleOverride(
-      this.settings.colorRules,
-      this.settings.textRules,
-      this.settings.calendarStyleRules,
-      data,
-    );
-  }
-
   getDefaultCondenseLevel(): number {
     return this.settings.defaultCondenseLevel ?? DEFAULT_CONDENSE_LEVEL;
   }
 
   getEffectiveExternalCalendars(): ExternalCalendarConfig[] {
+    if (this.settings.enableExternalCalendars === false) {
+      return [];
+    }
     // 1. Check TPS-Controller
     const controller = getPluginById(this.app, "tps-controller") as any;
     if (controller?.settings?.externalCalendars?.length) {

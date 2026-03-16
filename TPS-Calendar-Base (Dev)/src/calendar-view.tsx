@@ -28,7 +28,6 @@ import { NewEventService } from "./services/new-event-service";
 import { CalendarPluginBridge } from "./plugin-interface";
 import {
   DEFAULT_CONDENSE_LEVEL,
-  DEFAULT_PRIORITY_COLOR_MAP,
   MAX_CONDENSE_LEVEL,
   formatDateTimeForFrontmatter,
 } from "./utils";
@@ -88,6 +87,7 @@ export class CalendarView extends BasesView {
   private priorityField: BasesPropertyId | null = null;
   private statusField: BasesPropertyId | null = null;
   private condenseLevel: number = DEFAULT_CONDENSE_LEVEL;
+
   private showFullDay: boolean = false;
   private currentDate: Date | null = null;
   private dayCount: number = 7;
@@ -107,6 +107,7 @@ export class CalendarView extends BasesView {
   private cachedExternalEvents: ExternalCalendarEvent[] = [];
   private isFetchingExternalEvents: boolean = false;
   private cachedRawTaskItems: ParsedTaskItem[] = [];
+  private taskItemAllowedPaths: Set<string> | null = null;
   private isFetchingTaskItems: boolean = false;
   private lastTaskItemsFetch: number = 0;
   private viewMode: CalendarViewMode = "week";
@@ -118,23 +119,32 @@ export class CalendarView extends BasesView {
   private filterRangeEnd: Date | null = null; // Computed max date from entries
   private filterRangeDays: number = 0; // Number of days in the filtered range
   private navigationLockedByAutoRange = false;
+  private navigationBoundsStart: Date | null = null; // Explicit filter lower bound for navigation
+  private navigationBoundsEnd: Date | null = null; // Explicit filter upper bound for navigation
   private entryBoundsMin: Date | null = null; // Pure entry min date (before filter config override)
   private entryBoundsMax: Date | null = null; // Pure entry max date (before filter config override)
   private autoRangeInitialized = false; // Whether the initial auto-range has been applied
   private lastAutoRangeKey: string | null = null; // Tracks last range to detect significant changes
   private saveDateTimeout: ReturnType<typeof setTimeout> | null = null; // Debounce timer for date persistence
+  private explicitViewModePinned = false;
 
   // Context-aware date detection (for embedding in daily notes)
   private contextDateEnabled: boolean = false; // Enable date detection from parent note
 
   private contextDateDetected: Date | null = null; // The detected date from parent note
+  private lastLoggedContextParentPath: string | null = null;
+  private lastLoggedContextDateDetectedKey: string | null = null;
+  private lastLoggedContextDateAppliedKey: string | null = null;
+  private loggedMissingContextParent = false;
+  private lastLoggedFilterRangeKey: string | null = null;
+  private pendingFastRefreshLogCount = 0;
+  private fastRefreshLogTimer: number | null = null;
 
   private headerResizeObserver: ResizeObserver | null = null;
   private headerMutationObserver: MutationObserver | null = null;
   private observedHeaders = new WeakSet<HTMLElement>();
   private dayPickerAction: HTMLElement | null = null;
   private datePickerInput: HTMLInputElement | null = null;
-  private headerPortalContainer: HTMLElement | null = null; // Portal target for React
   private debouncedUpdateHeaderOffset: () => void;
   private controller: QueryController;
   private pendingDataRetryId: number | null = null;
@@ -295,10 +305,6 @@ export class CalendarView extends BasesView {
     this.headerMutationObserver?.disconnect();
     this.headerMutationObserver = null;
     this.entries = [];
-    if (this.headerPortalContainer) {
-      this.headerPortalContainer.remove();
-      this.headerPortalContainer = null;
-    }
   }
 
   public focus(): void {
@@ -308,6 +314,7 @@ export class CalendarView extends BasesView {
   public onDataUpdated(): void {
     this.containerEl.removeClass("is-loading");
     this.loadConfig();
+    if (!this.shouldProcessUpdates()) return;
     this.debouncedRefresh();
     this.debouncedUpdateHeaderOffset();
     setTimeout(() => this.debouncedUpdateHeaderOffset(), 0);
@@ -320,9 +327,14 @@ export class CalendarView extends BasesView {
     );
   }
 
+  private shouldProcessUpdates(): boolean {
+    if (!this.containerEl.isConnected) return false;
+    return this.containerEl.isShown() || this.isActiveLeaf();
+  }
+
   private updateBasesHeaderOffset(): void {
     // Critical: Stop if view is hidden or detached (prevents background loops)
-    if (!this.containerEl.isShown() || !this.containerEl.isConnected) return;
+    if (!this.shouldProcessUpdates()) return;
 
     const isEmbedded = this.isEmbeddedCalendarContext();
 
@@ -370,31 +382,13 @@ export class CalendarView extends BasesView {
 
     if (!targetHeader) return;
 
-    // 2. Inject Portal
-    const targetParent = targetHeader.querySelector<HTMLElement>('.view-header-title-container') ||
-      targetHeader.querySelector<HTMLElement>('.nav-buttons-container') ||
-      targetHeader;
+    this.syncNativeResultsCountInHeader(targetHeader);
 
-    const targetSibling = targetParent.firstChild;
-
-    if (targetParent && !Platform.isMobile) {
-      if (!this.headerPortalContainer || !this.headerPortalContainer.isConnected) {
-        this.headerPortalContainer = document.createElement('div');
-        this.headerPortalContainer.addClass('tps-calendar-nav-portal');
-        this.headerPortalContainer.style.display = 'inline-flex';
-        this.headerPortalContainer.style.alignItems = 'center';
-        this.headerPortalContainer.style.marginLeft = '12px';
-        this.headerPortalContainer.style.pointerEvents = 'all'; // Ensure interactive
-
-        if (targetSibling) {
-          targetParent.insertBefore(this.headerPortalContainer, targetSibling);
-        } else {
-          targetParent.appendChild(this.headerPortalContainer);
-        }
-
-        this.renderReactCalendar();
-      }
-    }
+    // Remove legacy desktop header portal controls from previous builds.
+    const legacyPortals = this.containerEl
+      .closest('.workspace-leaf-content')
+      ?.querySelectorAll<HTMLElement>('.tps-calendar-nav-portal');
+    legacyPortals?.forEach((el) => el.remove());
 
     // 3. Update Height Variables
     // Only set variable on our container, not global leaf, to avoid conflict with other embeds
@@ -422,6 +416,32 @@ export class CalendarView extends BasesView {
       return preceding[preceding.length - 1];
     }
     return headers[headers.length - 1];
+  }
+
+  private syncNativeResultsCountInHeader(header: HTMLElement): void {
+    const countEl =
+      header.querySelector<HTMLElement>(".view-header-count") ??
+      header.querySelector<HTMLElement>(".bases-view-results-count") ??
+      header.querySelector<HTMLElement>(".bases-results-count") ??
+      header.querySelector<HTMLElement>(".bases-view-result-count") ??
+      header.querySelector<HTMLElement>(".bases-result-count") ??
+      header.querySelector<HTMLElement>("[class*=\"results-count\"]") ??
+      header.querySelector<HTMLElement>("[class*=\"result-count\"]") ??
+      header.querySelector<HTMLElement>(".bases-view-results") ??
+      header.querySelector<HTMLElement>(".bases-results");
+    if (!countEl) return;
+
+    const count = this.getRenderedResultCount();
+    const text = `${count} result${count === 1 ? "" : "s"}`;
+    if (countEl.textContent?.trim() !== text) {
+      countEl.textContent = text;
+    }
+  }
+
+  private getRenderedResultCount(): number {
+    // Match what the calendar currently renders in this view.
+    // Entries are deduped by slot identity in updateCalendar().
+    return this.entries.length;
   }
 
 
@@ -519,12 +539,20 @@ export class CalendarView extends BasesView {
     // const showHiddenEventsValue = this.config.get("showHiddenEvents");
     // this.showHiddenEvents = showHiddenEventsValue === "true" || showHiddenEventsValue === true;
 
-    const configuredViewMode = this.plugin.settings.viewMode || "week";
-    this.filterRangeAuto = this.plugin.settings.filterRangeAuto === true;
+    const viewConfigMode = this.resolveViewConfigMode();
+    const configuredViewMode: CalendarViewMode = viewConfigMode || this.getGlobalDefaultViewMode();
 
     // Restore persisted per-view state (viewMode + currentDate) from config.
     // These are saved whenever the user navigates so they persist across devices.
-    const savedViewMode = this.config.get("tps_viewMode") as string | undefined;
+    const savedViewMode = this.resolveStoredViewMode();
+    this.explicitViewModePinned =
+      (viewConfigMode != null && viewConfigMode !== "filter-based")
+      || (viewConfigMode == null && savedViewMode != null && savedViewMode !== "filter-based");
+    // Auto-range should never override a concrete per-view mode like 7d/week/month.
+    this.filterRangeAuto =
+      viewConfigMode === "filter-based"
+      || (this.plugin.settings.filterRangeAuto === true && !this.explicitViewModePinned);
+
     const savedCurrentDate = this.config.get("tps_currentDate") as string | undefined;
 
     if (savedCurrentDate) {
@@ -534,11 +562,14 @@ export class CalendarView extends BasesView {
       }
     }
 
+    // Only use saved viewmode when NOT in filter-based mode
+    // In filter-based mode, viewmode is always auto-calculated
     if (!this.filterRangeAuto) {
       // When auto-range is off, use saved per-view mode or fall back to global default
-      this.viewMode = (savedViewMode as CalendarViewMode) || configuredViewMode;
+      this.viewMode = savedViewMode || configuredViewMode;
     } else if (!this.filterRangeStart && !this.filterRangeEnd && !this.navigationLockedByAutoRange) {
-      this.viewMode = (savedViewMode as CalendarViewMode) || configuredViewMode;
+      // In filter-based mode with no range yet, default to week view until data is loaded
+      this.viewMode = "week";
     }
 
     // Toggle Day Picker Action visibility
@@ -642,6 +673,9 @@ export class CalendarView extends BasesView {
   }
 
   public async updateCalendar(): Promise<void> {
+    if (!this.shouldProcessUpdates()) {
+      return;
+    }
 
     // Ensure config is loaded if available (fixes issue where embedded views allow data update before config is ready)
     if (this.config && (!this.startDateProp || !this.endDateProp)) {
@@ -670,6 +704,11 @@ export class CalendarView extends BasesView {
 
     this.pendingDataRetryCount = 0;
     this.updateExternalCalendarVisibility();
+    const taskAllowedPaths = new Set<string>();
+    for (const entry of queryData.data ?? []) {
+      if (entry?.file?.path) taskAllowedPaths.add(entry.file.path);
+    }
+    this.taskItemAllowedPaths = taskAllowedPaths;
 
     // 0. Update Line Filter from View Config (Standard Filter Integration)
     // We look for filters that use our injected line properties
@@ -1014,36 +1053,24 @@ export class CalendarView extends BasesView {
         // Do NOT add is-external class to local notes, even if they match an external event.
         // We want them to look like local notes (gradient, priority color).
 
-        if (priorityStr && ["high", "medium", "low"].includes(priorityStr)) {
-          cssClasses.push(`bases-calendar-event-priority-${priorityStr}`);
-        }
-
         if (statusStr) {
           cssClasses.push(`bases-calendar-event-status-${statusStr}`);
         }
 
-        const priorityColor =
-          (priorityStr && DEFAULT_PRIORITY_COLOR_MAP[priorityStr]) ??
-          DEFAULT_PRIORITY_COLOR_MAP["normal"];
-        let backgroundColor = priorityColor;
-        let borderColor = priorityColor;
-        const styleOverride = this.plugin.getCalendarStyleOverride({
-          ...entry,
-          status: statusStr,
-          priority: priorityStr,
-          file: entryFile,
-          frontmatter: cache?.frontmatter
-        });
-        if (styleOverride?.color) {
-          backgroundColor = styleOverride.color;
-          borderColor = styleOverride.color;
-        }
-        if (styleOverride?.textStyle) {
-          const overrides = styleOverride.textStyle
-            .split(/[,|]/)
-            .map((t) => t.trim().toLowerCase())
-            .filter(Boolean);
-          cssClasses.push(...overrides.map((style) => `bases-calendar-status-${style}`));
+        const colorSource = this.plugin.settings.noteEventColorSource || "frontmatter";
+        const iconSource = this.plugin.settings.noteEventIconSource || "frontmatter";
+        const colorTarget = this.plugin.settings.noteEventFrontmatterColorTarget || "both";
+        const applyFrontmatterColor = colorSource === "frontmatter" && colorTarget !== "off";
+        const applyFrontmatterColorToCard =
+          applyFrontmatterColor && (colorTarget === "card" || colorTarget === "both");
+        const applyFrontmatterColorToIcon =
+          applyFrontmatterColor && (colorTarget === "icon" || colorTarget === "both");
+        let backgroundColor = "";
+        let borderColor = "";
+        const frontmatterColor = this.resolveFrontmatterEventColor(cache?.frontmatter as Record<string, any> | undefined);
+        if (colorSource !== "off" && applyFrontmatterColorToCard && frontmatterColor) {
+          backgroundColor = frontmatterColor;
+          borderColor = frontmatterColor;
         }
 
         if (externalMatch) {
@@ -1074,7 +1101,13 @@ export class CalendarView extends BasesView {
           priority: priorityStr,
           cssClasses,
           backgroundColor,
-          borderColor
+          borderColor,
+          iconName: iconSource === "frontmatter"
+            ? (this.resolveFrontmatterEventIcon(cache?.frontmatter as Record<string, any> | undefined) || undefined)
+            : undefined,
+          iconColor: iconSource === "frontmatter" && applyFrontmatterColorToIcon
+            ? this.resolveFrontmatterEventIconColor(cache?.frontmatter as Record<string, any> | undefined, "")
+            : undefined,
         });
 
         // Note: Time logs are now stored in daily notes, not source notes.
@@ -1255,16 +1288,14 @@ export class CalendarView extends BasesView {
     this.entries = finalEntries;
     this.unscheduledEntries = unscheduledEntries;
 
-    // If auto view mode is enabled, derive range from filters first (if present),
-    // then fall back to local visible entries.
-    if (this.filterRangeAuto) {
-      this.computeFilterDateRange(this.getEffectiveFilterRangeEntries(finalEntries));
-    } else {
-      this.navigationLockedByAutoRange = false;
-    }
+    // Always compute filter bounds so explicit date filters can limit navigation.
+    // Auto-derived mode changes are applied inside computeFilterDateRange only when
+    // filterRangeAuto is enabled.
+    this.computeFilterDateRange(this.getEffectiveFilterRangeEntries(finalEntries));
 
     this.renderReactCalendar();
     this.updateBasesHeaderOffset(); // Ensure layout is correct
+    window.setTimeout(() => this.updateBasesHeaderOffset(), 120);
   }
 
   /**
@@ -1275,14 +1306,21 @@ export class CalendarView extends BasesView {
   }
 
   private getFilterRangeBoundsFromConfig(): { start: Date | null; end: Date | null; hasDateFilter: boolean } {
+    const controllerAny = this.controller as any;
     const filterSources = [
       this.config.get?.("filters"),
+      this.config.get?.("filter"),
+      this.config.get?.("query"),
       (this.config as any).filtersAll,
       (this.config as any).filters?.all,
       this.config.get?.("filtersAll"),
       (this.config as any).viewFilters,
       (this.config as any).filters,
+      controllerAny?.filters,
+      controllerAny?.viewFilters,
+      controllerAny?.query,
     ].filter((value, index, arr) => value != null && arr.indexOf(value) === index);
+    const contextFile = this.getFilterExpressionContextFile();
 
     const propertyAliases = this.getStartDatePropertyAliases();
     let lowerBound: Date | null = null;
@@ -1290,7 +1328,13 @@ export class CalendarView extends BasesView {
     let hasDateFilter = false;
 
     for (const source of filterSources) {
-      const conditions = this.collectFilterConditions(source);
+      let conditions: Array<{ property: string; operator: string; value: unknown }> = [];
+      try {
+        conditions = this.collectFilterConditions(source);
+      } catch (error) {
+        logger.warn("[CalendarView] Failed to parse filter source for auto-range:", error);
+        continue;
+      }
       for (const condition of conditions) {
         if (!this.matchesStartDateFilterProperty(condition.property, propertyAliases)) {
           continue;
@@ -1299,7 +1343,7 @@ export class CalendarView extends BasesView {
         // Any condition referencing the start date property means a date filter exists
         hasDateFilter = true;
 
-        const boundaryDate = resolveFilterDateExpression(condition.value);
+        const boundaryDate = this.resolveFilterDateExpressionWithContext(condition.value, contextFile);
         if (!boundaryDate) continue;
 
         if (isLowerBoundOperator(condition.operator)) {
@@ -1315,6 +1359,77 @@ export class CalendarView extends BasesView {
     }
 
     return { start: lowerBound, end: upperBound, hasDateFilter };
+  }
+
+  private getFilterExpressionContextFile(): TFile | null {
+    const leafFile = this.resolveContainerLeafFile();
+    if (leafFile && leafFile.extension.toLowerCase() !== "base") {
+      return leafFile;
+    }
+    const parentPath = this.findParentNotePath();
+    if (parentPath) {
+      const parent = this.app.vault.getFileByPath(parentPath);
+      if (parent) return parent;
+    }
+    return leafFile;
+  }
+
+  private getFilterExpressionContextCandidates(primary: TFile | null): TFile[] {
+    const candidates: TFile[] = [];
+    const push = (file: TFile | null | undefined) => {
+      if (!(file instanceof TFile)) return;
+      if (file.extension.toLowerCase() === "base") return;
+      if (candidates.some((candidate) => candidate.path === file.path)) return;
+      candidates.push(file);
+    };
+
+    push(primary);
+    const parentPath = this.findParentNotePath();
+    push(parentPath ? this.app.vault.getFileByPath(parentPath) : null);
+    const active = this.app.workspace.getActiveFile();
+    push(active instanceof TFile ? active : null);
+
+    return candidates;
+  }
+
+  private resolveFilterDateExpressionWithContext(value: unknown, contextFile: TFile | null): Date | null {
+    const direct = resolveFilterDateExpression(value);
+    if (direct) return direct;
+    if (value === null || value === undefined) return null;
+
+    const raw = String(value).trim();
+    if (!raw) return null;
+    if (!/this\.file\./i.test(raw)) return null;
+    const contextCandidates = this.getFilterExpressionContextCandidates(contextFile);
+    if (contextCandidates.length === 0) return null;
+    const primaryContext = contextCandidates[0];
+
+    const getFmValue = (key: string): string => {
+      const normalized = String(key || "").trim().toLowerCase();
+      if (!normalized) return "";
+      for (const file of contextCandidates) {
+        const cache = this.app.metadataCache.getFileCache(file);
+        const fm = (cache?.frontmatter || {}) as Record<string, unknown>;
+        const actual = Object.keys(fm).find((candidate) => candidate.toLowerCase() === normalized);
+        if (!actual) continue;
+        const val = fm[actual];
+        if (val == null) continue;
+        const asString = String(val);
+        if (asString.trim().length > 0) return asString;
+      }
+      return "";
+    };
+
+    const quote = (input: string): string => `"${String(input || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
+    let expanded = raw;
+    expanded = expanded.replace(/\bthis\.file\.name\b/gi, quote(primaryContext.basename));
+    expanded = expanded.replace(/\bthis\.file\.path\b/gi, quote(primaryContext.path));
+    expanded = expanded.replace(/\bthis\.file\.basename\b/gi, quote(primaryContext.basename));
+    expanded = expanded.replace(/\bthis\.file\.properties\.([A-Za-z0-9_-]+)\b/gi, (_m, key) => quote(getFmValue(String(key))));
+    expanded = expanded.replace(/\bthis\.file\.property\.([A-Za-z0-9_-]+)\b/gi, (_m, key) => quote(getFmValue(String(key))));
+
+    return resolveFilterDateExpression(expanded);
   }
 
   private getStartDatePropertyAliases(): Set<string> {
@@ -1371,33 +1486,46 @@ export class CalendarView extends BasesView {
    * Also sets currentDate to the start of the range so filtered events are visible.
    */
   private computeFilterDateRange(entries: CalendarEntry[]): void {
-    let minDate: Date | null = null;
-    let maxDate: Date | null = null;
+    let entryMinDate: Date | null = null;
+    let entryMaxDate: Date | null = null;
 
     for (const entry of entries) {
       const startDate = entry.startDate;
       const endDate = entry.endDate || startDate;
 
-      if (!minDate || startDate < minDate) {
-        minDate = new Date(startDate);
+      if (!entryMinDate || startDate < entryMinDate) {
+        entryMinDate = new Date(startDate);
       }
-      if (!maxDate || endDate > maxDate) {
-        maxDate = new Date(endDate);
+      if (!entryMaxDate || endDate > entryMaxDate) {
+        entryMaxDate = new Date(endDate);
       }
       // Also check start date for max (in case end date is not set)
-      if (!maxDate || startDate > maxDate) {
-        maxDate = new Date(startDate);
+      if (!entryMaxDate || startDate > entryMaxDate) {
+        entryMaxDate = new Date(startDate);
       }
     }
 
     // Save pure entry bounds before filter config override
-    this.entryBoundsMin = minDate ? new Date(minDate) : null;
-    this.entryBoundsMax = maxDate ? new Date(maxDate) : null;
+    this.entryBoundsMin = entryMinDate ? new Date(entryMinDate) : null;
+    this.entryBoundsMax = entryMaxDate ? new Date(entryMaxDate) : null;
+
+    let minDate: Date | null = entryMinDate ? new Date(entryMinDate) : null;
+    let maxDate: Date | null = entryMaxDate ? new Date(entryMaxDate) : null;
 
     const filterBounds = this.getFilterRangeBoundsFromConfig();
     // Lock navigation when any date filter condition exists (even if the value
     // is a dynamic expression like `date(this.file.name)` that can't be resolved).
     const hasExplicitBounds = filterBounds.hasDateFilter;
+    this.navigationBoundsStart = filterBounds.start ? new Date(filterBounds.start) : null;
+    this.navigationBoundsEnd = filterBounds.end ? new Date(filterBounds.end) : null;
+
+    // When explicit date filters exist, they must define the auto-range window.
+    // Do not widen from entry-derived min/max (which may include far-future items).
+    if (hasExplicitBounds) {
+      minDate = filterBounds.start ? new Date(filterBounds.start) : null;
+      maxDate = filterBounds.end ? new Date(filterBounds.end) : null;
+    }
+
     if (filterBounds.start) {
       minDate = new Date(filterBounds.start);
     }
@@ -1412,6 +1540,17 @@ export class CalendarView extends BasesView {
       maxDate = new Date(minDate);
     }
 
+    // Explicit date filter exists but couldn't resolve either bound:
+    // constrain to today's day instead of falling back to all entry dates.
+    if (hasExplicitBounds && !minDate && !maxDate) {
+      const anchor = this.currentDate ? new Date(this.currentDate) : new Date();
+      anchor.setHours(0, 0, 0, 0);
+      minDate = new Date(anchor);
+      maxDate = new Date(anchor);
+      this.navigationBoundsStart = new Date(anchor);
+      this.navigationBoundsEnd = new Date(anchor);
+    }
+
     if (minDate && maxDate && minDate.getTime() > maxDate.getTime()) {
       maxDate = new Date(minDate);
     }
@@ -1421,6 +1560,8 @@ export class CalendarView extends BasesView {
     if (!minDate || !maxDate) {
       this.filterRangeStart = null;
       this.filterRangeEnd = null;
+      this.navigationBoundsStart = null;
+      this.navigationBoundsEnd = null;
       this.entryBoundsMin = null;
       this.entryBoundsMax = null;
       this.filterRangeDays = 0;
@@ -1430,7 +1571,13 @@ export class CalendarView extends BasesView {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         this.currentDate = today;
-        this.autoRangeInitialized = true;
+        // In filter-based mode, data/filters can arrive after initial render.
+        // Keep initialization open so the next pass can still auto-select
+        // day/3d/4d/5d/7d/month from the resolved range instead of staying on
+        // the temporary week placeholder.
+        if (!this.filterRangeAuto) {
+          this.autoRangeInitialized = true;
+        }
       }
       this.lastAutoRangeKey = null;
       return;
@@ -1449,11 +1596,43 @@ export class CalendarView extends BasesView {
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1; // +1 for inclusive
     this.filterRangeDays = diffDays;
 
-    logger.log(`[CalendarView] Filter range: ${diffDays} days (${minDate.toDateString()} to ${maxDate.toDateString()})`);
+    const filterRangeKey = `${startOfMinDay.getTime()}-${startOfMaxDay.getTime()}-${diffDays}`;
+    if (this.lastLoggedFilterRangeKey !== filterRangeKey) {
+      logger.log(`[CalendarView] Filter range: ${diffDays} days (${minDate.toDateString()} to ${maxDate.toDateString()})`);
+      this.lastLoggedFilterRangeKey = filterRangeKey;
+    }
 
-    // Only lock navigation when there are explicit date bounds in the filter.
-    // When the range is derived purely from entries, allow user to navigate.
-    this.navigationLockedByAutoRange = hasExplicitBounds;
+    // Explicit bounds should constrain navigation, not disable it outright.
+    this.navigationLockedByAutoRange = false;
+
+    const clampToNavigationBounds = (input: Date): Date => {
+      const next = new Date(input);
+      next.setHours(0, 0, 0, 0);
+      if (this.navigationBoundsStart && next.getTime() < this.navigationBoundsStart.getTime()) {
+        return new Date(this.navigationBoundsStart);
+      }
+      if (this.navigationBoundsEnd) {
+        const upper = new Date(this.navigationBoundsEnd);
+        upper.setHours(0, 0, 0, 0);
+        if (next.getTime() > upper.getTime()) {
+          return upper;
+        }
+      }
+      return next;
+    };
+
+    if (hasExplicitBounds) {
+      if (this.currentDate) {
+        this.currentDate = clampToNavigationBounds(this.currentDate);
+      } else {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        this.currentDate = clampToNavigationBounds(today);
+      }
+      if (this.currentDate) {
+        this.persistCurrentDate(this.currentDate);
+      }
+    }
 
     // Build a key from the date range to detect significant changes.
     // Only auto-switch viewMode/currentDate on first load or when the range actually changes.
@@ -1461,58 +1640,62 @@ export class CalendarView extends BasesView {
     const rangeChanged = this.lastAutoRangeKey !== rangeKey;
     this.lastAutoRangeKey = rangeKey;
 
+    const deriveAutoViewMode = (days: number): CalendarViewMode => {
+      if (days <= 1) return "day";
+      if (days <= 3) return "3d";
+      if (days <= 4) return "4d";
+      if (days <= 5) return "5d";
+      if (days <= 7) return "7d";
+      return "month";
+    };
+
+    // In filter-based mode with explicit date bounds, always apply the derived mode.
+    // This avoids stale "week" state when bounds resolve after initial context-date pass.
+    if (this.filterRangeAuto && hasExplicitBounds) {
+      const previousViewMode = this.viewMode;
+      const nextViewMode = deriveAutoViewMode(diffDays);
+      this.viewMode = nextViewMode;
+
+      if (nextViewMode !== "month") {
+        const targetDayCount = getAutoRangeViewDayCount(diffDays);
+        const centerOffset = Math.max(0, Math.floor((targetDayCount - 1) / 2));
+        this.currentDate = new Date(startOfMinDay);
+        this.currentDate.setDate(this.currentDate.getDate() + centerOffset);
+        this.currentDate.setHours(0, 0, 0, 0);
+      } else {
+        this.currentDate = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+      }
+
+      if (previousViewMode !== this.viewMode) {
+        logger.log(`[CalendarView] Auto-switched view mode: ${previousViewMode} → ${this.viewMode}`);
+      }
+      if (this.currentDate) {
+        this.persistCurrentDate(this.currentDate);
+      }
+      this.autoRangeInitialized = true;
+      if (this.dayPickerAction) {
+        const allowedModes = ['3d', '4d', '5d', '7d', 'week'];
+        this.dayPickerAction.style.display = allowedModes.includes(this.viewMode) ? '' : 'none';
+      }
+      return;
+    }
+
     // Only auto-override viewMode/currentDate when:
     //   (a) the range is explicitly locked by a filter (hasExplicitBounds), or
     //   (b) it's the very first load AND there is no saved user preference.
     // For data-derived (unlocked) ranges we must respect what the user last chose,
     // and default the visible date to *today* rather than the earliest entry date.
-    if (!this.autoRangeInitialized || (rangeChanged && hasExplicitBounds)) {
+    if (this.filterRangeAuto && (!this.autoRangeInitialized || (rangeChanged && hasExplicitBounds))) {
       const previousViewMode = this.viewMode;
 
-      if (hasExplicitBounds) {
-        // Locked range: auto-select the tightest view to fit the span.
-        if (diffDays <= 1) {
-          this.viewMode = "day";
-        } else if (diffDays <= 3) {
-          this.viewMode = "3d";
-        } else if (diffDays <= 4) {
-          this.viewMode = "4d";
-        } else if (diffDays <= 5) {
-          this.viewMode = "5d";
-        } else if (diffDays <= 7) {
-          this.viewMode = "7d";
-        } else {
-          this.viewMode = "month";
-        }
-
-        // Center currentDate on the locked range.
-        if (this.viewMode !== "month") {
-          const targetDayCount = getAutoRangeViewDayCount(diffDays);
-          const centerOffset = Math.max(0, Math.floor((targetDayCount - 1) / 2));
-          this.currentDate = new Date(startOfMinDay);
-          this.currentDate.setDate(this.currentDate.getDate() + centerOffset);
-          this.currentDate.setHours(0, 0, 0, 0);
-        } else {
-          this.currentDate = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
-        }
-      } else if (!this.autoRangeInitialized) {
+      if (!this.autoRangeInitialized) {
         // Data-derived range (not locked), first load only.
         // Use saved viewMode if the user already has a preference; otherwise auto-select.
-        const savedViewMode = this.config.get("tps_viewMode") as string | undefined;
-        if (!savedViewMode) {
-          if (diffDays <= 1) {
-            this.viewMode = "day";
-          } else if (diffDays <= 3) {
-            this.viewMode = "3d";
-          } else if (diffDays <= 4) {
-            this.viewMode = "4d";
-          } else if (diffDays <= 5) {
-            this.viewMode = "5d";
-          } else if (diffDays <= 7) {
-            this.viewMode = "7d";
-          } else {
-            this.viewMode = "month";
-          }
+        const savedViewMode = this.resolveStoredViewMode();
+        const concreteSavedViewMode =
+          savedViewMode && savedViewMode !== "filter-based" ? savedViewMode : undefined;
+        if (!concreteSavedViewMode) {
+          this.viewMode = deriveAutoViewMode(diffDays);
         }
 
         // Default visible date to today when there is no saved/restored date.
@@ -1528,8 +1711,11 @@ export class CalendarView extends BasesView {
         logger.log(`[CalendarView] Auto-switched view mode: ${previousViewMode} → ${this.viewMode}`);
       }
 
-      // Persist so the next open restores the same state.
-      this.config.set("tps_viewMode", this.viewMode);
+      // Only persist viewmode when NOT in filter-based mode
+      // In filter-based mode, viewmode is always auto-calculated on load
+      if (!this.filterRangeAuto) {
+        this.config.set("tps_viewMode", this.viewMode);
+      }
       if (this.currentDate) {
         this.persistCurrentDate(this.currentDate);
       }
@@ -1559,13 +1745,22 @@ export class CalendarView extends BasesView {
       const detectedDate = this.extractDateFromPath(parentNote);
       if (detectedDate) {
         this.contextDateDetected = detectedDate;
-        logger.log(`[CalendarView] Detected context date: ${detectedDate.toDateString()} from "${parentNote}"`);
+        const dateLogKey = `${parentNote}::${detectedDate.getFullYear()}-${detectedDate.getMonth()}-${detectedDate.getDate()}`;
+        if (this.lastLoggedContextDateDetectedKey !== dateLogKey) {
+          logger.log(`[CalendarView] Detected context date: ${detectedDate.toDateString()} from "${parentNote}"`);
+          this.lastLoggedContextDateDetectedKey = dateLogKey;
+        }
 
         // Only update currentDate if we actually detected a context date
         // This preserves user navigation when in standalone mode
         detectedDate.setHours(0, 0, 0, 0);
         this.currentDate = detectedDate;
-        logger.log(`[CalendarView] Context date set to: ${detectedDate.toDateString()}, keeping existing viewMode: ${this.viewMode}`);
+        const viewStateKey = `${dateLogKey}::${this.viewMode}`;
+        if (this.lastLoggedContextDateAppliedKey !== viewStateKey) {
+          logger.log(`[CalendarView] Context date set to: ${detectedDate.toDateString()}, keeping existing viewMode: ${this.viewMode}`);
+          this.lastLoggedContextDateAppliedKey = viewStateKey;
+        }
+        this.loggedMissingContextParent = false;
       }
     }
   }
@@ -1581,7 +1776,11 @@ export class CalendarView extends BasesView {
       if (leafContent) {
         const dataPath = leafContent.getAttribute('data-path');
         if (dataPath) {
-          logger.log(`[CalendarView] Found parent via data-path: ${dataPath}`);
+          if (this.lastLoggedContextParentPath !== dataPath) {
+            logger.log(`[CalendarView] Found parent via data-path: ${dataPath}`);
+            this.lastLoggedContextParentPath = dataPath;
+          }
+          this.loggedMissingContextParent = false;
           return dataPath;
         }
       }
@@ -1589,7 +1788,11 @@ export class CalendarView extends BasesView {
       // Method 2: Find the workspace leaf and look up the view file.
       const leafFile = this.resolveContainerLeafFile();
       if (leafFile) {
-        logger.log(`[CalendarView] Found parent via leaf iteration: ${leafFile.path}`);
+        if (this.lastLoggedContextParentPath !== leafFile.path) {
+          logger.log(`[CalendarView] Found parent via leaf iteration: ${leafFile.path}`);
+          this.lastLoggedContextParentPath = leafFile.path;
+        }
+        this.loggedMissingContextParent = false;
         return leafFile.path;
       }
 
@@ -1608,7 +1811,11 @@ export class CalendarView extends BasesView {
             if (parentLeaf) {
               const dataPath = parentLeaf.getAttribute('data-path');
               if (dataPath) {
-                logger.log(`[CalendarView] Found parent via embed ancestor: ${dataPath}`);
+                if (this.lastLoggedContextParentPath !== dataPath) {
+                  logger.log(`[CalendarView] Found parent via embed ancestor: ${dataPath}`);
+                  this.lastLoggedContextParentPath = dataPath;
+                }
+                this.loggedMissingContextParent = false;
                 return dataPath;
               }
             }
@@ -1621,7 +1828,11 @@ export class CalendarView extends BasesView {
       const ctrl = this.controller as any;
       const ctrlFilePath: string | undefined = ctrl.file?.path ?? ctrl.sourceFile?.path;
       if (ctrlFilePath) {
-        logger.log(`[CalendarView] Found parent via controller: ${ctrlFilePath}`);
+        if (this.lastLoggedContextParentPath !== ctrlFilePath) {
+          logger.log(`[CalendarView] Found parent via controller: ${ctrlFilePath}`);
+          this.lastLoggedContextParentPath = ctrlFilePath;
+        }
+        this.loggedMissingContextParent = false;
         return ctrlFilePath;
       }
 
@@ -1632,7 +1843,11 @@ export class CalendarView extends BasesView {
           el.getAttribute('data-file-path') ||
           el.getAttribute('data-source');
         if (filePath && filePath.endsWith('.md')) {
-          logger.log(`[CalendarView] Found parent via DOM attribute: ${filePath}`);
+          if (this.lastLoggedContextParentPath !== filePath) {
+            logger.log(`[CalendarView] Found parent via DOM attribute: ${filePath}`);
+            this.lastLoggedContextParentPath = filePath;
+          }
+          this.loggedMissingContextParent = false;
           return filePath;
         }
         el = el.parentElement;
@@ -1643,14 +1858,24 @@ export class CalendarView extends BasesView {
       if (hoverLink) {
         const href = hoverLink.getAttribute('data-href');
         if (href) {
-          logger.log(`[CalendarView] Found parent via hover-link: ${href}`);
+          if (this.lastLoggedContextParentPath !== href) {
+            logger.log(`[CalendarView] Found parent via hover-link: ${href}`);
+            this.lastLoggedContextParentPath = href;
+          }
+          this.loggedMissingContextParent = false;
           return href;
         }
       }
 
       // Fallback: Don't use active file as it may be wrong for embeds
       // Instead, log that we couldn't find the parent and use today
-      logger.log(`[CalendarView] Could not determine parent note, using today's date`);
+      this.lastLoggedContextParentPath = null;
+      this.lastLoggedContextDateDetectedKey = null;
+      this.lastLoggedContextDateAppliedKey = null;
+      if (!this.loggedMissingContextParent) {
+        logger.log(`[CalendarView] Could not determine parent note, using today's date`);
+        this.loggedMissingContextParent = true;
+      }
       return null;
     } catch (error) {
       logger.warn("[CalendarView] Error finding parent note:", error);
@@ -1712,6 +1937,9 @@ export class CalendarView extends BasesView {
   }
 
   private async refreshExternalEvents(start: Date, end: Date): Promise<void> {
+    if (!this.shouldProcessUpdates()) {
+      return;
+    }
     // All devices fetch and display external events
     // Only controller creates/syncs notes (checked in runAutoCreateSync)
 
@@ -1835,7 +2063,6 @@ export class CalendarView extends BasesView {
 
       if (file) {
         new Notice(`Created meeting note: ${file.basename}`);
-        // Open in a new leaf to keep calendar visible
         const leaf = this.app.workspace.getLeaf('split', 'vertical');
         await leaf.openFile(file);
 
@@ -2729,8 +2956,11 @@ export class CalendarView extends BasesView {
 
               const file = calEntry.entry.file;
               if (!file) return;
-
-              await this.app.workspace.openLinkText(file.path, "", isModEvent);
+              const leaf = isModEvent
+                ? (this.app.workspace.getLeaf(true) ?? this.app.workspace.getLeaf(false))
+                : this.app.workspace.getLeaf(false);
+              if (!leaf) return;
+              await leaf.openFile(file);
             }}
             onEntryContextMenu={(evt, entry) => {
               evt.preventDefault();
@@ -2743,11 +2973,6 @@ export class CalendarView extends BasesView {
               this.handleEventResize(entry, newStart, newEnd, allDay, scope, oldStart, oldEnd)
             }
             onCreateSelection={(start, end) => this.handleCreateRange(start, end)}
-            unscheduledEntries={this.plugin.settings.enableUnscheduledView ? this.unscheduledEntries.map(e => ({ filePath: e.file.path, title: e.title })) : undefined}
-            onUnscheduledEntryClick={(filePath) => {
-              const f = this.app.vault.getAbstractFileByPath(filePath);
-              if (f instanceof TFile) this.app.workspace.openLinkText(f.path, '', false);
-            }}
             onExternalDrop={(filePath, start, allDay) => this.handleExternalDrop(filePath, start, allDay)}
             editable={this.isEditable()}
 
@@ -2779,17 +3004,12 @@ export class CalendarView extends BasesView {
             onDateMouseEnter={(date, el, ev) => this.handleDateMouseEnter(date, el, ev)}
             // showHiddenEvents={this.showHiddenEvents}
             // onToggleHiddenEvents={() => this.toggleHiddenEvents()}
-            headerPortalTarget={this.headerPortalContainer}
             showNavButtons={this.showNavButtons}
             navigationLocked={this.navigationLockedByAutoRange}
-            entryBoundsStart={this.filterRangeAuto && this.entryBoundsMin ? this.entryBoundsMin : undefined}
-            entryBoundsEnd={this.filterRangeAuto && this.entryBoundsMax ? this.entryBoundsMax : undefined}
-            onViewModeChange={(mode) => {
-              if (this.navigationLockedByAutoRange) return;
-              this.viewMode = mode as CalendarViewMode;
-              this.config.set("tps_viewMode", mode);
-              this.renderReactCalendar();
-            }}
+            entryBoundsStart={this.filterRangeAuto && this.filterRangeStart ? this.filterRangeStart : undefined}
+            entryBoundsEnd={this.filterRangeAuto && this.filterRangeEnd ? this.filterRangeEnd : undefined}
+            navigationBoundsStart={this.navigationBoundsStart ?? undefined}
+            navigationBoundsEnd={this.navigationBoundsEnd ?? undefined}
 
             allDayEventHeight={this.plugin.settings.allDayEventHeight}
             allDayMaxRows={this.plugin.settings.allDayMaxRows}
@@ -2804,6 +3024,7 @@ export class CalendarView extends BasesView {
             showNowIndicator={this.plugin.settings.showNowIndicator}
             pastEventOpacity={this.plugin.settings.pastEventOpacity}
             eventFontSize={this.plugin.settings.eventFontSize}
+            activeEventHighlightColor={this.plugin.settings.activeEventHighlightColor}
           />
         </AppContext.Provider>
       </StrictMode>,
@@ -2901,6 +3122,21 @@ export class CalendarView extends BasesView {
     oldStart?: Date,
     oldEnd?: Date,
   ): Promise<void> {
+    if ((entry as any).__taskItem) {
+      const normalizedTaskStart = new Date(newStart);
+      const includeTime = !allDay;
+      if (!includeTime) {
+        normalizedTaskStart.setHours(0, 0, 0, 0);
+      }
+      const handled = await this.updateTaskItemDate(entry, normalizedTaskStart, includeTime);
+      if (handled) return;
+    }
+
+    if (entry.file instanceof TFile && this.isKanbanBoardFile(entry.file)) {
+      new Notice("Drag the Kanban card task event, not the board note event.");
+      return;
+    }
+
     // Check if this is an external event
     const eventData = this.entries.find(e => e.entry.file.path === entry.file.path);
     if (eventData?.isExternal && eventData.externalEvent) {
@@ -2972,6 +3208,17 @@ export class CalendarView extends BasesView {
     oldStart?: Date,
     oldEnd?: Date,
   ): Promise<void> {
+    if ((entry as any).__taskItem) {
+      const normalizedTaskStart = new Date(newStart);
+      const handled = await this.updateTaskItemDate(entry, normalizedTaskStart, true);
+      if (handled) return;
+    }
+
+    if (entry.file instanceof TFile && this.isKanbanBoardFile(entry.file)) {
+      new Notice("Resize is disabled for Kanban board note events.");
+      return;
+    }
+
     // Check if this is an external event
     const eventData = this.entries.find(e => e.entry.file.path === entry.file.path);
     if (eventData?.isExternal && eventData.externalEvent) {
@@ -3158,6 +3405,83 @@ export class CalendarView extends BasesView {
     } as unknown as BasesEntry;
   }
 
+  private createTaskEntryFromItem(file: TFile, task: ParsedTaskItem): BasesEntry {
+    const entry = this.createTaskEntry(file) as any;
+    entry.__taskItem = task;
+    return entry as BasesEntry;
+  }
+
+  private formatYmd(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  private formatKanbanTime(date: Date): string {
+    const hour24 = date.getHours();
+    const minute = date.getMinutes();
+    const meridiem = hour24 >= 12 ? "pm" : "am";
+    const hour12 = ((hour24 + 11) % 12) + 1;
+    return `${hour12}:${String(minute).padStart(2, "0")}${meridiem}`;
+  }
+
+  private updateTaskLineDate(line: string, date: Date, includeTime: boolean): string {
+    const ymd = this.formatYmd(date);
+    let updated = line;
+    if (/@\{[^}]*\}/.test(line)) {
+      updated = updated.replace(/@\{[^}]*\}/, `@{${ymd}}`);
+    } else if (/⏳\s*\d{4}-\d{2}-\d{2}/.test(line)) {
+      updated = updated.replace(/⏳\s*\d{4}-\d{2}-\d{2}/, `⏳ ${ymd}`);
+    } else if (/📅\s*\d{4}-\d{2}-\d{2}/.test(line)) {
+      updated = updated.replace(/📅\s*\d{4}-\d{2}-\d{2}/, `📅 ${ymd}`);
+    } else {
+      updated = `${updated} @{${ymd}}`;
+    }
+
+    if (includeTime) {
+      const timeToken = this.formatKanbanTime(date);
+      if (/@@\{[^}]*\}/.test(updated)) {
+        updated = updated.replace(/@@\{[^}]*\}/, `@@{${timeToken}}`);
+      } else {
+        updated = `${updated} @@{${timeToken}}`;
+      }
+    }
+
+    return updated;
+  }
+
+  private async updateTaskItemDate(entry: BasesEntry, newStart: Date, includeTime: boolean): Promise<boolean> {
+    const task = (entry as any).__taskItem as ParsedTaskItem | undefined;
+    if (!task) return false;
+
+    const abstractFile = this.app.vault.getAbstractFileByPath(task.filePath || entry.file.path);
+    if (!(abstractFile instanceof TFile)) return false;
+
+    const content = await this.app.vault.cachedRead(abstractFile);
+    const lines = content.split("\n");
+    const index = task.lineNumber;
+    if (index < 0 || index >= lines.length) return false;
+
+    const original = lines[index];
+    const updated = this.updateTaskLineDate(original, newStart, includeTime);
+    if (updated === original) return false;
+
+    lines[index] = updated;
+    await this.app.vault.modify(abstractFile, lines.join("\n"));
+
+    this.lastTaskItemsFetch = 0;
+    await this.refreshTaskItems();
+    return true;
+  }
+
+  private isKanbanBoardFile(file: TFile): boolean {
+    const cache = this.app.metadataCache.getFileCache(file);
+    const frontmatter = (cache?.frontmatter || {}) as Record<string, unknown>;
+    const value = String(frontmatter["kanban-plugin"] ?? frontmatter["kanbanPlugin"] ?? "").trim().toLowerCase();
+    return value === "board";
+  }
+
   private buildTaskItemEntries(): CalendarEntry[] {
     const settings = this.plugin.settings;
     const dateField = settings.taskDateField;
@@ -3168,26 +3492,54 @@ export class CalendarView extends BasesView {
       if (!settings.showCompletedTaskItems && task.isCompleted) continue;
 
       let date: Date | null = null;
-      if (dateField === "due") date = task.dueDate;
-      else if (dateField === "scheduled") date = task.scheduledDate;
-      else if (dateField === "start") date = task.startDate;
-      else date = task.dueDate ?? task.scheduledDate ?? task.startDate;
+      let dateSource: "due" | "scheduled" | "start" | null = null;
+      if (dateField === "due") {
+        date = task.dueDate;
+        dateSource = "due";
+      } else if (dateField === "scheduled") {
+        date = task.scheduledDate;
+        dateSource = "scheduled";
+      } else if (dateField === "start") {
+        date = task.startDate;
+        dateSource = "start";
+      } else {
+        if (task.dueDate) {
+          date = task.dueDate;
+          dateSource = "due";
+        } else if (task.scheduledDate) {
+          date = task.scheduledDate;
+          dateSource = "scheduled";
+        } else {
+          date = task.startDate;
+          dateSource = task.startDate ? "start" : null;
+        }
+      }
 
       if (!date) continue;
 
       const abstractFile = this.app.vault.getAbstractFileByPath(task.filePath);
       if (!abstractFile || !(abstractFile instanceof TFile)) continue;
 
-      // All-day event: start at midnight, end at next-day midnight (FC exclusive end).
-      const startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
-      const endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0);
+      const taskTimed = dateSource === "scheduled" && task.hasScheduledTime;
+      let startDate: Date;
+      let endDate: Date;
+      if (taskTimed) {
+        startDate = new Date(date);
+        const durationMinutes = Math.max(5, this.defaultEventDuration || 30);
+        endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
+      } else {
+        // All-day event: start at midnight, end at next-day midnight (FC exclusive end).
+        startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+        endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0);
+      }
 
       entries.push({
-        entry: this.createTaskEntry(abstractFile),
+        entry: this.createTaskEntryFromItem(abstractFile, task),
         startDate,
         endDate,
         title: task.text || "Task",
         isTask: true,
+        taskTimed,
         isExternal: false,
         cssClasses: ["bases-calendar-event", "is-task"],
         backgroundColor: color,
@@ -3205,6 +3557,7 @@ export class CalendarView extends BasesView {
       this.cachedRawTaskItems = await parseAllTaskItems(
         this.app,
         this.plugin.settings.taskItemFolderFilter || "",
+        this.taskItemAllowedPaths,
       );
       this.lastTaskItemsFetch = Date.now();
       if (this.plugin.settings.showTaskItems) {
@@ -3335,6 +3688,48 @@ export class CalendarView extends BasesView {
     if (value === undefined || value === null) return null;
     const text = String(value).trim();
     return text ? text : null;
+  }
+
+  private resolveFrontmatterEventColor(
+    frontmatter: Record<string, any> | undefined | null,
+  ): string | null {
+    const keys = [
+      this.plugin.settings.frontmatterColorField,
+      "color",
+      "iconColor",
+    ].filter((value): value is string => Boolean(value));
+
+    for (const key of keys) {
+      const value = this.getFrontmatterStringCaseInsensitive(frontmatter, key);
+      if (value) return value;
+    }
+    return null;
+  }
+
+  private resolveFrontmatterEventIcon(
+    frontmatter: Record<string, any> | undefined | null,
+  ): string | null {
+    const keys = [
+      this.plugin.settings.frontmatterIconField,
+      "icon",
+    ].filter((value): value is string => Boolean(value));
+
+    for (const key of keys) {
+      const value = this.getFrontmatterStringCaseInsensitive(frontmatter, key);
+      if (!value) continue;
+      const normalized = value.replace(/^lucide[:\-]/i, "").trim();
+      if (normalized) return normalized;
+    }
+    return null;
+  }
+
+  private resolveFrontmatterEventIconColor(
+    frontmatter: Record<string, any> | undefined | null,
+    fallbackColor: string,
+  ): string {
+    return this.getFrontmatterStringCaseInsensitive(frontmatter, "iconColor")
+      || this.resolveFrontmatterEventColor(frontmatter)
+      || fallbackColor;
   }
 
   private parseFrontmatterDateValue(value: unknown): Date | null {
@@ -3510,6 +3905,56 @@ export class CalendarView extends BasesView {
       return fallback;
     }
     return Math.max(1, parsedValue);
+  }
+
+  private normalizeCalendarViewMode(
+    value: unknown,
+    fallback: CalendarViewMode | undefined,
+  ): CalendarViewMode | undefined {
+    const raw = String(value ?? "").trim().toLowerCase();
+    const validModes: CalendarViewMode[] = [
+      "day",
+      "3d",
+      "4d",
+      "5d",
+      "7d",
+      "week",
+      "month",
+      "continuous",
+      "filter-based",
+    ];
+    if (validModes.includes(raw as CalendarViewMode)) {
+      return raw as CalendarViewMode;
+    }
+    return fallback;
+  }
+
+  private getGlobalDefaultViewMode(): CalendarViewMode {
+    return this.normalizeCalendarViewMode(this.plugin.settings.viewMode, "week") || "week";
+  }
+
+  private resolveConfiguredViewMode(): CalendarViewMode {
+    const fromViewConfig = this.resolveViewConfigMode();
+    if (fromViewConfig) {
+      return fromViewConfig;
+    }
+    return this.getGlobalDefaultViewMode();
+  }
+
+  private resolveViewConfigMode(): CalendarViewMode | undefined {
+    return this.normalizeCalendarViewMode(this.config.get("viewmode"), undefined);
+  }
+
+  private resolveStoredViewMode(): CalendarViewMode | undefined {
+    const viewMode = this.normalizeCalendarViewMode(this.config.get("viewmode"), undefined);
+    const tpsViewMode = this.normalizeCalendarViewMode(this.config.get("tps_viewMode"), undefined);
+    if (viewMode && viewMode !== "filter-based") {
+      return viewMode;
+    }
+    if (tpsViewMode) {
+      return tpsViewMode;
+    }
+    return viewMode;
   }
 
   private parseExternalCalendarUrls(raw: string): string[] {
@@ -3934,6 +4379,12 @@ export class CalendarView extends BasesView {
 
   private collectFilterConditions(filters: unknown): Array<{ property: string; operator: string; value: unknown }> {
     const conditions: Array<{ property: string; operator: string; value: unknown }> = [];
+    const visited = new WeakSet<object>();
+    const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+      if (!value || typeof value !== "object") return false;
+      const proto = Object.getPrototypeOf(value);
+      return proto === Object.prototype || proto === null;
+    };
     const visit = (node: any) => {
       if (!node) return;
       if (typeof node === "string") {
@@ -3952,6 +4403,47 @@ export class CalendarView extends BasesView {
         return;
       }
       if (typeof node !== "object") return;
+      // Only recurse through plain JSON-like nodes to avoid traversing plugin/runtime objects.
+      if (!isPlainObject(node)) return;
+      if (visited.has(node)) return;
+      visited.add(node);
+
+      // Expression-style filters may be serialized as a single inline string
+      // (for example under "expression"/"expr"/"query") without property/op/value keys.
+      const inlineSources: unknown[] = [
+        (node as any).expression,
+        (node as any).expr,
+        (node as any).query,
+        (node as any).code,
+        (node as any).source,
+      ];
+      const rawInlineValue =
+        (node as any).value ??
+        (node as any).text ??
+        (node as any).raw ??
+        null;
+      if (typeof rawInlineValue === "string") {
+        inlineSources.push(rawInlineValue);
+      } else if (rawInlineValue && typeof rawInlineValue === "object") {
+        inlineSources.push(
+          (rawInlineValue as any).value,
+          (rawInlineValue as any).text,
+          (rawInlineValue as any).raw,
+          (rawInlineValue as any).expression,
+          (rawInlineValue as any).expr,
+          (rawInlineValue as any).query,
+          (rawInlineValue as any).code,
+          (rawInlineValue as any).source,
+        );
+      }
+      for (const inline of inlineSources) {
+        if (typeof inline !== "string") continue;
+        const parsed = this.parseInlineFilterCondition(inline);
+        if (parsed) {
+          conditions.push(parsed);
+          break;
+        }
+      }
 
       // Logical tree containers used by .base files and Bases UI structures.
       const logicalKeys = ["and", "or", "not", "all", "any", "filters"];
@@ -3963,6 +4455,34 @@ export class CalendarView extends BasesView {
 
       if (Array.isArray((node as any).children)) {
         (node as any).children.forEach(visit);
+      }
+
+      // Fallback recursion for unknown schemas used by Bases internal filter trees.
+      // Skip direct condition payload keys to avoid noisy duplicate visits.
+      const skipKeys = new Set([
+        "property", "field", "key", "column",
+        "op", "operator", "comparison",
+        "value", "pattern", "match",
+        "expression", "expr", "query", "code", "source", "text", "raw",
+      ]);
+      try {
+        for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+          if (skipKeys.has(key)) continue;
+          if (!value) continue;
+          if (Array.isArray(value)) {
+            visit(value);
+            continue;
+          }
+          if (typeof value === "string") {
+            visit(value);
+            continue;
+          }
+          if (isPlainObject(value)) {
+            visit(value);
+          }
+        }
+      } catch (error) {
+        logger.warn("[CalendarView] Skipped unsafe filter node during traversal:", error);
       }
 
       const rawProperty =
@@ -4104,36 +4624,24 @@ export class CalendarView extends BasesView {
       const cssClasses = ["bases-calendar-event"];
       // Local notes are never external in this view
 
-      if (priorityStr && ["high", "medium", "low"].includes(priorityStr)) {
-        cssClasses.push(`bases-calendar-event-priority-${priorityStr}`);
-      }
-
       if (statusStr) {
         cssClasses.push(`bases-calendar-event-status-${statusStr}`);
       }
 
-      const priorityColor =
-        (priorityStr && DEFAULT_PRIORITY_COLOR_MAP[priorityStr]) ??
-        DEFAULT_PRIORITY_COLOR_MAP["normal"];
-      let backgroundColor = priorityColor;
-      let borderColor = priorityColor;
-      const styleOverride = this.plugin.getCalendarStyleOverride({
-        ...entry,
-        status: statusStr,
-        priority: priorityStr,
-        file: file,
-        frontmatter: cache?.frontmatter
-      });
-      if (styleOverride?.color) {
-        backgroundColor = styleOverride.color;
-        borderColor = styleOverride.color;
-      }
-      if (styleOverride?.textStyle) {
-        const overrides = styleOverride.textStyle
-          .split(/[,|]/)
-          .map((t) => t.trim().toLowerCase())
-          .filter(Boolean);
-        cssClasses.push(...overrides.map((style) => `bases-calendar-status-${style}`));
+      const colorSource = this.plugin.settings.noteEventColorSource || "frontmatter";
+      const iconSource = this.plugin.settings.noteEventIconSource || "frontmatter";
+      const colorTarget = this.plugin.settings.noteEventFrontmatterColorTarget || "both";
+      const applyFrontmatterColor = colorSource === "frontmatter" && colorTarget !== "off";
+      const applyFrontmatterColorToCard =
+        applyFrontmatterColor && (colorTarget === "card" || colorTarget === "both");
+      const applyFrontmatterColorToIcon =
+        applyFrontmatterColor && (colorTarget === "icon" || colorTarget === "both");
+      let backgroundColor = "";
+      let borderColor = "";
+      const frontmatterColor = this.resolveFrontmatterEventColor(cache?.frontmatter as Record<string, any> | undefined);
+      if (colorSource !== "off" && applyFrontmatterColorToCard && frontmatterColor) {
+        backgroundColor = frontmatterColor;
+        borderColor = frontmatterColor;
       }
 
       // Update the entry in place
@@ -4142,6 +4650,12 @@ export class CalendarView extends BasesView {
       entry.cssClasses = cssClasses;
       entry.backgroundColor = backgroundColor;
       entry.borderColor = borderColor;
+      entry.iconName = iconSource === "frontmatter"
+        ? (this.resolveFrontmatterEventIcon(cache?.frontmatter as Record<string, any> | undefined) || undefined)
+        : undefined;
+      entry.iconColor = iconSource === "frontmatter" && applyFrontmatterColorToIcon
+        ? this.resolveFrontmatterEventIconColor(cache?.frontmatter as Record<string, any> | undefined, "")
+        : undefined;
 
       // Force React update by creating a new array reference
       this.entries = [...this.entries];
@@ -4179,7 +4693,7 @@ export class CalendarView extends BasesView {
       const refreshed = this.fastRefreshEntry(file, cache);
 
       if (refreshed) {
-        logger.log(`[CalendarView] Fast refreshed entry: ${file.path}`);
+        this.enqueueFastRefreshLog();
         // We still schedule a full refresh to handle date changes or other complex updates,
         // but the user sees the status change immediately.
         // Debounce the full refresh to avoid double-work if possible.
@@ -4198,6 +4712,9 @@ export class CalendarView extends BasesView {
   }
 
   private scheduleRefresh(delay = 120): void {
+    if (!this.shouldProcessUpdates()) {
+      return;
+    }
     if (this.isEditorFocused() && !this.isActiveLeaf()) {
       return;
     }
@@ -4217,6 +4734,24 @@ export class CalendarView extends BasesView {
     }, delay);
   }
 
+  private enqueueFastRefreshLog(): void {
+    this.pendingFastRefreshLogCount += 1;
+    if (this.fastRefreshLogTimer !== null) {
+      return;
+    }
+
+    this.fastRefreshLogTimer = window.setTimeout(() => {
+      const count = this.pendingFastRefreshLogCount;
+      this.pendingFastRefreshLogCount = 0;
+      this.fastRefreshLogTimer = null;
+      if (count === 1) {
+        logger.log("[CalendarView] Fast refreshed 1 entry");
+      } else {
+        logger.log(`[CalendarView] Fast refreshed ${count} entries`);
+      }
+    }, 250);
+  }
+
   private registerRefreshListeners(): void {
     // Use metadataCache for faster and more accurate updates on frontmatter changes
     this.registerEvent(
@@ -4225,6 +4760,13 @@ export class CalendarView extends BasesView {
     this.registerEvent(
       this.app.workspace.on("editor-change", () => {
         this.lastEditorChangeAt = Date.now();
+      }),
+    );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        if (this.isActiveLeaf()) {
+          this.scheduleRefresh(0);
+        }
       }),
     );
     // Keep rename to handle file moves
@@ -4371,6 +4913,23 @@ export class CalendarView extends BasesView {
         displayName: "Display",
         type: "group",
         items: [
+          {
+            displayName: "View mode",
+            type: "dropdown",
+            key: "tps_viewMode",
+            default: plugin?.settings?.viewMode || "week",
+            options: {
+              day: "Day",
+              "3d": "3 Day",
+              "4d": "4 Day",
+              "5d": "5 Day",
+              "7d": "7 Day",
+              week: "Week",
+              month: "Month",
+              continuous: "Continuous",
+              "filter-based": "Filter-based (Auto)",
+            },
+          },
           {
             displayName: "Zoom Level",
             type: "slider",

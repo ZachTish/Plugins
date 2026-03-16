@@ -9,9 +9,12 @@ export interface TPSControllerRemindersAPI {
     settings: { snoozeOptions?: { label: string; minutes: number }[] };
     getOverdueItems(): Promise<OverdueItem[]>;
     snoozeFile(file: TFile, minutes: number): Promise<void>;
+    snoozeOverdueItem?(item: OverdueItem, minutes: number): Promise<void>;
     openFile(file: TFile): void;
     markFileComplete(file: TFile): Promise<void>;
     markFileWontDo(file: TFile): Promise<void>;
+    markOverdueItemComplete?(item: OverdueItem): Promise<void>;
+    markOverdueItemWontDo?(item: OverdueItem): Promise<void>;
 }
 
 export class NotificationView extends ItemView {
@@ -171,7 +174,7 @@ export class NotificationView extends ItemView {
             time.style.flexShrink = '0';
 
             const body = content.createDiv({ cls: 'tps-notification-body' });
-            body.setText(item.reminder.label || item.reminder.property);
+            body.setText(item.taskText || item.reminder.label || item.reminder.property);
             body.style.fontSize = '0.8em';
             body.style.color = 'var(--text-muted)';
             body.style.whiteSpace = 'nowrap';
@@ -214,18 +217,21 @@ export class NotificationView extends ItemView {
 
             createIconBtn('clock', 'Snooze', (_e) => {
                 new SnoozeModal(this.app, async (minutes) => {
-                    await this.plugin.snoozeFile(item.file, minutes);
+                    if (this.plugin.snoozeOverdueItem) await this.plugin.snoozeOverdueItem(item, minutes);
+                    else await this.plugin.snoozeFile(item.file, minutes);
                     await this.refresh();
                 }, this.plugin.settings.snoozeOptions || []).open();
             });
 
             createIconBtn('check', 'Mark Complete', async () => {
-                await this.plugin.markFileComplete(item.file);
+                if (this.plugin.markOverdueItemComplete) await this.plugin.markOverdueItemComplete(item);
+                else await this.plugin.markFileComplete(item.file);
                 await this.refresh();
             });
 
             createIconBtn('x', "Mark Won't Do", async () => {
-                await this.plugin.markFileWontDo(item.file);
+                if (this.plugin.markOverdueItemWontDo) await this.plugin.markOverdueItemWontDo(item);
+                else await this.plugin.markFileWontDo(item.file);
                 await this.refresh();
             });
         }

@@ -282,7 +282,6 @@ body {
     --nn-theme-file-border-radius: 8px;
     --nn-theme-file-border-width: 0px;
     --nn-theme-file-pill-border-width: 1px;
-    --nn-theme-file-hover-border-color: transparent;
     --nn-theme-file-selected-border-color: transparent;
     --nn-theme-file-selected-inactive-border-color: var(--nn-theme-file-selected-border-color);
     --nn-theme-file-selected-bg: var(--text-selection);
@@ -2117,6 +2116,12 @@ body {
     flex-shrink: 0;
 }
 
+.nn-navitem-hover-action-slot--overlay {
+    width: 0;
+    min-width: 0;
+    overflow: visible;
+}
+
 .nn-navitem-hover-action-button {
     position: absolute;
     top: 50%;
@@ -2148,6 +2153,12 @@ body {
 .nn-desktop .nn-properties-header-item:hover .nn-navitem-hover-action-button {
     visibility: visible;
     pointer-events: auto;
+}
+
+.nn-desktop .nn-shortcut-item--removable:hover .nn-navitem-hover-action-slot--overlay,
+.nn-desktop .nn-shortcut-header-item:hover .nn-navitem-hover-action-slot--overlay,
+.nn-desktop .nn-properties-header-item:hover .nn-navitem-hover-action-slot--overlay {
+    width: 18px;
 }
 
 .nn-desktop .nn-shortcut-item--removable:hover .nn-navitem-hover-action-count,
@@ -3335,6 +3346,21 @@ body {
     --nn-calendar-header-chip-bg: var(--nn-calendar-right-sidebar-bg);
 }
 
+.nn-calendar-right-sidebar .nn-navigation-calendar-year-grid {
+    width: 100%;
+    aspect-ratio: 2.5 / 1;
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+}
+
+.nn-calendar-right-sidebar .nn-navigation-calendar-year-month {
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 /* ========================================================================
    Header mode: compact yearly (right sidebar)
    ======================================================================== */
@@ -3463,6 +3489,33 @@ body {
     border-radius: min(16px, var(--nn-theme-file-border-radius));
     background: transparent;
     position: relative; /* For absolute positioning of reveal overlay */
+}
+
+.nn-file.nn-has-custom-background .nn-file-content {
+    background-color: var(--nn-file-custom-bg-color);
+    border-top-left-radius: var(--nn-file-top-left-radius, min(16px, var(--nn-theme-file-border-radius)));
+    border-top-right-radius: var(--nn-file-top-right-radius, min(16px, var(--nn-theme-file-border-radius)));
+    border-bottom-left-radius: var(--nn-file-bottom-left-radius, min(16px, var(--nn-theme-file-border-radius)));
+    border-bottom-right-radius: var(--nn-file-bottom-right-radius, min(16px, var(--nn-theme-file-border-radius)));
+    box-shadow: inset 0 0 0 var(--nn-theme-file-border-width) transparent;
+}
+
+.nn-virtual-file-item:has(> .nn-file.nn-has-custom-background)::after,
+.nn-virtual-file-item:has(+ .nn-virtual-file-item > .nn-file.nn-has-custom-background)::after {
+    display: none;
+}
+
+.nn-virtual-file-item:has(> .nn-file.nn-has-custom-background)
+    + .nn-virtual-file-item:has(> .nn-file.nn-has-custom-background)
+    > .nn-file.nn-has-custom-background {
+    --nn-file-top-left-radius: 0;
+    --nn-file-top-right-radius: 0;
+}
+
+.nn-virtual-file-item:has(> .nn-file.nn-has-custom-background):has(+ .nn-virtual-file-item > .nn-file.nn-has-custom-background)
+    > .nn-file.nn-has-custom-background {
+    --nn-file-bottom-left-radius: 0;
+    --nn-file-bottom-right-radius: 0;
 }
 
 /* File inner content - flex container for actual content */
@@ -3919,8 +3972,8 @@ body {
     cursor: pointer;
 }
 
-/* Underline property pills that render wiki-link values */
-.nn-file-tag.nn-file-property.nn-file-property-wikilink {
+/* Underline property pills that render clickable link values */
+.nn-file-tag.nn-file-property.nn-file-property-link {
     text-decoration: underline;
     text-underline-offset: 2px;
 }
@@ -4375,16 +4428,7 @@ body {
    Hover States
    ======================================================================== */
 
-/* File hover states - maintains transparency - desktop only */
-.nn-desktop .nn-file:not(.nn-selected):hover .nn-file-content {
-    background-color: transparent;
-    box-shadow: inset 0 0 0 var(--nn-theme-file-border-width) var(--nn-theme-file-hover-border-color);
-}
-
-.nn-desktop .nn-file.nn-selected:hover .nn-file-content {
-    background-color: transparent;
-    box-shadow: none;
-}
+/* File rows intentionally keep their existing styling on hover. */
 /* Source: src/styles/sections/state-drag-and-drop.css */
 
 /* ========================================================================
@@ -5774,10 +5818,16 @@ body.nn-resizing {
     gap: var(--size-2-2);
     padding-left: var(--size-2-2);
     padding-right: var(--size-2-2);
+    border-radius: var(--radius-s);
+    transition: background-color 120ms ease;
 }
 
 .is-mobile .modal.nn-property-keys-modal .nn-property-keys-row {
     gap: var(--size-2-3);
+}
+
+.modal.nn-property-keys-modal .nn-property-keys-list .nn-property-keys-row:hover {
+    background: var(--nn-theme-foreground-faint);
 }
 
 .nn-property-keys-label {
@@ -6141,6 +6191,38 @@ body.nn-resizing {
 
 .nn-toolbar-visibility-control {
     width: 100%;
+}
+
+.nn-setting-color-preview {
+    display: inline-flex;
+    align-items: center;
+    margin-inline-end: var(--size-2-2);
+}
+
+.nn-setting-color-swatch-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    padding: 0;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+}
+
+.nn-setting-color-swatch-button:hover {
+    border-color: var(--text-muted);
+}
+
+.nn-setting-color-swatch {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    box-sizing: border-box;
 }
 
 .nn-toolbar-visibility-sections {
@@ -7799,8 +7881,8 @@ settings:
         level: 1
         collapsed: true
     -
-        id: nn-border-widths-heading
-        title: Border widths
+        id: nn-border-nav-heading
+        title: Navigation borders
         type: heading
         level: 2
         collapsed: false
@@ -7814,42 +7896,6 @@ settings:
         min: 0
         max: 4
         step: 1
-    -
-        id: nn-theme-navitem-count-border-width
-        title: File count border width
-        description: Border width on navigation file count badges.
-        type: variable-number-slider
-        default: 0
-        format: px
-        min: 0
-        max: 4
-        step: 1
-    -
-        id: nn-theme-file-border-width
-        title: File item border width
-        description: Border width on file item hover and selection states.
-        type: variable-number-slider
-        default: 0
-        format: px
-        min: 0
-        max: 4
-        step: 1
-    -
-        id: nn-theme-file-pill-border-width
-        title: Pill border width
-        description: Border width on tag and custom property pills.
-        type: variable-number-slider
-        default: 1
-        format: px
-        min: 0
-        max: 4
-        step: 1
-    -
-        id: nn-border-nav-heading
-        title: Navigation borders
-        type: heading
-        level: 2
-        collapsed: false
     -
         id: nn-theme-navitem-custom-border-color
         title: Custom background border color
@@ -7887,6 +7933,16 @@ settings:
         default-light: '#'
         default-dark: '#'
     -
+        id: nn-theme-navitem-count-border-width
+        title: File count border width
+        description: Border width on navigation file count badges.
+        type: variable-number-slider
+        default: 0
+        format: px
+        min: 0
+        max: 4
+        step: 1
+    -
         id: nn-theme-navitem-count-border-color
         title: File count border color
         description: Border color on navigation file count badges.
@@ -7920,14 +7976,15 @@ settings:
         level: 2
         collapsed: false
     -
-        id: nn-theme-file-hover-border-color
-        title: Hover border color
-        description: Border color on hovered file items.
-        type: variable-themed-color
-        opacity: true
-        format: rgb
-        default-light: '#'
-        default-dark: '#'
+        id: nn-theme-file-border-width
+        title: Selection border width
+        description: Border width on selected file items.
+        type: variable-number-slider
+        default: 0
+        format: px
+        min: 0
+        max: 4
+        step: 1
     -
         id: nn-theme-file-selected-border-color
         title: Selection border color
@@ -7952,6 +8009,16 @@ settings:
         type: heading
         level: 2
         collapsed: false
+    -
+        id: nn-theme-file-pill-border-width
+        title: Pill border width
+        description: Border width on tag and custom property pills.
+        type: variable-number-slider
+        default: 1
+        format: px
+        min: 0
+        max: 4
+        step: 1
     -
         id: nn-theme-file-tag-border-color
         title: Tag pill border color

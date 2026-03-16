@@ -60,7 +60,7 @@ export class OverdueItemsModal extends Modal {
                 row.style.opacity = '0.5';
             }
 
-            const title = row.createEl('div', { text: item.file.basename });
+            const title = row.createEl('div', { text: item.taskText || item.file.basename });
             title.style.fontWeight = '600';
 
             const detailsText = item.snoozedUntil
@@ -103,12 +103,20 @@ export class OverdueItemsModal extends Modal {
             };
 
             createIconBtn('check', 'Mark Complete', async () => {
-                await this.plugin.markFileComplete(item.file);
+                if ((this.plugin as any).markOverdueItemComplete) {
+                    await (this.plugin as any).markOverdueItemComplete(item);
+                } else {
+                    await this.plugin.markFileComplete(item.file);
+                }
                 await this.refresh();
             });
 
             createIconBtn('x', "Mark Won't Do", async () => {
-                await this.plugin.markFileWontDo(item.file);
+                if ((this.plugin as any).markOverdueItemWontDo) {
+                    await (this.plugin as any).markOverdueItemWontDo(item);
+                } else {
+                    await this.plugin.markFileWontDo(item.file);
+                }
                 await this.refresh();
             });
 

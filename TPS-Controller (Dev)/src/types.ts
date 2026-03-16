@@ -70,12 +70,27 @@ export interface PropertyReminder {
     triggerAtEnd?: boolean;
 }
 
+export interface KanbanTaskReminderSettings {
+    enabled: boolean;
+    includeBoardFileTarget: boolean;
+    parseInlineProperties: boolean;
+    parseKanbanDateTokens: boolean;
+    parseTasksEmojiDates: boolean;
+    statusProperty: string;
+    completeStatusValue: string;
+    wontDoStatusValue: string;
+    scheduledPropertyAliases: string[];
+    duePropertyAliases: string[];
+    startPropertyAliases: string[];
+}
+
 export interface AlertState {
     [filePath: string]: {
         [reminderId: string]: {
             triggered: boolean;
             repeatCount: number;
             lastSent?: number;
+            lastTriggerKey?: string;
         };
     };
 }
@@ -86,6 +101,10 @@ export interface OverdueItem {
     propertyTime: number;
     diff: string;
     id: string;
+    sourceKey?: string;
+    sourceType?: "file" | "kanban-task";
+    taskLineNumber?: number;
+    taskText?: string;
     title?: string;
     body?: string;
     snoozedUntil?: number;
@@ -117,6 +136,7 @@ export interface TPSControllerSettings {
 
     // Notification Rules
     pollMinutes: number;
+    enableReminders: boolean;
     reminders: PropertyReminder[];
     alertState: AlertState;
     batchNotifications: boolean;
@@ -127,6 +147,7 @@ export interface TPSControllerSettings {
     snoozeOptions: { label: string; minutes: number }[];
     /** Fallback base time (HH:MM) used for all-day events when no per-reminder allDayBaseTime is set. */
     defaultAllDayBaseTime: string;
+    kanbanTaskReminders: KanbanTaskReminderSettings;
 
     // Companion Automation
     companionStartupScanEnabled: boolean;
@@ -162,6 +183,7 @@ export const DEFAULT_CONTROLLER_SETTINGS: TPSControllerSettings = {
 
     // Notification Rules
     pollMinutes: 0.5,
+    enableReminders: true,
     reminders: [],
     alertState: {},
     batchNotifications: true,
@@ -170,6 +192,19 @@ export const DEFAULT_CONTROLLER_SETTINGS: TPSControllerSettings = {
     globalIgnoreStatuses: ["complete", "wont-do"],
     snoozeProperty: "reminderSnooze",
     defaultAllDayBaseTime: "09:00",
+    kanbanTaskReminders: {
+        enabled: true,
+        includeBoardFileTarget: true,
+        parseInlineProperties: true,
+        parseKanbanDateTokens: true,
+        parseTasksEmojiDates: true,
+        statusProperty: "status",
+        completeStatusValue: "complete",
+        wontDoStatusValue: "wont-do",
+        scheduledPropertyAliases: ["scheduled", "start"],
+        duePropertyAliases: ["due", "duedate", "due-date"],
+        startPropertyAliases: ["start", "startdate", "start-date"],
+    },
     snoozeOptions: [
         { label: '15 Minutes', minutes: 15 },
         { label: '1 Hour', minutes: 60 },

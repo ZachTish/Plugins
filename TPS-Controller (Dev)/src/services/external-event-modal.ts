@@ -426,16 +426,19 @@ function setFrontmatterValueCaseInsensitive(
   value: any,
 ): void {
   const normalized = normalizeKey(key);
-  const existingKey = Object.keys(target).find((candidate) => normalizeKey(candidate) === normalized);
-  target[existingKey || key] = value;
-  if (existingKey && existingKey !== key && key in target) {
-    delete target[key];
+  if (!normalized) return;
+  for (const candidate of Object.keys(target || {})) {
+    if (normalizeKey(candidate) === normalized) {
+      delete target[candidate];
+    }
   }
+  target[key] = value;
 }
 
 function deleteFrontmatterValueCaseInsensitive(target: Record<string, any>, key: string): void {
   const normalized = normalizeKey(key);
-  Object.keys(target)
+  if (!normalized) return;
+  Object.keys(target || {})
     .filter((candidate) => normalizeKey(candidate) === normalized)
     .forEach((candidate) => delete target[candidate]);
 }

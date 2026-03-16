@@ -113,10 +113,11 @@ export class NewEventService {
 
       let cleanTitle = extractedTitle;
       if (!cleanTitle || !cleanTitle.trim()) {
-        cleanTitle =
-          parentFile?.basename ||
-          this.config.defaultTitle?.trim() ||
-          "Untitled";
+        const parentTitle = parentFile?.basename?.trim() || "";
+        if (!parentTitle) {
+          return null;
+        }
+        cleanTitle = parentTitle;
       }
 
       // Check if event is in the past
@@ -456,7 +457,9 @@ export class NewEventService {
           this.scope.register([], "Enter", (evt) => {
             evt.preventDefault();
             if (linkExistingInProgress || typePickInProgress) return;
-            finish(input.value.trim() || undefined);
+            const trimmed = input.value.trim();
+            if (!trimmed) return;
+            finish(trimmed);
           });
           this.scope.register([], "Escape", (evt) => {
             evt.preventDefault();
@@ -496,16 +499,26 @@ export class NewEventService {
           });
           const buttons = form.createDiv({ cls: "modal-button-container" });
           const createBtn = buttons.createEl("button", { text: "Create", cls: "mod-cta", type: "button" });
+          const syncCreateState = () => {
+            createBtn.disabled = input.value.trim().length === 0;
+          };
+          createBtn.disabled = true;
+          input.addEventListener("input", syncCreateState);
           createBtn.addEventListener("click", () => {
-            finish(input.value);
+            const trimmed = input.value.trim();
+            if (!trimmed) return;
+            finish(trimmed);
           });
 
           input.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              finish(input.value);
+              const trimmed = input.value.trim();
+              if (!trimmed) return;
+              finish(trimmed);
             }
           });
+          syncCreateState();
 
           const typeBtn = buttons.createEl("button", { text: "Type...", type: "button" });
           typeBtn.addEventListener("click", async (evt) => {
@@ -686,27 +699,11 @@ export class NewEventService {
           await linterPlugin.lintFile(file);
           logger.log('[NewEventService] Ran linter via lintFile API');
         } else {
-          // Fallback: Use the "lint file" command which requires the file to be open
-          const commands = (this.config.app as any).commands?.commands;
-          if (commands) {
-            const lintFileCmd = commands['obsidian-linter:lint-file'];
-            if (lintFileCmd?.callback) {
-              // Need to open the file first for the linter command to work
-              const leaf = this.config.app.workspace.getLeaf(false);
-              await leaf.openFile(file);
-              await new Promise(resolve => setTimeout(resolve, 50));
-              lintFileCmd.callback();
-              logger.log('[NewEventService] Triggered obsidian-linter:lint-file command');
-            }
-          }
+          // Do not fall back to opening files just to run the linter command.
+          // That path can create stray blank tabs or steal focus during event creation.
+          logger.warn('[NewEventService] Skipping linter fallback because no direct file API is available');
         }
       }
-
-      const subtypeId = null;
-
-      // Trigger custom events that other plugins can listen to.
-      this.config.app.workspace.trigger('tps-file-created', file, { subtypeId });
-      this.config.app.workspace.trigger('tps-calendar:file-created', file, { subtypeId });
 
     } catch (error) {
       logger.warn('[NewEventService] Error triggering post-creation hooks:', error);
