@@ -1,0 +1,19 @@
+{
+  "canvasFolder": "/",
+  "excludedTags": [],
+  "excludedFolders": [],
+  "archiveTriggerTags": [
+    "hide",
+    "archive"
+  ],
+  "archiveTriggerFolders": [
+    "Archive"
+  ],
+  "autoSync": true,
+  "syncDelayMs": 2000,
+  "nodeWidth": 400,
+  "nodeHeight": 300,
+  "columns": 3,
+  "gap": 30,
+  "debugLogging": false
+}

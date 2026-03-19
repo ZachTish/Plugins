@@ -3,7 +3,7 @@
  * Used by CalendarView to convert arbitrary property values into Date objects.
  */
 import { BasesEntry, BasesPropertyId, Value } from "obsidian";
-import * as logger from "../../../logger";
+import * as logger from "../../logger";
 
 export function extractDate(entry: BasesEntry, propId: BasesPropertyId): Date | null {
   try {

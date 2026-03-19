@@ -43,7 +43,7 @@ export default class TPSMessager extends Plugin {
             });
 
             // Add Settings Tab
-            this.addSettingTab(new TPSMessagerSettingTab(this.app, this));
+            this.addSettingTab(new TPSMessagerSettingTab(this.app, this as any));
 
             // Register URL protocol handler for obsidian://tps-messager
             this.registerObsidianProtocolHandler('tps-messager', async (params) => {

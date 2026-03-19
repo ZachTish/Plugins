@@ -140,6 +140,24 @@ export class NotificationView extends ItemView {
                 this.showContextMenu(e, item);
             });
 
+            // Note icon (left of content)
+            const noteIconEl = row.createDiv({ cls: 'tps-notification-icon' });
+            noteIconEl.style.display = 'flex';
+            noteIconEl.style.alignItems = 'center';
+            noteIconEl.style.flexShrink = '0';
+            noteIconEl.style.fontSize = '16px';
+            noteIconEl.style.lineHeight = '1';
+            // Strip optional provider prefix (e.g. "lucide:circle" → "circle")
+            const rawIcon = (item.icon && item.icon.trim()) ? item.icon.trim() : '';
+            const iconName = rawIcon.includes(':') ? rawIcon.split(':').pop()! : (rawIcon || 'file-text');
+            noteIconEl.setAttribute('title', iconName);
+            // Apply color — ensure it's a valid CSS value (not empty / "undefined")
+            const iconColor = (item.color && item.color.trim() && item.color.trim() !== 'undefined')
+                ? item.color.trim()
+                : 'var(--text-muted)';
+            noteIconEl.style.color = iconColor;
+            setIcon(noteIconEl, iconName);
+
             // Left Content
             const content = row.createDiv({ cls: 'tps-notification-content' });
             content.style.display = 'flex';
@@ -167,19 +185,49 @@ export class NotificationView extends ItemView {
 
             const timeText = item.snoozedUntil
                 ? `Snoozed until ${moment(item.snoozedUntil).format('HH:mm')}`
-                : item.diff;
+                : (item.isAllDay ? 'All day' : item.diff);
             const time = topRow.createEl('span', { text: timeText });
             time.style.fontSize = '0.75em';
             time.style.color = item.snoozedUntil ? 'var(--text-accent)' : 'var(--text-muted)';
             time.style.flexShrink = '0';
 
-            const body = content.createDiv({ cls: 'tps-notification-body' });
-            body.setText(item.taskText || item.reminder.label || item.reminder.property);
-            body.style.fontSize = '0.8em';
-            body.style.color = 'var(--text-muted)';
-            body.style.whiteSpace = 'nowrap';
-            body.style.overflow = 'hidden';
-            body.style.textOverflow = 'ellipsis';
+            // Next-reminder subtitle
+            if (item.nextTriggerTime !== undefined && item.nextRuleLabel) {
+                const now2 = Date.now();
+                let nextStr: string;
+                if (item.isRepeating) {
+                    const intervalMins = item.nextReminderIntervalMinutes ?? item.reminder.repeatIntervalMinutes ?? 1;
+                    console.log(`[TPS Subtitle] ${item.file.basename} repeating: nextTime=${item.nextTriggerTime} (${new Date(item.nextTriggerTime).toLocaleTimeString()}), nextReminderIntervalMinutes=${item.nextReminderIntervalMinutes}, reminderRepeatInterval=${item.reminder.repeatIntervalMinutes}, intervalMins=${intervalMins}, isRepeating=${item.isRepeating}`);
+                    // Prefer showing the concrete next trigger time when available,
+                    // falling back to the generic "every X min" wording.
+                    if (item.nextTriggerTime !== undefined) {
+                        const msUntil = item.nextTriggerTime - now2;
+                        const minsUntil = Math.round(msUntil / 60000);
+                        if (minsUntil <= 60) {
+                            nextStr = `in ${minsUntil} min — repeats every ${intervalMins} min — ${item.nextRuleLabel}`;
+                        } else {
+                            nextStr = `${moment(item.nextTriggerTime).format('h:mm A')} — repeats every ${intervalMins} min — ${item.nextRuleLabel}`;
+                        }
+                    } else {
+                        nextStr = `every ${intervalMins} min — ${item.nextRuleLabel}`;
+                    }
+                } else {
+                    const msUntil = item.nextTriggerTime - now2;
+                    const minsUntil = Math.round(msUntil / 60000);
+                    if (minsUntil <= 60) {
+                        nextStr = `in ${minsUntil} min — ${item.nextRuleLabel}`;
+                    } else {
+                        nextStr = `${moment(item.nextTriggerTime).format('h:mm A')} — ${item.nextRuleLabel}`;
+                    }
+                }
+                const subtitle = content.createDiv({ cls: 'tps-notification-subtitle', text: nextStr });
+                subtitle.style.fontSize = '0.75em';
+                subtitle.style.color = 'var(--text-faint)';
+                subtitle.style.whiteSpace = 'nowrap';
+                subtitle.style.overflow = 'hidden';
+                subtitle.style.textOverflow = 'ellipsis';
+                subtitle.style.marginTop = '1px';
+            }
 
             if (item.snoozedUntil) {
                 row.style.opacity = '0.5';
@@ -190,6 +238,70 @@ export class NotificationView extends ItemView {
             actions.style.display = 'flex';
             actions.style.alignItems = 'center';
             actions.style.gap = '4px';
+
+            // Clickable status pill — always visible even when empty
+            const gcmPlugin = (this.app as any).plugins?.plugins?.['tps-global-context-menu'];
+            const statusOptions: string[] = gcmPlugin?.settings?.properties
+                ?.find((p: any) => p.key === 'status')?.options
+                ?? ['open', 'working', 'blocked', 'wont-do', 'complete'];
+
+            const currentStatus = item.status || '';
+            const statusPill = actions.createDiv({ cls: 'tps-status-pill', text: currentStatus || '—' });
+            statusPill.style.cursor = 'pointer';
+            statusPill.style.padding = '2px 8px';
+            statusPill.style.borderRadius = '10px';
+            statusPill.style.fontSize = '0.72em';
+            statusPill.style.background = 'var(--background-secondary)';
+            statusPill.style.color = currentStatus ? 'var(--text-normal)' : 'var(--text-faint)';
+            statusPill.style.border = '1px solid var(--background-modifier-border)';
+            statusPill.style.whiteSpace = 'nowrap';
+            statusPill.addEventListener('mouseenter', () => {
+                statusPill.style.background = 'var(--background-modifier-hover)';
+            });
+            statusPill.addEventListener('mouseleave', () => {
+                statusPill.style.background = 'var(--background-secondary)';
+            });
+            statusPill.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const menu = new Menu();
+                const doneStatuses = new Set<string>([
+                    ...(gcmPlugin?.settings?.recurrenceCompletionStatuses ?? ['complete', 'wont-do'])
+                        .map((s: string) => String(s || '').trim().toLowerCase()),
+                ]);
+                const nowStamp = () => (window as any).moment
+                    ? (window as any).moment().format('YYYY-MM-DD HH:mm:ss')
+                    : new Date().toISOString().replace('T', ' ').slice(0, 19);
+                const writeStatus = async (newStatus: string | null) => {
+                    await this.app.fileManager.processFrontMatter(item.file, (fm) => {
+                        if (newStatus == null) {
+                            delete fm.status;
+                            // Clear completedDate when status cleared
+                            const cdKey = Object.keys(fm).find((k) => k.toLowerCase() === 'completeddate');
+                            if (cdKey) delete fm[cdKey];
+                        } else {
+                            fm.status = newStatus;
+                            if (doneStatuses.has(newStatus.trim().toLowerCase())) {
+                                fm.completedDate = nowStamp();
+                            } else {
+                                const cdKey = Object.keys(fm).find((k) => k.toLowerCase() === 'completeddate');
+                                if (cdKey) delete fm[cdKey];
+                            }
+                        }
+                    });
+                    (this.app.workspace as any).trigger('tps-gcm-files-updated', [item.file.path]);
+                };
+                menu.addItem((i) => i.setTitle('(none)').setChecked(!currentStatus).onClick(async () => {
+                    await writeStatus(null);
+                    await this.refresh();
+                }));
+                statusOptions.forEach((opt) => {
+                    menu.addItem((i) => i.setTitle(opt).setChecked(currentStatus === opt).onClick(async () => {
+                        await writeStatus(opt);
+                        await this.refresh();
+                    }));
+                });
+                menu.showAtMouseEvent(e);
+            });
 
             const createIconBtn = (icon: string, label: string, onClick: (e: MouseEvent) => void) => {
                 const btn = actions.createDiv({ cls: 'tps-icon-btn' });
@@ -221,18 +333,6 @@ export class NotificationView extends ItemView {
                     else await this.plugin.snoozeFile(item.file, minutes);
                     await this.refresh();
                 }, this.plugin.settings.snoozeOptions || []).open();
-            });
-
-            createIconBtn('check', 'Mark Complete', async () => {
-                if (this.plugin.markOverdueItemComplete) await this.plugin.markOverdueItemComplete(item);
-                else await this.plugin.markFileComplete(item.file);
-                await this.refresh();
-            });
-
-            createIconBtn('x', "Mark Won't Do", async () => {
-                if (this.plugin.markOverdueItemWontDo) await this.plugin.markOverdueItemWontDo(item);
-                else await this.plugin.markFileWontDo(item.file);
-                await this.refresh();
             });
         }
     }

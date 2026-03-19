@@ -1,5 +1,5 @@
 import { Menu, Setting, setIcon } from "obsidian";
-import { HideRule, RuleCondition } from "../types";
+import { HideRule, RuleCondition } from "./types";
 import {
     createDefaultCondition,
     getConditionValuePlaceholder,

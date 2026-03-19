@@ -3,14 +3,15 @@
  * Orchestrates device role management, calendar sync, and reminders
  */
 
-import { Plugin } from 'obsidian';
-import { TPSPlugin } from '../../main';
+import { Notice } from 'obsidian';
+import TPSPlugin from '../../main';
 import { ControllerSettings, DEFAULT_TPS_SETTINGS } from '../../types';
 import { DeviceRoleManager } from '../../core/device-role-manager';
 import * as logger from '../../logger';
 import { ExternalCalendarService } from '../../services/calendar/external-calendar-service';
 import { ICalParserService } from '../../services/calendar/ical-parser-service';
 import { AutoCreateService } from '../../services/templates/auto-create-service';
+import { ExternalCalendarDuplicateCleanupService } from '../../services/calendar/external-calendar-duplicate-cleanup-service';
 import { SyncConflictWatcher } from '../../services/sync/sync-conflict-watcher';
 import { SyncRequestService } from '../../services/sync/sync-request-service';
 
@@ -23,6 +24,7 @@ export class ControllerFeature {
     externalCalendarService?: ExternalCalendarService;
     icalParserService?: ICalParserService;
     autoCreateService?: AutoCreateService;
+    duplicateCleanupService?: ExternalCalendarDuplicateCleanupService;
     syncConflictWatcher?: SyncConflictWatcher;
     syncRequestService?: SyncRequestService;
 
@@ -30,8 +32,9 @@ export class ControllerFeature {
     private syncInterval?: number;
     private reminderInterval?: number;
 
-    constructor() {
-        this.deviceRoleManager = new DeviceRoleManager();
+    constructor(plugin?: TPSPlugin) {
+        this.deviceRoleManager = new DeviceRoleManager((plugin?.app as any) ?? null);
+        if (plugin) { this.plugin = plugin; this.settings = plugin.settings.features.controller; }
     }
 
     async onload(plugin: TPSPlugin): Promise<void> {
@@ -71,10 +74,10 @@ export class ControllerFeature {
 
         // Unload services
         if (this.syncConflictWatcher) {
-            await this.syncConflictWatcher.unload();
+            (this.syncConflictWatcher as any).stop?.();
         }
         if (this.syncRequestService) {
-            await this.syncRequestService.unload();
+            // no teardown needed
         }
 
         logger.info('[ControllerFeature] Controller feature unloaded');
@@ -88,14 +91,16 @@ export class ControllerFeature {
     private initializeServices(): void {
         // Calendar services
         this.icalParserService = new ICalParserService();
-        this.externalCalendarService = new ExternalCalendarService(this.icalParserService);
+        this.externalCalendarService = new ExternalCalendarService();
 
         // Auto-create service
-        this.autoCreateService = new AutoCreateService(this.plugin.app, this.plugin);
+        this.autoCreateService = new AutoCreateService(this.plugin.app);
+        this.duplicateCleanupService = new ExternalCalendarDuplicateCleanupService(this.plugin.app, () => this.settings);
 
         // Sync services
         this.syncConflictWatcher = new SyncConflictWatcher(this.plugin.app);
-        this.syncRequestService = new SyncRequestService(this.plugin.app);
+        const pluginDir = (this.plugin as any).manifest?.dir ?? '';
+        this.syncRequestService = new SyncRequestService(this.plugin.app, pluginDir);
 
         logger.info('[ControllerFeature] Services initialized');
     }
@@ -108,6 +113,16 @@ export class ControllerFeature {
             callback: async () => {
                 if (!this.externalCalendarService) return;
                 await this.syncExternalCalendars();
+            }
+        });
+
+        this.plugin.addCommand({
+            id: 'tps-clean-duplicate-external-calendar-notes',
+            name: 'TPS: Clean duplicate external calendar notes',
+            callback: async () => {
+                if (!this.duplicateCleanupService) return;
+                const result = await this.duplicateCleanupService.run();
+                new Notice(`TPS calendar duplicate cleanup: archived ${result.archivedCount}, skipped ${result.skippedWithContent} with body content, found ${result.groupsFound} duplicate groups.`);
             }
         });
 
@@ -146,13 +161,10 @@ export class ControllerFeature {
 
         // Start sync conflict watcher
         if (this.syncConflictWatcher) {
-            this.syncConflictWatcher.load();
+            (this.syncConflictWatcher as any).start?.();
         }
 
-        // Start sync request service
-        if (this.syncRequestService) {
-            this.syncRequestService.load();
-        }
+        // sync request service has no start method
     }
 
     private async syncExternalCalendars(): Promise<void> {

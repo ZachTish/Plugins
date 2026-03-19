@@ -5,7 +5,7 @@ import type { TPSControllerSettings, OverdueItem } from "../types";
 import {
     parseDate, parseTimeRange, parseDuration, getEffectiveEndTime,
     formatTemplate, checkStopCondition, hasRequiredStatus,
-    shouldIgnoreForReminder, isAllDayEvent,
+    shouldIgnoreForReminder, isAllDayEvent, hasExplicitTimeInValue,
 } from "../utils/time-calculation-service";
 import {
     buildReminderTargetsForFile,
@@ -91,9 +91,17 @@ export class OverdueService {
                     let finalTriggerBase = propertyTime;
                     if (reminder.triggerAtEnd && effectiveEndTime) finalTriggerBase = effectiveEndTime;
 
-                    const isAllDaySafe = isAllDayEvent(propertyValue, effectiveFm);
-                    if (isAllDaySafe && reminder.allDayBaseTime) {
-                        const match = reminder.allDayBaseTime.match(/^(\d{1,2}):(\d{2})$/);
+                    const isAllDaySafe = isAllDayEvent(propertyValue, effectiveFm) &&
+                        (!hasExplicitTimeInValue(propertyValue) || String(effectiveFm?.allDay ?? '').toLowerCase() === 'true');
+
+                    // Respect allDayFilter — must match event's all-day nature before continuing.
+                    if (reminder.allDayFilter && reminder.allDayFilter !== 'any') {
+                        if (reminder.allDayFilter === 'true' && !isAllDaySafe) continue;
+                        if (reminder.allDayFilter === 'false' && isAllDaySafe) continue;
+                    }
+                    const effectiveAllDayBaseTime = reminder.allDayBaseTime || settings.defaultAllDayBaseTime;
+                    if (isAllDaySafe && effectiveAllDayBaseTime) {
+                        const match = effectiveAllDayBaseTime.match(/^(\d{1,2}):(\d{2})$/);
                         if (match) {
                             finalTriggerBase = moment(finalTriggerBase).set({
                                 hour: parseInt(match[1], 10),
@@ -112,7 +120,10 @@ export class OverdueService {
                     }
 
                     const triggerTime = finalTriggerBase + offsetMs;
+                    // Never show items before their trigger time — applies to both timed and all-day events.
                     if (now < triggerTime) continue;
+                    // For all-day events, include past days too — if stop conditions haven't been met the
+                    // item is still "open" and should surface until explicitly completed or snoozed.
 
                     const diff = this.formatTimeDiff(now - finalTriggerBase);
                     const vars: Record<string, string> = {
@@ -134,6 +145,10 @@ export class OverdueService {
                         title: formatTemplate(reminder.title, vars),
                         body: formatTemplate(reminder.body, vars),
                         snoozedUntil,
+                        isAllDay: isAllDaySafe,
+                        status: String(effectiveFm[this.getSettings().statusKey] ?? effectiveFm['status'] ?? ''),
+                        icon: effectiveFm['icon'] ? String(effectiveFm['icon']) : '',
+                        color: effectiveFm['color'] ? String(effectiveFm['color']) : '',
                     });
                 }
             }
@@ -153,6 +168,211 @@ export class OverdueService {
             seenKeys.add(key);
             deduplicated.push(item);
         }
+
+        // Annotate each deduplicated item with its next upcoming trigger time.
+        // Two-phase approach:
+        // 1. First check if the CURRENT reminder (that created this item) will fire again
+        // 2. If not, show when the next DIFFERENT reminder will start
+        for (const item of deduplicated) {
+            const cache = this.app.metadataCache.getFileCache(item.file);
+            const fm = (cache?.frontmatter || {}) as Record<string, unknown>;
+            
+            const currentReminderId = item.reminder.id;
+            const currentReminderLabel = item.reminder.label || item.reminder.id;
+            
+            let nextTime: number | undefined;
+            let nextLabel: string | undefined;
+            let isRepeatingCurrent = false;
+            let intervalMins: number | undefined;
+
+            const target: import('./reminder-target-service').ReminderEvaluationTarget = {
+                sourceKey: item.sourceKey || item.file.path,
+                sourceType: item.sourceType || 'file',
+                task: item.taskLineNumber !== undefined ? { lineNumber: item.taskLineNumber, text: item.taskText || '', checked: false, state: ' ', propertyMap: {} } as any : undefined,
+            };
+
+            // PHASE 1: Check if the CURRENT reminder will fire again
+            const currentReminder = reminders.find(r => r.id === currentReminderId);
+            if (currentReminder?.enabled) {
+                const reminder = currentReminder;
+                const ctx = buildEffectiveReminderContextForTarget(target, fm, reminder.property, settings);
+                if (ctx && 
+                    !shouldIgnoreForReminder(item.file, cache, ctx.frontmatter, reminder, ignorePaths, ignoreTags, ignoreStatuses) &&
+                    hasRequiredStatus(ctx.frontmatter, reminder) &&
+                    !reminder.stopConditions.some((cond) => checkStopCondition(ctx.frontmatter, cond))) {
+                    
+                    const { start: pt, end: ret } = parseTimeRange(ctx.propertyValue);
+                    if (pt) {
+                        const eet = getEffectiveEndTime(pt, ret, ctx.frontmatter);
+                        let base = pt;
+                        if (reminder.triggerAtEnd && eet) base = eet;
+                        const isAllDayCtx = isAllDayEvent(ctx.propertyValue, ctx.frontmatter) &&
+                            (!hasExplicitTimeInValue(ctx.propertyValue) || String(ctx.frontmatter?.allDay ?? '').toLowerCase() === 'true');
+                        if (reminder.allDayFilter && reminder.allDayFilter !== 'any') {
+                            if ((reminder.allDayFilter === 'true' && !isAllDayCtx) ||
+                                (reminder.allDayFilter === 'false' && isAllDayCtx)) {
+                                // Skip
+                            } else {
+                                if (isAllDayCtx) {
+                                    const effectiveBase = reminder.allDayBaseTime || settings.defaultAllDayBaseTime;
+                                    if (effectiveBase) {
+                                        const m = effectiveBase.match(/^(\d{1,2}):(\d{2})$/);
+                                        if (m) {
+                                            base = moment(base).set({
+                                                hour: parseInt(m[1], 10),
+                                                minute: parseInt(m[2], 10),
+                                                second: 0,
+                                                millisecond: 0,
+                                            }).valueOf();
+                                        }
+                                    }
+                                }
+                                let offMs = reminder.offsetMinutes * 60 * 1000;
+                                if (reminder.useSmartOffset && reminder.smartOffsetProperty) {
+                                    const dm = parseDuration(ctx.frontmatter[reminder.smartOffsetProperty]);
+                                    const sm = dm * 60 * 1000;
+                                    offMs = reminder.smartOffsetOperator === 'add' ? sm : -sm;
+                                }
+                                const tTime = base + offMs;
+                                const isRepeating = !!(reminder.repeatUntilComplete && reminder.repeatIntervalMinutes > 0);
+                                
+                                if (isRepeating) {
+                                    // Repeating reminder - compute next occurrence
+                                    const intervalMs = (reminder.repeatIntervalMinutes || 0) * 60 * 1000;
+                                    let nextRepeat = tTime;
+                                    if (intervalMs > 0 && nextRepeat <= now) {
+                                        const elapsed = now - nextRepeat;
+                                        const cycles = Math.floor(elapsed / intervalMs) + 1;
+                                        nextRepeat = nextRepeat + cycles * intervalMs;
+                                    }
+                                    nextTime = nextRepeat;
+                                    nextLabel = currentReminderLabel;
+                                    isRepeatingCurrent = true;
+                                    intervalMins = reminder.repeatIntervalMinutes;
+                                    console.log(`[TPS-Controller Annotation] ${item.file.basename}: Current reminder repeating, nextTime=${new Date(nextRepeat).toLocaleTimeString()}, intervalMins=${intervalMins}`);
+                                } else if (now < tTime) {
+                                    // Future non-repeating trigger
+                                    nextTime = tTime;
+                                    nextLabel = currentReminderLabel;
+                                    console.log(`[TPS-Controller Annotation] ${item.file.basename}: Current reminder future, nextTime=${new Date(tTime).toLocaleTimeString()}`);
+                                }
+                            }
+                        } else {
+                            // No allDayFilter restriction
+                            if (isAllDayCtx) {
+                                const effectiveBase = reminder.allDayBaseTime || settings.defaultAllDayBaseTime;
+                                if (effectiveBase) {
+                                    const m = effectiveBase.match(/^(\d{1,2}):(\d{2})$/);
+                                    if (m) {
+                                        base = moment(base).set({
+                                            hour: parseInt(m[1], 10),
+                                            minute: parseInt(m[2], 10),
+                                            second: 0,
+                                            millisecond: 0,
+                                        }).valueOf();
+                                    }
+                                }
+                            }
+                            let offMs = reminder.offsetMinutes * 60 * 1000;
+                            if (reminder.useSmartOffset && reminder.smartOffsetProperty) {
+                                const dm = parseDuration(ctx.frontmatter[reminder.smartOffsetProperty]);
+                                const sm = dm * 60 * 1000;
+                                offMs = reminder.smartOffsetOperator === 'add' ? sm : -sm;
+                            }
+                            const tTime = base + offMs;
+                            const isRepeating = !!(reminder.repeatUntilComplete && reminder.repeatIntervalMinutes > 0);
+                            
+                            if (isRepeating) {
+                                // Repeating reminder - compute next occurrence
+                                const intervalMs = (reminder.repeatIntervalMinutes || 0) * 60 * 1000;
+                                let nextRepeat = tTime;
+                                if (intervalMs > 0 && nextRepeat <= now) {
+                                    const elapsed = now - nextRepeat;
+                                    const cycles = Math.floor(elapsed / intervalMs) + 1;
+                                    nextRepeat = nextRepeat + cycles * intervalMs;
+                                }
+                                nextTime = nextRepeat;
+                                nextLabel = currentReminderLabel;
+                                isRepeatingCurrent = true;
+                                intervalMins = reminder.repeatIntervalMinutes;
+                                console.log(`[TPS-Controller Annotation] ${item.file.basename}: Current reminder repeating, nextTime=${new Date(nextRepeat).toLocaleTimeString()}, intervalMins=${intervalMins}`);
+                            } else if (now < tTime) {
+                                // Future non-repeating trigger
+                                nextTime = tTime;
+                                nextLabel = currentReminderLabel;
+                                console.log(`[TPS-Controller Annotation] ${item.file.basename}: Current reminder future, nextTime=${new Date(tTime).toLocaleTimeString()}`);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // PHASE 2: If current reminder won't fire again, look for next DIFFERENT reminder
+            if (nextTime === undefined) {
+                for (const reminder of reminders) {
+                    if (!reminder.enabled) continue;
+                    // Skip the current reminder - we want to see what's NEXT
+                    if (reminder.id === currentReminderId) continue;
+                    const ctx = buildEffectiveReminderContextForTarget(target, fm, reminder.property, settings);
+                    if (!ctx) continue;
+                    if (shouldIgnoreForReminder(item.file, cache, ctx.frontmatter, reminder, ignorePaths, ignoreTags, ignoreStatuses)) continue;
+                    if (!hasRequiredStatus(ctx.frontmatter, reminder)) continue;
+                    if (reminder.stopConditions.some((cond) => checkStopCondition(ctx.frontmatter, cond))) continue;
+                    const { start: pt, end: ret } = parseTimeRange(ctx.propertyValue);
+                    if (!pt) continue;
+                    const eet = getEffectiveEndTime(pt, ret, ctx.frontmatter);
+                    let base = pt;
+                    if (reminder.triggerAtEnd && eet) base = eet;
+                    const isAllDayCtx = isAllDayEvent(ctx.propertyValue, ctx.frontmatter) &&
+                        (!hasExplicitTimeInValue(ctx.propertyValue) || String(ctx.frontmatter?.allDay ?? '').toLowerCase() === 'true');
+                    if (reminder.allDayFilter && reminder.allDayFilter !== 'any') {
+                        if (reminder.allDayFilter === 'true' && !isAllDayCtx) continue;
+                        if (reminder.allDayFilter === 'false' && isAllDayCtx) continue;
+                    }
+                    if (isAllDayCtx) {
+                        const effectiveBase = reminder.allDayBaseTime || settings.defaultAllDayBaseTime;
+                        if (effectiveBase) {
+                            const m = effectiveBase.match(/^(\d{1,2}):(\d{2})$/);
+                            if (m) {
+                                base = moment(base).set({
+                                    hour: parseInt(m[1], 10),
+                                    minute: parseInt(m[2], 10),
+                                    second: 0,
+                                    millisecond: 0,
+                                }).valueOf();
+                            }
+                        }
+                    }
+                    let offMs = reminder.offsetMinutes * 60 * 1000;
+                    if (reminder.useSmartOffset && reminder.smartOffsetProperty) {
+                        const dm = parseDuration(ctx.frontmatter[reminder.smartOffsetProperty]);
+                        const sm = dm * 60 * 1000;
+                        offMs = reminder.smartOffsetOperator === 'add' ? sm : -sm;
+                    }
+                    const tTime = base + offMs;
+                    
+                    // Only consider FUTURE triggers (not currently firing)
+                    if (now < tTime) {
+                        if (nextTime === undefined || tTime < nextTime) {
+                            nextTime = tTime;
+                            nextLabel = reminder.label || reminder.id;
+                            console.log(`[TPS-Controller Annotation] ${item.file.basename}: Next different reminder at ${new Date(tTime).toLocaleTimeString()}, label=${nextLabel}`);
+                        }
+                    }
+                }
+            }
+            
+            // Set the annotation fields
+            if (nextTime !== undefined) {
+                item.nextTriggerTime = nextTime;
+                item.nextRuleLabel = nextLabel;
+                item.isRepeating = isRepeatingCurrent;
+                if (isRepeatingCurrent) {
+                    item.nextReminderIntervalMinutes = intervalMins;
+                }
+            }
+        }
+
         return deduplicated;
     }
 
@@ -262,10 +482,24 @@ export class OverdueService {
     }
 
     async markFileComplete(file: TFile): Promise<void> {
-        await this.app.fileManager.processFrontMatter(file, (fm) => { fm.status = "complete"; });
+        const now = (window as any).moment
+            ? (window as any).moment().format('YYYY-MM-DD HH:mm:ss')
+            : new Date().toISOString().replace('T', ' ').slice(0, 19);
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+            fm.status = 'complete';
+            fm.completedDate = now;
+        });
+        (this.app.workspace as any).trigger('tps-gcm-files-updated', [file.path]);
     }
 
     async markFileWontDo(file: TFile): Promise<void> {
-        await this.app.fileManager.processFrontMatter(file, (fm) => { fm.status = "wont-do"; });
+        const now = (window as any).moment
+            ? (window as any).moment().format('YYYY-MM-DD HH:mm:ss')
+            : new Date().toISOString().replace('T', ' ').slice(0, 19);
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+            fm.status = 'wont-do';
+            fm.completedDate = now;
+        });
+        (this.app.workspace as any).trigger('tps-gcm-files-updated', [file.path]);
     }
 }

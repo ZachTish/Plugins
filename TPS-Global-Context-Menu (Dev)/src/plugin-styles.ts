@@ -324,7 +324,7 @@ export const PLUGIN_STYLES = `
         
         position: fixed;
         /* Move up to clear Obsidian mobile toolbar (approx 50px) + status bar */
-        bottom: calc(var(--tps-gcm-live-bottom, 16px) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) - var(--tps-auto-base-embed-gap, 12px));
+        bottom: calc(var(--tps-auto-base-embed-bottom, var(--tps-gcm-live-bottom, 16px)) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) + 8px);
         left: var(--tps-gcm-live-left);
         right: var(--tps-gcm-live-right);
         /* Respect Obsidian UI text scaling */
@@ -428,6 +428,20 @@ export const PLUGIN_STYLES = `
         pointer-events: none;
         transition: opacity 0.15s ease, visibility 0.15s ease;
       }
+      /* Also hide all persistent inline UI surfaces when keyboard is visible.
+         The JS handler applies inline-styles as the primary mechanism; this
+         body-class rule is a belt-and-suspenders CSS fallback. */
+      .tps-context-hidden-for-keyboard .tps-global-context-menu--persistent,
+      .tps-context-hidden-for-keyboard .tps-gcm-panel,
+      .tps-context-hidden-for-keyboard .tps-gcm-note-graph,
+      .tps-context-hidden-for-keyboard .tps-gcm-top-parent-nav,
+      .tps-context-hidden-for-keyboard .tps-gcm-title-icon,
+      .tps-context-hidden-for-keyboard .tps-gcm-note-references {
+        visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transition: opacity 0.15s ease, visibility 0.15s ease;
+      }
       
       /* Add transition for smoother show/hide */
       .tps-global-context-menu--persistent {
@@ -479,6 +493,17 @@ export const PLUGIN_STYLES = `
       
       .tps-gcm-tag-text {
         display: inline;
+      }
+
+      .tps-gcm-tag-link {
+        color: inherit;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+        cursor: pointer;
+      }
+
+      .tps-gcm-tag-link:hover {
+        color: var(--interactive-accent);
       }
       
       .tps-gcm-tag-remove {

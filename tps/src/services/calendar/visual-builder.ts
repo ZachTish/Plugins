@@ -1,6 +1,6 @@
 
 import { App, Modal, Setting, setIcon, Notice } from "obsidian";
-import { CalendarStyleRule, CalendarStyleCondition, CalendarField, CalendarOperator, CalendarStyleMatch } from "../../../types";
+import { CalendarStyleRule, CalendarStyleCondition, CalendarField, CalendarOperator, CalendarStyleMatch } from "../../types";
 
 type StyleBuilderMode = "color" | "text" | "both";
 

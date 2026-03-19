@@ -107,6 +107,7 @@ export interface CalendarPluginSettings {
     viewMode: CalendarViewMode;
     filterRangeAuto: boolean;
     contextDateEnabled: boolean;
+    dailyNoteDateFormat: string;
     weekStartDay: WeekStartDay;
     navStep: number;
     showNavButtons: boolean;

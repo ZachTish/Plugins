@@ -21,6 +21,8 @@ import { TitleSyncService } from "./services/title-sync-service";
 import { StyleService } from "./services/style-service";
 import { VaultWalker } from "./services/vault-walker";
 
+const ROOT_TAG_PAGE = "__nn_tags_root__";
+
 type CompanionApi = {
   applyRulesToAllFiles: (silent?: boolean) => Promise<number>;
   applyRulesToFile: (file: TFile) => Promise<void>;
@@ -100,10 +102,23 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       if (this.isInMobileStartupGracePeriod()) {
         this.logger.info("Skipping startup vault scan during mobile startup grace period");
       } else {
-        const delay = Math.max(0, this.settings.startupDelayMs || 0);
-        window.setTimeout(() => {
-          void this.applyRulesToAllFiles(true, "startup-auto");
-        }, delay);
+        // Wait for the workspace (and therefore metadataCache) to be fully
+        // populated before running the startup scan. Calling it directly in
+        // onload() means getFileCache() returns null for most files, so rule
+        // context is built with empty frontmatter/backlinks and wrong values
+        // (or null clears) get written to icon/color/sort frontmatter.
+        // The optional startupDelayMs is kept as an additional grace period on
+        // top of onLayoutReady (e.g. for Templater to finish its own writes).
+        this.app.workspace.onLayoutReady(() => {
+          const delay = Math.max(0, this.settings.startupDelayMs || 0);
+          if (delay > 0) {
+            window.setTimeout(() => {
+              void this.applyRulesToAllFiles(true, "startup-auto");
+            }, delay);
+          } else {
+            void this.applyRulesToAllFiles(true, "startup-auto");
+          }
+        });
       }
     }
 
@@ -206,6 +221,37 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   }
 
   private registerEvents(): void {
+    this.registerDomEvent(document, "click", (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+
+      const notebookNavigatorRoot = target.closest(".view-content.notebook-navigator, .notebook-navigator") as HTMLElement | null;
+      if (!notebookNavigatorRoot) return;
+
+      const isPrimaryClick = event.button === 0;
+      if (!isPrimaryClick || event.defaultPrevented) return;
+
+      const tagEl = target.closest(".nn-file-tag.nn-clickable-tag, .nn-navitem[data-nav-item-type='tag'], .nn-navitem[data-drop-zone='tag'][data-tag], [data-drop-zone='tag'][data-tag], [data-drop-zone='tag-root']") as HTMLElement | null;
+      if (!tagEl) return;
+
+      const rawTagAttr = tagEl.getAttribute("data-tag") || "";
+      // The Tags section header uses data-drop-zone="tag-root" with no data-tag — detect it directly.
+      const isTagRootDropZone = tagEl.getAttribute("data-drop-zone") === "tag-root";
+      const rawTag =
+        rawTagAttr
+        || tagEl.querySelector(".nn-file-tag")?.textContent
+        || tagEl.querySelector(".nn-navitem-name")?.textContent
+        || tagEl.textContent
+        || "";
+      const normalizedTag = String(rawTag || "").replace(/^#/, "").trim().toLowerCase();
+      const isRootTagsItem = isTagRootDropZone || (!rawTagAttr && normalizedTag === "tags");
+      if ((!normalizedTag || normalizedTag === "__untagged__") && !isRootTagsItem) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void this.openTagCanvasForTag(isRootTagsItem ? ROOT_TAG_PAGE : normalizedTag);
+    }, { capture: true });
+
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
@@ -279,6 +325,123 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
         });
       }),
     );
+  }
+
+  private async openTagCanvasForTag(tag: string): Promise<void> {
+    const cleanTag = String(tag || "").replace(/^#/, "").trim().toLowerCase();
+    if (!cleanTag) return;
+
+    try {
+      if (await this.openTagCanvasInCurrentLeaf(cleanTag)) {
+        return;
+      }
+
+      const pluginManager = (this.app as any)?.plugins;
+      const tagCanvas =
+        pluginManager?.getPlugin?.("tps-tag-canvas") ??
+        pluginManager?.plugins?.["tps-tag-canvas"];
+      const tagCanvasOpenForTag = tagCanvas?.api?.openForTag;
+      if (typeof tagCanvasOpenForTag === "function") {
+        await Promise.resolve(tagCanvasOpenForTag.call(tagCanvas.api, cleanTag));
+        return;
+      }
+
+      const notebookNavigator =
+        pluginManager?.getPlugin?.("notebook-navigator") ??
+        pluginManager?.plugins?.["notebook-navigator"];
+      const navigateToTag = notebookNavigator?.api?.navigation?.navigateToTag;
+      if (typeof navigateToTag === "function") {
+        await Promise.resolve(navigateToTag.call(notebookNavigator.api.navigation, cleanTag));
+        return;
+      }
+
+      new Notice("Tag Canvas and Notebook Navigator tag navigation are unavailable.");
+    } catch (error) {
+      this.logger.error("Failed to open tag canvas for tag", { tag: cleanTag, error });
+    }
+  }
+
+  private async openTagCanvasInCurrentLeaf(tag: string): Promise<boolean> {
+    try {
+      const anyWindow = window as any;
+      const globalApi = anyWindow?._tps_tagCanvas;
+      const globalOpenForTag = globalApi?.openForTag;
+
+      // Prefer calling the Tag Canvas public API to centralize focus/behavior.
+      if (typeof globalOpenForTag === "function") {
+        await Promise.resolve(globalOpenForTag.call(globalApi, tag));
+        return true;
+      }
+
+      const pluginManager = (this.app as any)?.plugins;
+      const tagCanvas =
+        pluginManager?.getPlugin?.("tps-tag-canvas") ??
+        pluginManager?.plugins?.["tps-tag-canvas"];
+      const tagCanvasOpenForTag = tagCanvas?.api?.openForTag;
+
+      if (typeof tagCanvasOpenForTag === "function") {
+        await Promise.resolve(tagCanvasOpenForTag.call(tagCanvas.api, tag));
+        return true;
+      }
+
+      // Fallback: if no openForTag API is available, fall back to sync->open path.
+      const globalSyncForTag = globalApi?.syncForTag;
+      const globalGetCanvasPath = globalApi?.getCanvasPath;
+      if (typeof globalSyncForTag === "function" && typeof globalGetCanvasPath === "function") {
+        await Promise.resolve(globalSyncForTag(tag));
+        const canvasPath = String(globalGetCanvasPath(tag) || "").trim();
+        if (!canvasPath) return false;
+        const canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
+        if (canvasFile instanceof TFile) {
+          const leaf = this.resolvePreferredContentLeaf();
+          if (!leaf) return false;
+          await leaf.openFile(canvasFile);
+          return true;
+        }
+      }
+
+      const tagCanvasSyncForTag = tagCanvas?.api?.syncForTag;
+      const tagCanvasGetCanvasPath = tagCanvas?.api?.getCanvasPath;
+      if (typeof tagCanvasSyncForTag === "function" && typeof tagCanvasGetCanvasPath === "function") {
+        await Promise.resolve(tagCanvasSyncForTag.call(tagCanvas.api, tag));
+        const canvasPath = String(tagCanvasGetCanvasPath.call(tagCanvas.api, tag) || "").trim();
+        if (!canvasPath) return false;
+        const canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
+        if (canvasFile instanceof TFile) {
+          const leaf = this.resolvePreferredContentLeaf();
+          if (!leaf) return false;
+          await leaf.openFile(canvasFile);
+          return true;
+        }
+      }
+    } catch (error) {
+      this.logger.warn("Failed opening tag canvas in current leaf", { tag, error });
+    }
+
+    return false;
+  }
+
+  private resolvePreferredContentLeaf() {
+    const activeLeaf = this.app.workspace.activeLeaf;
+    const activeType = activeLeaf?.view?.getViewType?.();
+
+    if (activeLeaf && activeType !== "notebook-navigator") {
+      return activeLeaf;
+    }
+
+    const markdownLeaves = this.app.workspace.getLeavesOfType("markdown");
+    if (markdownLeaves.length > 0) return markdownLeaves[0];
+
+    const canvasLeaves = this.app.workspace.getLeavesOfType("canvas");
+    if (canvasLeaves.length > 0) return canvasLeaves[0];
+
+    const mostRecentLeaf = (this.app.workspace as any)?.getMostRecentLeaf?.();
+    const mostRecentType = mostRecentLeaf?.view?.getViewType?.();
+    if (mostRecentLeaf && mostRecentType !== "notebook-navigator") {
+      return mostRecentLeaf;
+    }
+
+    return this.app.workspace.getLeaf("tab");
   }
 
   private setupPluginApi(): void {

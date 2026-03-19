@@ -15,8 +15,8 @@ import { getValidOperators } from "./operators";
 let selectedBucketId: string | null = null;
 let bucketFilterQuery = "";
 
-const PRIORITY_MAPPING = "high=001, normal=002, low=003";
-const STATUS_MAPPING = "open=001, working=002, complete=003, wont-do=004";
+const PRIORITY_MAPPING = "high=001, medium=002, low=003";
+const STATUS_MAPPING = "todo=001, working=002, holding=003, complete=004, wont-do=005";
 
 export class BucketSectionRenderer {
     private readonly context: SettingsSectionContext;
@@ -90,6 +90,24 @@ export class BucketSectionRenderer {
                     .setValue(smartSort.appendBasename)
                     .onChange(async (value) => {
                         smartSort.appendBasename = value;
+                        await plugin.saveSettings();
+                        await plugin.applyRulesToActiveFile(false);
+                        refresh();
+                    });
+            });
+
+        new Setting(section)
+            .setName("Relationship grouping")
+            .setDesc("Optionally make child notes inherit the parent's sort prefix so subitems appear directly underneath the parent note.")
+            .addDropdown((dropdown) => {
+                dropdown
+                    .addOption("none", "None")
+                    .addOption("children-under-parent", "Show children under parent")
+                    .setValue(smartSort.relationshipGrouping)
+                    .onChange(async (value) => {
+                        smartSort.relationshipGrouping = value === "children-under-parent"
+                            ? "children-under-parent"
+                            : "none";
                         await plugin.saveSettings();
                         await plugin.applyRulesToActiveFile(false);
                         refresh();
@@ -633,7 +651,18 @@ export class BucketSectionRenderer {
         const sourceWrap = grid.createDiv({ cls: "tps-nn-condition-field" });
         sourceWrap.createEl("label", { text: "Source" });
         const sourceSelect = sourceWrap.createEl("select");
-        for (const source of ["frontmatter", "path", "extension", "name", "tag", "tag-note-name"]) {
+        for (const source of [
+            "frontmatter",
+            "parent-frontmatter",
+            "name",
+            "parent-name",
+            "path",
+            "parent-path",
+            "tag",
+            "parent-tag",
+            "tag-note-name",
+            "extension"
+        ]) {
             sourceSelect.createEl("option", { value: source, text: source });
         }
         sourceSelect.value = criterion.source;
@@ -648,7 +677,7 @@ export class BucketSectionRenderer {
                     return;
                 }
                 liveCriterion.source = normalizeConditionSource(sourceSelect.value);
-                if (liveCriterion.source !== "frontmatter") {
+                if (liveCriterion.source !== "frontmatter" && liveCriterion.source !== "parent-frontmatter") {
                     liveCriterion.field = "";
                 }
                 await plugin.saveSettings();
@@ -657,11 +686,18 @@ export class BucketSectionRenderer {
             })();
         });
 
-        const hasType = criterion.source === "frontmatter";
+        const hasType = criterion.source === "frontmatter" || criterion.source === "parent-frontmatter";
         const isMetadata =
             criterion.source === "frontmatter" ||
+            criterion.source === "parent-frontmatter" ||
+            criterion.source === "name" ||
+            criterion.source === "parent-name" ||
+            criterion.source === "path" ||
+            criterion.source === "parent-path" ||
             criterion.source === "tag" ||
-            criterion.source === "tag-note-name";
+            criterion.source === "parent-tag" ||
+            criterion.source === "tag-note-name" ||
+            criterion.source === "extension";
 
         if (hasType) {
             const typeWrap = grid.createDiv({ cls: "tps-nn-condition-field" });
@@ -689,7 +725,7 @@ export class BucketSectionRenderer {
             });
         }
 
-        if (criterion.source === "frontmatter") {
+        if (criterion.source === "frontmatter" || criterion.source === "parent-frontmatter") {
             const fieldWrap = grid.createDiv({ cls: "tps-nn-condition-field" });
             fieldWrap.createEl("label", { text: "Field" });
             const fieldInput = fieldWrap.createEl("input", {

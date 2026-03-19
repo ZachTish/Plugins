@@ -45,7 +45,13 @@ export class CalendarAutomationService {
             canceledStatusValue: settings.canceledStatusValue,
         });
 
-        void this.runSync();
+        // Defer the first sync until after the workspace and metadata cache are
+        // ready. Calling runSync() during onload() means getFileCache() returns
+        // null for almost every file, byEventId is empty, and the service tries
+        // to create notes that already exist → "File already exists" errors.
+        this.app.workspace.onLayoutReady(() => {
+            void this.runSync();
+        });
 
         const minutes = Math.max(1, settings.syncIntervalMinutes || 5);
         const intervalMs = minutes * 60 * 1000;

@@ -16,6 +16,7 @@ import { OverdueService } from "./services/overdue-service";
 import { CalendarAutomationService } from "./services/calendar-automation";
 import { CompanionAutomationService } from "./services/companion-automation";
 import { migrateSettingsFromPlugins } from "./services/migration-service";
+import { ExternalCalendarDuplicateCleanupService } from "./services/external-calendar-duplicate-cleanup-service";
 
 // ============================================================================
 // Plugin API Types
@@ -68,6 +69,7 @@ export default class TPSControllerPlugin extends Plugin {
     private overdueService: OverdueService;
     private calendarAutomation: CalendarAutomationService;
     private companionAutomation: CompanionAutomationService;
+    private externalCalendarDuplicateCleanup: ExternalCalendarDuplicateCleanupService;
 
     // Reminder interval
     private reminderIntervalId: number | null = null;
@@ -117,11 +119,20 @@ export default class TPSControllerPlugin extends Plugin {
             () => this.getCompanionPlugin(),
             () => this.deviceRoleManager.isController()
         );
+        this.externalCalendarDuplicateCleanup = new ExternalCalendarDuplicateCleanupService(this.app, () => this.settings);
 
         // Commands
         this.addCommand({ id: "set-device-role-controller", name: "Set as Controller (Automation Source)", callback: () => { this.deviceRoleManager.setRole("controller"); new Notice("Device set to CONTROLLER."); } });
         this.addCommand({ id: "set-device-role-user", name: "Set as Replica (Passive)", callback: () => { this.deviceRoleManager.setRole("user"); new Notice("Device set to REPLICA."); } });
         this.addCommand({ id: "force-calendar-sync", name: "Force Calendar Sync Now", callback: () => { if (this.deviceRoleManager.isController()) void this.calendarAutomation.runSync(true); else void this.requestSync(["calendar"]); } });
+        this.addCommand({
+            id: "cleanup-duplicate-external-calendar-notes",
+            name: "Clean Duplicate External Calendar Notes",
+            callback: async () => {
+                const result = await this.externalCalendarDuplicateCleanup.run();
+                new Notice(`Calendar duplicate cleanup: archived ${result.archivedCount}, skipped ${result.skippedWithContent} with body content, found ${result.groupsFound} duplicate groups.`);
+            },
+        });
         this.addCommand({ id: "review-calendar-sync-quarantine", name: "Review Calendar Sync Quarantine", callback: () => { void this.calendarAutomation.reviewQuarantine(); } });
         this.addCommand({ id: "force-reminder-check", name: "Run Reminder Check Now", callback: () => { if (this.deviceRoleManager.isController()) void this.runReminderCheck(); else void this.requestSync(["reminders"]); } });
         this.addCommand({ id: "open-notifications", name: "View Notifications", callback: () => { void this.overdueService.openNotificationModal(); } });

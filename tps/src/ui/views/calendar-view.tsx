@@ -56,6 +56,7 @@ import {
   resolveFromPotentialDate,
 } from "./utils/date-value-utils";
 import * as logger from "./logger";
+import { parseDateFromFilename } from '../../utils/daily-file-date';
 import { RRule } from "rrule";
 import { parseAllTaskItems, ParsedTaskItem } from "./services/task-parser-service";
 
@@ -87,6 +88,53 @@ export class CalendarView extends BasesView {
   private priorityField: BasesPropertyId | null = null;
   private statusField: BasesPropertyId | null = null;
   private condenseLevel: number = DEFAULT_CONDENSE_LEVEL;
+
+  private getDailyNoteDateFormat(): string | undefined {
+    const configured = (this.plugin as any)?.settings?.dailyNoteDateFormat;
+    if (typeof configured === "string" && configured.trim()) {
+      return configured.trim();
+    }
+
+    const dailyNotesFormat = (this.app as any)?.internalPlugins?.plugins?.["daily-notes"]?.instance?.options?.format;
+    if (typeof dailyNotesFormat === "string" && dailyNotesFormat.trim()) {
+      return dailyNotesFormat.trim();
+    }
+
+    return undefined;
+  }
+
+  private parseFilenameComponents(basename: string): { cleanTitle: string; dateSuffix: string | null } {
+    const userFormat = this.getDailyNoteDateFormat();
+
+    try {
+      const whole = parseDateFromFilename(basename, userFormat);
+      if (whole && whole.isValid && whole.isValid()) {
+        // @ts-ignore
+        const momentWhole = (window as any).moment(basename, [userFormat, (window as any).moment.ISO_8601, 'YYYY-MM-DD', 'YYYY_MM_DD', 'YYYYMMDD'], true);
+        if (momentWhole && momentWhole.isValid && momentWhole.isValid()) {
+          return { cleanTitle: '', dateSuffix: whole.format('YYYY-MM-DD') };
+        }
+      }
+
+      const datePattern = /\s*(\d{4}[-_/]\d{2}[-_/]\d{2}|\d{8})(?:\s+\d+)?$/;
+      const match = basename.match(datePattern);
+      if (match) {
+        const parsed = parseDateFromFilename(match[1], userFormat);
+        if (parsed && parsed.isValid && parsed.isValid()) {
+          return { cleanTitle: basename.substring(0, match.index).trim(), dateSuffix: parsed.format('YYYY-MM-DD') };
+        }
+      }
+    } catch {
+      // Fall through to naive behavior.
+    }
+
+    const match = basename.match(/\s*(\d{4}[-/]\d{2}[-/]\d{2}|\d{8})(?:\s+\d+)?$/);
+    if (match) {
+      return { cleanTitle: basename.substring(0, match.index).trim(), dateSuffix: match[1] };
+    }
+
+    return { cleanTitle: basename, dateSuffix: null };
+  }
 
   private showFullDay: boolean = false;
   private currentDate: Date | null = null;
@@ -799,7 +847,7 @@ export class CalendarView extends BasesView {
 
     for (const entry of queryData.data) {
       const entryFile = entry.file;
-      let startDate = extractDate(entry, this.startDateProp);
+      let startDate = extractDate(entry, this.startDateProp, this.getDailyNoteDateFormat());
       if (startDate) {
         // Read status and priority directly from cache for freshness
         let statusValue: any = null;
@@ -1015,7 +1063,7 @@ export class CalendarView extends BasesView {
             }
           } else {
             // End datetime mode: extract end date directly
-            endDate = extractDate(entry, this.endDateProp) ?? undefined;
+            endDate = extractDate(entry, this.endDateProp, this.getDailyNoteDateFormat()) ?? undefined;
           }
         }
 
@@ -1039,8 +1087,11 @@ export class CalendarView extends BasesView {
         }
 
         let title = baseTitle || frontmatterTitle || entryFile.basename;
-        if (title && !/^\d{4}-\d{2}-\d{2}$/.test(title)) {
-          title = title.replace(/ \d{4}-\d{2}-\d{2}$/, '');
+        if (title) {
+          const { cleanTitle } = this.parseFilenameComponents(title);
+          if (cleanTitle) {
+            title = cleanTitle;
+          }
         }
 
         // Resolve styles
@@ -1202,7 +1253,7 @@ export class CalendarView extends BasesView {
         const rule = new RRule(opts);
         const occurrences = rule.between(calEntry.startDate, calendarEnd, false /* exclusive start */);
 
-        const baseName = entryFile.basename.replace(/ \d{4}-\d{2}-\d{2}$/, '');
+        const { cleanTitle: baseName } = this.parseFilenameComponents(entryFile.basename);
         const duration = calEntry.endDate
           ? calEntry.endDate.getTime() - calEntry.startDate.getTime()
           : 60 * 60 * 1000;
@@ -1213,7 +1264,7 @@ export class CalendarView extends BasesView {
 
           // Build the expected path for a real instance at this date
           const dateStr = `${occDate.getFullYear()}-${String(occDate.getMonth() + 1).padStart(2, '0')}-${String(occDate.getDate()).padStart(2, '0')}`;
-          const expectedName = `${baseName} ${dateStr}.md`;
+          const expectedName = `${(baseName || entryFile.basename)} ${dateStr}.md`;
           const expectedPath = entryFile.parent
             ? normalizePath(`${entryFile.parent.path}/${expectedName}`)
             : normalizePath(expectedName);
@@ -1892,42 +1943,44 @@ export class CalendarView extends BasesView {
     // Get just the filename without extension
     const filename = path.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
 
-    // Try YYYY-MM-DD format (most common for daily notes)
+    // Prefer user-configured daily-note format when available via plugin settings.
+    // The CalendarView exposes plugin settings on `this.plugin.settings`.
+    try {
+      const userFormat: any = (this.plugin && (this.plugin as any).settings && (this.plugin as any).settings.dailyNoteDateFormat) || undefined;
+      const m = parseDateFromFilename(filename, userFormat);
+      if (m && m.isValid && m.isValid()) return m.toDate();
+    } catch (e) {
+      // Fall through to conservative regex fallback below
+    }
+
+    // Conservative fallbacks for ambiguous filenames
     const isoMatch = filename.match(/(\d{4})[-_](\d{2})[-_](\d{2})/);
     if (isoMatch) {
       const year = parseInt(isoMatch[1], 10);
       const month = parseInt(isoMatch[2], 10) - 1; // 0-indexed
       const day = parseInt(isoMatch[3], 10);
       const date = new Date(year, month, day);
-      if (!isNaN(date.getTime())) {
-        return date;
-      }
+      if (!isNaN(date.getTime())) return date;
     }
 
-    // Try MM-DD-YYYY format
+    // Try other common fallbacks (US / EU ordering)
     const usMatch = filename.match(/(\d{2})[-_](\d{2})[-_](\d{4})/);
     if (usMatch) {
       const month = parseInt(usMatch[1], 10) - 1;
       const day = parseInt(usMatch[2], 10);
       const year = parseInt(usMatch[3], 10);
       const date = new Date(year, month, day);
-      if (!isNaN(date.getTime())) {
-        return date;
-      }
+      if (!isNaN(date.getTime())) return date;
     }
 
-    // Try DD-MM-YYYY format (less common, so lower priority)
     const euMatch = filename.match(/(\d{2})[-_](\d{2})[-_](\d{4})/);
     if (euMatch) {
       const day = parseInt(euMatch[1], 10);
       const month = parseInt(euMatch[2], 10) - 1;
       const year = parseInt(euMatch[3], 10);
-      // Only accept if day > 12 (otherwise ambiguous with US format)
       if (day > 12) {
         const date = new Date(year, month, day);
-        if (!isNaN(date.getTime())) {
-          return date;
-        }
+        if (!isNaN(date.getTime())) return date;
       }
     }
 
@@ -1958,12 +2011,28 @@ export class CalendarView extends BasesView {
       );
 
       const results = await Promise.allSettled(externalPromises);
-      const newEvents: ExternalCalendarEvent[] = [];
+      const newEventsRaw: ExternalCalendarEvent[] = [];
 
       for (const result of results) {
         if (result.status === "fulfilled") {
-          newEvents.push(...result.value);
+          newEventsRaw.push(...result.value);
         }
+      }
+
+      // Deduplicate exact duplicates that can arise when multiple calendar sources
+      // expose the same event or when fetch results overlap. Key by sourceUrl + id + startTs.
+      const seen = new Set<string>();
+      const newEvents: ExternalCalendarEvent[] = [];
+      for (const ev of newEventsRaw) {
+        const key = `${ev.sourceUrl || ''}::${ev.id}::${ev.startDate.getTime()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        newEvents.push(ev);
+      }
+
+      if (newEvents.length !== newEventsRaw.length) {
+        // Optional debug: log that duplicates were removed
+        // logger.log(`[CalendarView] Removed ${newEventsRaw.length - newEvents.length} duplicate external events`);
       }
 
       this.cachedExternalEvents = newEvents;
@@ -3023,6 +3092,7 @@ export class CalendarView extends BasesView {
             pastEventOpacity={this.plugin.settings.pastEventOpacity}
             eventFontSize={this.plugin.settings.eventFontSize}
             activeEventHighlightColor={this.plugin.settings.activeEventHighlightColor}
+            dailyNoteDateFormat={this.getDailyNoteDateFormat()}
           />
         </AppContext.Provider>
       </StrictMode>,

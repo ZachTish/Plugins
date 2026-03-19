@@ -47,6 +47,8 @@ interface UseCalendarEventsOptions {
   defaultEventDuration: number;
   minEventHeight: number;
   tick: number;
+  /** Status values that are considered "done" and should be dimmed. */
+  doneStatuses?: string[];
 }
 
 /**
@@ -59,6 +61,7 @@ export function useCalendarEvents({
   defaultEventDuration,
   minEventHeight,
   tick,
+  doneStatuses = ["complete", "wont-do", "wont do"],
 }: UseCalendarEventsOptions) {
   const basesEntryMap = useMemo(() => {
     const map = new Map<string, BasesEntry>();
@@ -71,9 +74,6 @@ export function useCalendarEvents({
   }, [entries]);
 
   const events = useMemo(() => {
-    const now = new Date();
-    const nowTime = now.getTime();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     return entries.map((calEntry) => {
       const startDate = new Date(calEntry.startDate);
       const endDate = calEntry.endDate
@@ -97,19 +97,12 @@ export function useCalendarEvents({
         ? !!calEntry.externalEvent?.isAllDay
         : ["true", "yes", "y", "1"].includes(normalizedAllDaySource);
 
-      // Keep "past" classification aligned with calendar semantics:
-      // all-day events become past after their end day boundary; timed events after end datetime.
+      // Dim events that are in a "done" state (complete / wont-do / configured equivalent).
+      // Time-based past detection is intentionally not used: an incomplete past event
+      // should remain fully visible so the user notices it still needs attention.
       const statusNormalized = String(calEntry.status ?? "").trim().toLowerCase();
-      const isDoneStatus = [
-        "complete",
-        "completed",
-        "wont-do",
-        "wont do",
-      ].includes(statusNormalized);
-      const isPastByTime = isAllDay
-        ? endDate.getTime() <= startOfToday
-        : endDate.getTime() <= nowTime;
-      const isPast = isPastByTime || (isAllDay && isDoneStatus);
+      const normalizedDoneStatuses = doneStatuses.map((s) => s.trim().toLowerCase());
+      const isPast = normalizedDoneStatuses.includes(statusNormalized);
 
       const baseTitle = calEntry.title || calEntry.entry?.file?.basename || "Untitled";
       const title = calEntry.isGhost ? `${baseTitle} (upcoming)` : baseTitle;

@@ -3,7 +3,7 @@
  * Automatically embeds a Base at the bottom of notes
  */
 
-import { TPSPlugin } from '../../main';
+import TPSPlugin from '../../main';
 import { AutoEmbedSettings } from '../../types';
 import * as logger from '../../logger';
 

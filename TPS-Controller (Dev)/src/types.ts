@@ -108,6 +108,14 @@ export interface OverdueItem {
     title?: string;
     body?: string;
     snoozedUntil?: number;
+    isAllDay?: boolean;
+    status?: string;
+    icon?: string;
+    color?: string;
+    nextTriggerTime?: number;
+    nextRuleLabel?: string;
+    isRepeating?: boolean;
+    nextReminderIntervalMinutes?: number;
 }
 
 // ============================================================================

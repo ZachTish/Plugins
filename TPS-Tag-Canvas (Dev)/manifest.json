@@ -1,0 +1,10 @@
+{
+  "id": "tps-tag-canvas",
+  "name": "TPS Tag Canvas",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Automatically creates and maintains Canvas files for each tag in your vault.",
+  "author": "Codex",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}

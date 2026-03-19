@@ -10,7 +10,7 @@ import {
     parseDate, parseTimeRange, parseDuration, getEffectiveEndTime,
     formatTemplate, formatRemaining, checkStopCondition,
     normalizeStatus, getStatuses, hasRequiredStatus, shouldIgnoreForReminder,
-    isAllDayEvent,
+    isAllDayEvent, hasExplicitTimeInValue,
 } from "../utils/time-calculation-service";
 import {
     buildReminderTargetsForFile,
@@ -93,8 +93,16 @@ export class ReminderEngine {
                             finalTriggerBase = effectiveEndTime;
                         }
 
+                        // If this is a time-block reminder and an effective end time exists,
+                        // use the end-time as the trigger base even when `triggerAtEnd` is not set.
+                        // This ensures reminders scheduled for "start + timeEstimate + offset" fire
+                        // at the expected time when a duration/timeEstimate is present.
+                        if (!reminder.triggerAtEnd && reminder.mode === "timeblock" && effectiveEndTime) {
+                            finalTriggerBase = effectiveEndTime;
+                        }
+
                         const normalizedPropValue = this.normalizeReminderPropertyValue(propValue);
-                        const hasExplicitTime = this.propertyValueHasExplicitTime(normalizedPropValue);
+                        const hasExplicitTime = hasExplicitTimeInValue(propValue);
                         const isAllDaySafe = isAllDayEvent(propValue, effectiveFm) &&
                             (!hasExplicitTime || String(effectiveFm?.allDay ?? "").toLowerCase() === "true");
 
@@ -260,13 +268,6 @@ export class ReminderEngine {
     private normalizeReminderPropertyValue(value: unknown): string {
         const raw = Array.isArray(value) ? value[0] : value;
         return String(raw ?? "").replace(/[\[\]]/g, "").trim();
-    }
-
-    private propertyValueHasExplicitTime(value: string): boolean {
-        if (!value) return false;
-        if (/[T ]\d{1,2}:\d{2}/.test(value)) return true;
-        if (/\b\d{1,2}:\d{2}\s*(AM|PM)\b/i.test(value)) return true;
-        return false;
     }
 
     private buildTriggerKey(

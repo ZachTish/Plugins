@@ -8,14 +8,14 @@ import {
   FuzzySuggestModal,
   Notice,
 } from "obsidian";
-import * as logger from "../../../logger";
-import { formatDateTimeForFrontmatter } from "../utils";
-import { applyTemplateVars, buildTemplateVars, type TemplateVars } from "../utils/template-variable-service";
+import * as logger from "../../logger";
+import { formatDateTimeForFrontmatter } from "./utils";
+import { applyTemplateVars, buildTemplateVars, type TemplateVars } from "../../utils/template-variable-service";
 import { TypeFolderOption, TypeFolderService } from "./type-folder-service";
-import { resolveTemplateFile } from "../utils/template-resolution-service";
-import { mergeTagInputs, normalizeTagValue } from "../utils/tag-utils";
+import { resolveTemplateFile } from "../../utils/template-resolution-service";
+import { mergeTagInputs, normalizeTagValue } from "../../utils/tag-utils";
 import { applyParentLinkToChild } from "./parent-child-link";
-import { getPluginById } from "../core";
+import { getPluginById } from "../../core";
 
 export interface NewEventServiceConfig {
   app: App;

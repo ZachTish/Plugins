@@ -1,7 +1,8 @@
 import { App, TFile } from "obsidian";
+import { parseDateFromFilename } from '../../utils/daily-file-date';
 import { Logger } from "./logger";
 import { MetadataManager } from "./metadata-manager";
-import { NotebookNavigatorCompanionSettings } from "../types";
+import { NotebookNavigatorCompanionSettings } from "./types";
 import { FrontmatterWriteExclusionService } from "./frontmatter-write-exclusion-service";
 
 /**
@@ -130,10 +131,24 @@ export class TitleSyncService {
 
         const { cleanTitle: currentClean, dateSuffix } = this.parseFilenameComponents(file.basename);
 
-        if (desiredTitle === currentClean) return;
+        const dailyNoteFormat = this.getDailyNoteDateFormat();
+        const desiredTitleAsDailyDate = parseDateFromFilename(desiredTitle, dailyNoteFormat);
+        const desiredTitleIsDailyDate = !!(desiredTitleAsDailyDate && desiredTitleAsDailyDate.isValid && desiredTitleAsDailyDate.isValid());
+        const isDateOnlyDailyNote = !currentClean && !!dateSuffix;
+
+        // Daily notes should keep their configured filename format instead of
+        // being rewritten as "<title> YYYY-MM-DD".
+        if (isDateOnlyDailyNote) return;
+
+        const needsDailyNoteRepair =
+            !!dateSuffix &&
+            desiredTitleIsDailyDate &&
+            file.basename !== desiredTitle;
+
+        if (desiredTitle === currentClean && !needsDailyNoteRepair) return;
 
         let newBasename = desiredTitle;
-        if (dateSuffix) {
+        if (dateSuffix && !desiredTitleIsDailyDate) {
             newBasename = `${newBasename} ${dateSuffix}`;
         }
 
@@ -156,7 +171,47 @@ export class TitleSyncService {
         }
     }
 
+    private getDailyNoteDateFormat(): string | undefined {
+        const configured = (this.getSettings() as any)?.dailyNoteDateFormat;
+        if (typeof configured === 'string' && configured.trim()) return configured.trim();
+
+        const tpsFormat = (this.app as any)?.plugins?.plugins?.tps?.settings?.dailyNoteDateFormat;
+        if (typeof tpsFormat === 'string' && tpsFormat.trim()) return tpsFormat.trim();
+
+        const dailyNotesFormat = (this.app as any)?.internalPlugins?.plugins?.['daily-notes']?.instance?.options?.format;
+        if (typeof dailyNotesFormat === 'string' && dailyNotesFormat.trim()) return dailyNotesFormat.trim();
+
+        return undefined;
+    }
+
     private parseFilenameComponents(basename: string): { cleanTitle: string; dateSuffix: string | null } {
+        // Prefer the shared parser which attempts the user's configured format
+        try {
+            const userFormat = this.getDailyNoteDateFormat();
+            const m = parseDateFromFilename(basename, userFormat);
+            if (m && m.isValid && m.isValid()) {
+                // If the entire basename is a date, return empty cleanTitle
+                const whole = (window as any).moment(basename, [userFormat, (window as any).moment.ISO_8601, 'YYYY-MM-DD', 'YYYYMMDD'], true);
+                if (whole && whole.isValid && whole.isValid()) {
+                    return { cleanTitle: '', dateSuffix: whole.format('YYYY-MM-DD') };
+                }
+
+                // Otherwise detect trailing token via regex and normalize
+                const datePattern = /\s*(\d{4}[-_/]\d{2}[-_/]\d{2}|\d{8})(?:\s+\d+)?$/;
+                const match = basename.match(datePattern);
+                if (match) {
+                    const token = match[1];
+                    const parsed = parseDateFromFilename(token, userFormat);
+                    if (parsed && parsed.isValid && parsed.isValid()) {
+                        const cleanTitle = basename.substring(0, match.index).trim();
+                        return { cleanTitle, dateSuffix: parsed.format('YYYY-MM-DD') };
+                    }
+                }
+            }
+        } catch (e) {
+            // fall through to naive fallback
+        }
+
         const datePattern = /\s*(\d{4}[-/]\d{2}[-/]\d{2}|\d{8})(?:\s+\d+)?$/;
         const match = basename.match(datePattern);
         if (match) {

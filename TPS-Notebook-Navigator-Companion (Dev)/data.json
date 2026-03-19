@@ -16,7 +16,7 @@
     "childOf",
     "attachments"
   ],
-  "frontmatterWriteExclusions": "re:(^|/)Templates(/|$)",
+  "frontmatterWriteExclusions": "re:(^|/)_[^/]*($|/|$)\nre: ^[^/]+\\.md$",
   "noteCheckboxIconColor": "#e62828",
   "clearIconWhenNoMatch": true,
   "clearColorWhenNoMatch": true,
@@ -24,22 +24,212 @@
   "debugLogging": true,
   "rules": [
     {
-      "id": "rule-1770935476138-q9npl05",
-      "name": "",
-      "enabled": true,
+      "id": "rule-1773960936109-2u3nvty",
+      "name": "dark red",
+      "enabled": false,
       "property": "title",
       "operator": "exists",
       "value": "",
       "pathPrefix": "",
-      "icon": "lucide:archive",
-      "color": "#868d86",
-      "match": "all",
+      "icon": "",
+      "color": "#765151",
+      "match": "any",
       "conditions": [
         {
           "source": "tag",
           "field": "",
           "operator": "contains",
           "value": "archive"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Archive"
+        }
+      ]
+    },
+    {
+      "id": "rule-1773960938315-7cqo4tm",
+      "name": "dark yellow",
+      "enabled": false,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#8a906a",
+      "match": "any",
+      "conditions": []
+    },
+    {
+      "id": "rule-1773960947504-pjc3k7j",
+      "name": "Dark Blue",
+      "enabled": false,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#3b586d",
+      "match": "any",
+      "conditions": []
+    },
+    {
+      "id": "rule-1773960949776-5hfyqf6",
+      "name": "Gray",
+      "enabled": false,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#7b828a",
+      "match": "any",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "rule-1773961304272-3sv23pi",
+      "name": "dark gray",
+      "enabled": false,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#44474b",
+      "match": "any",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "rule-1773960951642-gxgucmc",
+      "name": "Dark Green",
+      "enabled": false,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#324e33",
+      "match": "any",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        }
+      ]
+    },
+    {
+      "id": "rule-1773961353774-69t1uqg",
+      "name": "purple",
+      "enabled": false,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#324e33",
+      "match": "any",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        }
+      ]
+    },
+    {
+      "id": "rule-1773961362295-lpk6n85",
+      "name": "yellow",
+      "enabled": false,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#324e33",
+      "match": "any",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        }
+      ]
+    },
+    {
+      "id": "rule-1773961367963-4213hvx",
+      "name": "blue",
+      "enabled": false,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "",
+      "color": "#324e33",
+      "match": "any",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        }
+      ]
+    },
+    {
+      "id": "rule-1773783792901-0ogp1n8",
+      "name": "Archive",
+      "enabled": true,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "archive",
+      "color": "#656c72",
+      "match": "any",
+      "conditions": [
+        {
+          "source": "tag",
+          "field": "",
+          "operator": "contains",
+          "value": "archive"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Archive"
         }
       ]
     },
@@ -64,6 +254,32 @@
       ]
     },
     {
+      "id": "rule-1773878692514-uhgoai1",
+      "name": "",
+      "enabled": true,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide:gear",
+      "color": "#828c97",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "path",
+          "field": "",
+          "operator": "!contains",
+          "value": "Markdown"
+        },
+        {
+          "source": "tag",
+          "field": "",
+          "operator": "contains",
+          "value": "system"
+        }
+      ]
+    },
+    {
       "id": "rule-1771100744432-8j9wclf",
       "name": "",
       "enabled": true,
@@ -80,12 +296,6 @@
           "field": "",
           "operator": "contains",
           "value": "dailynote"
-        },
-        {
-          "source": "name",
-          "field": "",
-          "operator": "contains",
-          "value": "-"
         },
         {
           "source": "name",
@@ -129,8 +339,34 @@
       "operator": "is",
       "value": "wont-do",
       "pathPrefix": "",
+      "icon": "list-x",
+      "color": "#474b4d",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "wont-do"
+        },
+        {
+          "source": "frontmatter",
+          "field": "parentOf",
+          "operator": "is-not-empty",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "rule-1773883890393-3z3tuk3",
+      "name": "",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "wont-do",
+      "pathPrefix": "",
       "icon": "square-x",
-      "color": "#7c8488",
+      "color": "#474b4d",
       "match": "all",
       "conditions": []
     },
@@ -142,16 +378,10 @@
       "operator": "is",
       "value": "complete",
       "pathPrefix": "Markdown/Action Items",
-      "icon": "lucide:calendar-check",
-      "color": "#506d46",
+      "icon": "clock-check",
+      "color": "#324e33",
       "match": "all",
       "conditions": [
-        {
-          "source": "frontmatter",
-          "field": "status",
-          "operator": "is",
-          "value": "complete"
-        },
         {
           "source": "path",
           "field": "",
@@ -163,6 +393,56 @@
           "field": "scheduled",
           "operator": "is-not-empty",
           "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "childOf",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "parentOf",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
+        }
+      ]
+    },
+    {
+      "id": "rule-1773883174692-0ykkrn4",
+      "name": "",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "complete",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "lucide:calendar-check",
+      "color": "#324e33",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "path",
+          "field": "",
+          "operator": "starts",
+          "value": "Markdown/Action Items"
+        },
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "complete"
         }
       ]
     },
@@ -174,10 +454,67 @@
       "operator": "is",
       "value": "blocked",
       "pathPrefix": "Markdown/Action Items",
-      "icon": "square-dot",
-      "color": "#6c704c",
+      "icon": "circle-minus",
+      "color": "#4c512a",
       "match": "all",
-      "conditions": []
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "holding"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "starts",
+          "value": "Markdown/Action Items"
+        },
+        {
+          "source": "frontmatter",
+          "field": "childOf",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "parentOf",
+          "operator": "!exists",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "rule-1773877893626-leu2oo4",
+      "name": "",
+      "enabled": true,
+      "property": "status",
+      "operator": "is",
+      "value": "blocked",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "list-x",
+      "color": "#4c512a",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "status",
+          "operator": "is",
+          "value": "holding"
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "starts",
+          "value": "Markdown/Action Items"
+        },
+        {
+          "source": "frontmatter",
+          "field": "parentOf",
+          "operator": "is-not-empty",
+          "value": ""
+        }
+      ]
     },
     {
       "id": "rule-parent-icon",
@@ -187,7 +524,7 @@
       "operator": "exists",
       "value": "",
       "pathPrefix": "Action Items",
-      "icon": "lucide:list-tree",
+      "icon": "list-todo",
       "color": "",
       "match": "all",
       "conditions": [
@@ -219,7 +556,7 @@
       "operator": "exists",
       "value": "",
       "pathPrefix": "Action Items",
-      "icon": "lucide:list-tree",
+      "icon": "lucide:list-todo",
       "color": "",
       "match": "all",
       "conditions": [
@@ -251,7 +588,7 @@
       "operator": "exists",
       "value": "",
       "pathPrefix": "Action Items",
-      "icon": "lucide:circle-small",
+      "icon": "lucide:circle",
       "color": "",
       "match": "all",
       "conditions": [
@@ -284,7 +621,7 @@
       "value": "",
       "pathPrefix": "Action Items",
       "icon": "lucide:check-small",
-      "color": "#4eb151",
+      "color": "#30412a",
       "match": "all",
       "conditions": [
         {
@@ -316,7 +653,7 @@
       "value": "complete",
       "pathPrefix": "Markdown/Action Items",
       "icon": "lucide:check-square-2",
-      "color": "#506d46",
+      "color": "#30412a",
       "match": "all",
       "conditions": []
     },
@@ -342,38 +679,6 @@
           "source": "frontmatter",
           "field": "scheduled",
           "operator": "is-today",
-          "value": ""
-        }
-      ]
-    },
-    {
-      "id": "rule-1773107318834-r0x2fy3",
-      "name": "",
-      "enabled": true,
-      "property": "scheduled",
-      "operator": "!is",
-      "value": "",
-      "pathPrefix": "Markdown/Action Items",
-      "icon": "lucide:calendar",
-      "color": "#cdc842",
-      "match": "all",
-      "conditions": [
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "is-not-empty",
-          "value": ""
-        },
-        {
-          "source": "frontmatter",
-          "field": "priority",
-          "operator": "is",
-          "value": "medium"
-        },
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "!is-today",
           "value": ""
         }
       ]
@@ -405,7 +710,65 @@
         {
           "source": "frontmatter",
           "field": "scheduled",
-          "operator": "within-next-days",
+          "operator": "!within-next-days",
+          "value": "7"
+        }
+      ]
+    },
+    {
+      "id": "rule-1773107318834-r0x2fy3",
+      "name": "",
+      "enabled": true,
+      "property": "scheduled",
+      "operator": "!is",
+      "value": "",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "lucide:calendar",
+      "color": "#cdc842",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "medium"
+        }
+      ]
+    },
+    {
+      "id": "rule-1772382616694-0vs18cn",
+      "name": "",
+      "enabled": true,
+      "property": "scheduled",
+      "operator": "!is",
+      "value": "",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "lucide:calendar",
+      "color": "#3b586d",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "!within-next-days",
           "value": "7"
         }
       ]
@@ -433,17 +796,11 @@
           "field": "priority",
           "operator": "!exists",
           "value": ""
-        },
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "!is-today",
-          "value": ""
         }
       ]
     },
     {
-      "id": "rule-1772382616694-0vs18cn",
+      "id": "rule-1772382644610-5udk3ow",
       "name": "",
       "enabled": true,
       "property": "scheduled",
@@ -451,7 +808,7 @@
       "value": "",
       "pathPrefix": "Markdown/Action Items",
       "icon": "lucide:calendar",
-      "color": "#566b7b",
+      "color": "#5c5f61",
       "match": "all",
       "conditions": [
         {
@@ -463,13 +820,13 @@
         {
           "source": "frontmatter",
           "field": "priority",
-          "operator": "!exists",
-          "value": ""
+          "operator": "is",
+          "value": "low"
         },
         {
           "source": "frontmatter",
           "field": "scheduled",
-          "operator": "within-next-days",
+          "operator": "!within-next-days",
           "value": "7"
         }
       ]
@@ -507,7 +864,7 @@
       ]
     },
     {
-      "id": "rule-1772382644610-5udk3ow",
+      "id": "rule-1772382315413-reg0u0s",
       "name": "",
       "enabled": true,
       "property": "scheduled",
@@ -515,7 +872,7 @@
       "value": "",
       "pathPrefix": "Markdown/Action Items",
       "icon": "lucide:calendar",
-      "color": "#6b6b6b",
+      "color": "#765151",
       "match": "all",
       "conditions": [
         {
@@ -528,12 +885,12 @@
           "source": "frontmatter",
           "field": "priority",
           "operator": "is",
-          "value": "low"
+          "value": "high"
         },
         {
           "source": "frontmatter",
           "field": "scheduled",
-          "operator": "within-next-days",
+          "operator": "!within-next-days",
           "value": "7"
         }
       ]
@@ -561,44 +918,6 @@
           "field": "priority",
           "operator": "is",
           "value": "high"
-        },
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "within-next-days",
-          "value": "7"
-        }
-      ]
-    },
-    {
-      "id": "rule-1772382315413-reg0u0s",
-      "name": "",
-      "enabled": true,
-      "property": "scheduled",
-      "operator": "!is",
-      "value": "",
-      "pathPrefix": "Markdown/Action Items",
-      "icon": "lucide:calendar",
-      "color": "#806b6b",
-      "match": "all",
-      "conditions": [
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "is-not-empty",
-          "value": ""
-        },
-        {
-          "source": "frontmatter",
-          "field": "priority",
-          "operator": "is",
-          "value": "high"
-        },
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "within-next-days",
-          "value": "7"
         }
       ]
     },
@@ -610,7 +929,39 @@
       "operator": "!is",
       "value": "",
       "pathPrefix": "Markdown/Action Items",
-      "icon": "lucide-box-select",
+      "icon": "square",
+      "color": "",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Action Items"
+        },
+        {
+          "source": "frontmatter",
+          "field": "childOf",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "parentOf",
+          "operator": "!exists",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "rule-1773885109332-0qaofdg",
+      "name": "",
+      "enabled": true,
+      "property": "status",
+      "operator": "!is",
+      "value": "",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "circle",
       "color": "",
       "match": "all",
       "conditions": [
@@ -766,8 +1117,45 @@
     "field": "sort",
     "separator": "_",
     "appendBasename": true,
+    "relationshipGrouping": "children-under-parent",
     "clearWhenNoMatch": false,
     "buckets": [
+      {
+        "id": "bucket-1772305479820-9l1jyxn",
+        "enabled": true,
+        "name": "open dailynotes",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "contains",
+            "value": "dailynote"
+          },
+          {
+            "source": "body",
+            "field": "",
+            "operator": "has-open-checkboxes",
+            "value": ""
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "templates"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "desc",
+            "mappings": [],
+            "missingValuePlacement": "last"
+          }
+        ]
+      },
       {
         "id": "bucket-003-scheduled-week-high",
         "enabled": true,
@@ -817,39 +1205,9 @@
         ]
       },
       {
-        "id": "bucket-1773611704834-azodlha",
-        "enabled": true,
-        "name": "Scheduled today (copy)",
-        "match": "all",
-        "conditions": [
-          {
-            "source": "name",
-            "field": "",
-            "operator": "is-today",
-            "value": ""
-          },
-          {
-            "source": "tag",
-            "field": "",
-            "operator": "!contains",
-            "value": "archive"
-          }
-        ],
-        "sortCriteria": [
-          {
-            "source": "frontmatter",
-            "field": "scheduled",
-            "type": "date",
-            "direction": "desc",
-            "mappings": [],
-            "missingValuePlacement": "last"
-          }
-        ]
-      },
-      {
-        "id": "bucket-1772305479820-9l1jyxn",
-        "enabled": true,
-        "name": "open dailynotes",
+        "id": "bucket-1773685715567-9lp8erq",
+        "enabled": false,
+        "name": "open dailynotes (copy)",
         "match": "all",
         "conditions": [
           {
@@ -859,16 +1217,16 @@
             "value": "dailynote"
           },
           {
-            "source": "body",
-            "field": "",
-            "operator": "has-open-checkboxes",
-            "value": ""
-          },
-          {
             "source": "path",
             "field": "",
             "operator": "!contains",
             "value": "templates"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "is-today",
+            "value": ""
           }
         ],
         "sortCriteria": [
@@ -879,108 +1237,6 @@
             "direction": "desc",
             "mappings": [],
             "missingValuePlacement": "last"
-          }
-        ]
-      },
-      {
-        "id": "bucket-005-action-open-subitems",
-        "enabled": true,
-        "name": "projects",
-        "match": "all",
-        "conditions": [
-          {
-            "source": "path",
-            "field": "",
-            "operator": "contains",
-            "value": "Action Items"
-          },
-          {
-            "source": "frontmatter",
-            "field": "parentOf",
-            "operator": "is-not-empty",
-            "value": ""
-          },
-          {
-            "source": "tag",
-            "field": "",
-            "operator": "!contains",
-            "value": "hide"
-          },
-          {
-            "source": "tag",
-            "field": "",
-            "operator": "!contains",
-            "value": "archive"
-          },
-          {
-            "source": "path",
-            "field": "",
-            "operator": "!contains",
-            "value": "templates"
-          }
-        ],
-        "sortCriteria": [
-          {
-            "source": "frontmatter",
-            "field": "priority",
-            "type": "priority",
-            "direction": "asc",
-            "mappings": [
-              {
-                "input": "high",
-                "output": "001"
-              },
-              {
-                "input": "medium",
-                "output": "002"
-              },
-              {
-                "input": "normal",
-                "output": "003"
-              },
-              {
-                "input": "low",
-                "output": "004"
-              }
-            ],
-            "missingValuePlacement": "last"
-          },
-          {
-            "source": "frontmatter",
-            "field": "status",
-            "type": "status",
-            "direction": "asc",
-            "mappings": [
-              {
-                "input": "working",
-                "output": "001"
-              },
-              {
-                "input": "open",
-                "output": "002"
-              },
-              {
-                "input": "blocked",
-                "output": "003"
-              },
-              {
-                "input": "complete",
-                "output": "004"
-              },
-              {
-                "input": "wont-do",
-                "output": "005"
-              }
-            ],
-            "missingValuePlacement": "last"
-          },
-          {
-            "source": "frontmatter",
-            "field": "scheduled",
-            "type": "date",
-            "direction": "asc",
-            "mappings": [],
-            "missingValuePlacement": "first"
           }
         ]
       },
@@ -1037,6 +1293,18 @@
             "field": "",
             "operator": "!contains",
             "value": "templates"
+          },
+          {
+            "source": "frontmatter",
+            "field": "parentOf",
+            "operator": "!exists",
+            "value": ""
+          },
+          {
+            "source": "frontmatter",
+            "field": "childOf",
+            "operator": "!exists",
+            "value": ""
           }
         ],
         "sortCriteria": [
@@ -1076,11 +1344,11 @@
                 "output": "001"
               },
               {
-                "input": "open",
+                "input": "todo",
                 "output": "002"
               },
               {
-                "input": "blocked",
+                "input": "holding",
                 "output": "003"
               },
               {
@@ -1101,6 +1369,94 @@
             "direction": "asc",
             "mappings": [],
             "missingValuePlacement": "first"
+          }
+        ]
+      },
+      {
+        "id": "bucket-005-action-open-subitems",
+        "enabled": true,
+        "name": "projects",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "frontmatter",
+            "field": "childOf",
+            "operator": "is-not-empty",
+            "value": ""
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "hide"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "templates"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "type": "status",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "working",
+                "output": "001"
+              },
+              {
+                "input": "todo",
+                "output": "002"
+              },
+              {
+                "input": "holding",
+                "output": "003"
+              },
+              {
+                "input": "complete",
+                "output": "004"
+              },
+              {
+                "input": "wont-do",
+                "output": "005"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "priority",
+            "type": "priority",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "high",
+                "output": "001"
+              },
+              {
+                "input": "medium",
+                "output": "002"
+              },
+              {
+                "input": "normal",
+                "output": "003"
+              },
+              {
+                "input": "low",
+                "output": "004"
+              }
+            ],
+            "missingValuePlacement": "last"
           }
         ]
       },
@@ -1196,11 +1552,11 @@
                 "output": "001"
               },
               {
-                "input": "open",
+                "input": "todo",
                 "output": "002"
               },
               {
-                "input": "blocked",
+                "input": "holding",
                 "output": "003"
               },
               {
@@ -1221,174 +1577,6 @@
             "direction": "asc",
             "mappings": [],
             "missingValuePlacement": "first"
-          }
-        ]
-      },
-      {
-        "id": "bucket-1773519279615-9y3c6by",
-        "enabled": true,
-        "name": "done subtasks",
-        "match": "all",
-        "conditions": [
-          {
-            "source": "path",
-            "field": "",
-            "operator": "contains",
-            "value": "Action Items"
-          },
-          {
-            "source": "tag",
-            "field": "",
-            "operator": "!contains",
-            "value": "archive"
-          },
-          {
-            "source": "frontmatter",
-            "field": "childOf",
-            "operator": "is-not-empty",
-            "value": ""
-          },
-          {
-            "source": "frontmatter",
-            "field": "scheduled",
-            "operator": "!is-before-today",
-            "value": ""
-          },
-          {
-            "source": "frontmatter",
-            "field": "scheduled",
-            "operator": "!is-after-today",
-            "value": ""
-          },
-          {
-            "source": "path",
-            "field": "",
-            "operator": "!contains",
-            "value": "templates"
-          }
-        ],
-        "sortCriteria": [
-          {
-            "source": "frontmatter",
-            "field": "priority",
-            "type": "priority",
-            "direction": "asc",
-            "mappings": [
-              {
-                "input": "high",
-                "output": "001"
-              },
-              {
-                "input": "medium",
-                "output": "002"
-              },
-              {
-                "input": "normal",
-                "output": "003"
-              },
-              {
-                "input": "low",
-                "output": "004"
-              }
-            ],
-            "missingValuePlacement": "last"
-          },
-          {
-            "source": "frontmatter",
-            "field": "status",
-            "type": "status",
-            "direction": "asc",
-            "mappings": [
-              {
-                "input": "working",
-                "output": "001"
-              },
-              {
-                "input": "open",
-                "output": "002"
-              },
-              {
-                "input": "blocked",
-                "output": "003"
-              },
-              {
-                "input": "complete",
-                "output": "004"
-              },
-              {
-                "input": "wont-do",
-                "output": "005"
-              }
-            ],
-            "missingValuePlacement": "last"
-          },
-          {
-            "source": "frontmatter",
-            "field": "scheduled",
-            "type": "date",
-            "direction": "asc",
-            "mappings": [],
-            "missingValuePlacement": "first"
-          }
-        ]
-      },
-      {
-        "id": "bucket-002-scheduled-next5days",
-        "enabled": true,
-        "name": "Scheduled Next 7 Days (Any Priority)",
-        "match": "all",
-        "conditions": [
-          {
-            "source": "frontmatter",
-            "field": "scheduled",
-            "operator": "within-next-days",
-            "value": "7"
-          },
-          {
-            "source": "frontmatter",
-            "field": "status",
-            "operator": "!is",
-            "value": "complete"
-          },
-          {
-            "source": "frontmatter",
-            "field": "status",
-            "operator": "!is",
-            "value": "wont-do"
-          },
-          {
-            "source": "tag",
-            "field": "",
-            "operator": "!contains",
-            "value": "archive"
-          },
-          {
-            "source": "path",
-            "field": "",
-            "operator": "contains",
-            "value": "Action Items"
-          },
-          {
-            "source": "frontmatter",
-            "field": "scheduled",
-            "operator": "!is-before-today",
-            "value": ""
-          },
-          {
-            "source": "path",
-            "field": "",
-            "operator": "!contains",
-            "value": "templates"
-          }
-        ],
-        "sortCriteria": [
-          {
-            "source": "frontmatter",
-            "field": "scheduled",
-            "type": "date",
-            "direction": "desc",
-            "mappings": [],
-            "missingValuePlacement": "last"
           }
         ]
       },
@@ -1478,11 +1666,209 @@
                 "output": "001"
               },
               {
-                "input": "open",
+                "input": "todo",
                 "output": "002"
               },
               {
-                "input": "blocked",
+                "input": "holding",
+                "output": "003"
+              },
+              {
+                "input": "complete",
+                "output": "004"
+              },
+              {
+                "input": "wont-do",
+                "output": "005"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "asc",
+            "mappings": [],
+            "missingValuePlacement": "first"
+          }
+        ]
+      },
+      {
+        "id": "bucket-1773611704834-azodlha",
+        "enabled": true,
+        "name": "Scheduled today complete",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "name",
+            "field": "",
+            "operator": "is-today",
+            "value": ""
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "desc",
+            "mappings": [],
+            "missingValuePlacement": "last"
+          }
+        ]
+      },
+      {
+        "id": "bucket-002-scheduled-next5days",
+        "enabled": true,
+        "name": "Scheduled Next 7 Days (Any Priority)",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "within-next-days",
+            "value": "7"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "complete"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "operator": "!is",
+            "value": "wont-do"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Action Items"
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "!is-before-today",
+            "value": ""
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "templates"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "type": "date",
+            "direction": "desc",
+            "mappings": [],
+            "missingValuePlacement": "last"
+          }
+        ]
+      },
+      {
+        "id": "bucket-1773519279615-9y3c6by",
+        "enabled": true,
+        "name": "done subtasks",
+        "match": "all",
+        "conditions": [
+          {
+            "source": "path",
+            "field": "",
+            "operator": "contains",
+            "value": "Action Items"
+          },
+          {
+            "source": "tag",
+            "field": "",
+            "operator": "!contains",
+            "value": "archive"
+          },
+          {
+            "source": "frontmatter",
+            "field": "childOf",
+            "operator": "is-not-empty",
+            "value": ""
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "!is-before-today",
+            "value": ""
+          },
+          {
+            "source": "frontmatter",
+            "field": "scheduled",
+            "operator": "!is-after-today",
+            "value": ""
+          },
+          {
+            "source": "path",
+            "field": "",
+            "operator": "!contains",
+            "value": "templates"
+          }
+        ],
+        "sortCriteria": [
+          {
+            "source": "frontmatter",
+            "field": "priority",
+            "type": "priority",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "high",
+                "output": "001"
+              },
+              {
+                "input": "medium",
+                "output": "002"
+              },
+              {
+                "input": "normal",
+                "output": "003"
+              },
+              {
+                "input": "low",
+                "output": "004"
+              }
+            ],
+            "missingValuePlacement": "last"
+          },
+          {
+            "source": "frontmatter",
+            "field": "status",
+            "type": "status",
+            "direction": "asc",
+            "mappings": [
+              {
+                "input": "working",
+                "output": "001"
+              },
+              {
+                "input": "todo",
+                "output": "002"
+              },
+              {
+                "input": "holding",
                 "output": "003"
               },
               {
@@ -1772,22 +2158,6 @@
       "tagName": "hide"
     },
     {
-      "id": "hide-rule-1771520501880",
-      "name": "subitems",
-      "enabled": true,
-      "match": "all",
-      "conditions": [
-        {
-          "source": "frontmatter",
-          "field": "childOf",
-          "operator": "is-not-empty",
-          "value": ""
-        }
-      ],
-      "mode": "add",
-      "tagName": "hide"
-    },
-    {
       "id": "hide-rule-1771974341284",
       "name": "dailynote",
       "enabled": true,
@@ -1804,99 +2174,15 @@
           "field": "",
           "operator": "!is-today",
           "value": ""
+        },
+        {
+          "source": "body",
+          "field": "",
+          "operator": "!has-open-checkboxes",
+          "value": ""
         }
       ],
       "mode": "add",
-      "tagName": "hide"
-    },
-    {
-      "id": "hide-rule-1773503499175",
-      "name": "future",
-      "enabled": true,
-      "match": "all",
-      "conditions": [
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "!within-next-days",
-          "value": "3"
-        },
-        {
-          "source": "frontmatter",
-          "field": "priority",
-          "operator": "!is",
-          "value": "high"
-        },
-        {
-          "source": "frontmatter",
-          "field": "status",
-          "operator": "!is",
-          "value": "working"
-        },
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "exists",
-          "value": ""
-        },
-        {
-          "source": "tag",
-          "field": "",
-          "operator": "!contains",
-          "value": "dailynote"
-        },
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "!is-today",
-          "value": ""
-        },
-        {
-          "source": "frontmatter",
-          "field": "priority",
-          "operator": "!is",
-          "value": "medium"
-        }
-      ],
-      "mode": "add",
-      "tagName": "hide"
-    },
-    {
-      "id": "hide-rule-1773503722199",
-      "name": "projects reveal",
-      "enabled": true,
-      "match": "all",
-      "conditions": [
-        {
-          "source": "frontmatter",
-          "field": "parentOf",
-          "operator": "is-not-empty",
-          "value": ""
-        },
-        {
-          "source": "frontmatter",
-          "field": "status",
-          "operator": "!is",
-          "value": "complete"
-        }
-      ],
-      "mode": "remove",
-      "tagName": "hide"
-    },
-    {
-      "id": "hide-rule-1773504604694",
-      "name": "Areas reveal",
-      "enabled": true,
-      "match": "all",
-      "conditions": [
-        {
-          "source": "tag-note-name",
-          "field": "",
-          "operator": "exists",
-          "value": ""
-        }
-      ],
-      "mode": "remove",
       "tagName": "hide"
     },
     {
@@ -1922,42 +2208,66 @@
       "tagName": "hide"
     },
     {
-      "id": "hide-rule-1773504882892",
-      "name": "today",
-      "enabled": true,
-      "match": "any",
-      "conditions": [
-        {
-          "source": "frontmatter",
-          "field": "scheduled",
-          "operator": "is-today",
-          "value": ""
-        },
-        {
-          "source": "name",
-          "field": "",
-          "operator": "is-today",
-          "value": ""
-        }
-      ],
-      "mode": "remove",
-      "tagName": "hide"
-    },
-    {
-      "id": "hide-rule-1773518754558",
-      "name": "New Hide Rule",
+      "id": "hide-rule-1773880443562",
+      "name": "templates",
       "enabled": true,
       "match": "all",
       "conditions": [
         {
           "source": "path",
           "field": "",
+          "operator": "contains",
+          "value": "Markdown"
+        },
+        {
+          "source": "path",
+          "field": "",
           "operator": "!contains",
-          "value": "_templates"
+          "value": "_"
         }
       ],
       "mode": "remove",
       "tagName": "template"
+    },
+    {
+      "id": "hide-rule-1773958255716",
+      "name": "New Hide Rule",
+      "enabled": true,
+      "match": "all",
+      "conditions": [
+        {
+          "source": "parent-frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "complete"
+        },
+        {
+          "source": "parent-frontmatter",
+          "field": "status",
+          "operator": "!is",
+          "value": "wont-do"
+        },
+        {
+          "source": "frontmatter",
+          "field": "childOf",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "!is",
+          "value": "high"
+        },
+        {
+          "source": "frontmatter",
+          "field": "parentOf",
+          "operator": "!exists",
+          "value": ""
+        }
+      ],
+      "mode": "add",
+      "tagName": "hide"
     }
   ]
 }

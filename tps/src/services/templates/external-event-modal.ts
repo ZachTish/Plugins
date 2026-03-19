@@ -1,5 +1,5 @@
 import { App, Modal, TFile, normalizePath, Notice } from "obsidian";
-import { ExternalCalendarEvent } from "../types";
+import { ExternalCalendarEvent } from "../../types";
 import * as logger from "../../logger";
 import { formatDateTimeForFrontmatter } from "../../utils";
 import { createBidirectionalLink } from "../../services/relationships/parent-child-link";
@@ -187,6 +187,7 @@ export async function createMeetingNoteFromExternalEvent(
   frontmatterKeys?: {
     eventIdKey: string;
     uidKey: string;
+    sourceUrlKey?: string;
     titleKey: string;
     statusKey: string;
   },
@@ -268,7 +269,6 @@ export async function createMeetingNoteFromExternalEvent(
   }
 
   let file: TFile;
-
   if (existingFile) {
     // Preserve existing non-empty content; only write body if the file is empty.
     file = existingFile;
@@ -277,18 +277,29 @@ export async function createMeetingNoteFromExternalEvent(
       await app.vault.modify(file, noteContent);
     }
   } else {
-    // Determine file path
+    const resolvedEventIdKey = frontmatterKeys?.eventIdKey || "externalEventId";
+    if (event.id) {
+      const existingByEventId = findExistingNoteByEventId(app, event.id, resolvedEventIdKey);
+      if (existingByEventId) {
+        logger.log(`[CreateMeetingNote] Note already exists for "${event.title}" (${event.id}) — reusing ${existingByEventId.path}`);
+        return existingByEventId;
+      }
+    }
+
     const folder = folderPath ? normalizePath(folderPath) : "";
 
-    // Ensure folder exists
     if (folder) {
       const folderFile = app.vault.getAbstractFileByPath(folder);
       if (!folderFile) {
         try {
           await app.vault.createFolder(folder);
         } catch (e) {
-          logger.error(`Failed to create folder ${folder}:`, e);
-          // Fallback to root if folder creation fails
+          const existsNow = app.vault.getAbstractFileByPath(folder);
+          if (existsNow) {
+            logger.log(`[CreateMeetingNote] Folder ${folder} already exists (race); proceeding.`);
+          } else {
+            logger.error(`Failed to create folder ${folder}:`, e);
+          }
         }
       }
     }
@@ -302,22 +313,35 @@ export async function createMeetingNoteFromExternalEvent(
       event.startDate.getMonth() + 1
     ).padStart(2, "0")}-${String(event.startDate.getDate()).padStart(2, "0")}`;
 
-    let path = normalizePath(`${folder}/${sanitizedTitle} ${dateSuffix}.md`);
-    let counter = 1;
-    while (app.vault.getAbstractFileByPath(path)) {
-      path = normalizePath(`${folder}/${sanitizedTitle} ${dateSuffix} ${counter}.md`);
-      counter++;
+    const eventSuffix = buildEventIdentitySuffix(event.id);
+    const deterministicPath = normalizePath(`${folder}/${sanitizedTitle} ${dateSuffix} ${eventSuffix}.md`);
+
+    const existingAtPath = app.vault.getAbstractFileByPath(deterministicPath);
+    if (existingAtPath instanceof TFile) {
+      file = existingAtPath;
+      const existingContent = await app.vault.read(file);
+      if (!existingContent.trim()) {
+        await app.vault.modify(file, noteContent);
+      }
+    } else {
+      try {
+        file = await app.vault.create(deterministicPath, noteContent);
+        logger.log(`[CreateMeetingNote] Created note: "${file.basename}" at ${file.path}`);
+        await runTemplaterOnFile(app, file);
+      } catch (e) {
+        logger.error(`[CreateMeetingNote] Failed to create file ${deterministicPath}:`, e);
+        const nowExists = app.vault.getAbstractFileByPath(deterministicPath);
+        if (nowExists instanceof TFile) {
+          file = nowExists;
+          const existingContent = await app.vault.read(file);
+          if (!existingContent.trim()) {
+            await app.vault.modify(file, noteContent);
+          }
+        } else {
+          throw e;
+        }
+      }
     }
-
-    // Create the file with template content first (preserves original formatting).
-    // Never create blank: a blank file syncs to other devices as an empty stub and
-    // triggers Templater folder-templates there before the real content arrives.
-    file = await app.vault.create(path, noteContent);
-    logger.log(`[CreateMeetingNote] Created note: "${file.basename}" at ${file.path}`);
-
-    // Run Templater explicitly so any <% tp.* %> tags in the template are evaluated.
-    // Runs before processFrontMatter so TPS fields are applied last (additive merge).
-    await runTemplaterOnFile(app, file);
   }
 
   // Apply event frontmatter additively (merge, never overwrite existing values).
@@ -348,7 +372,7 @@ export async function createMeetingNoteFromExternalEvent(
     }
   }
 
-  const subtypeId = null;
+  const subtypeId: string | null = null;
 
   app.workspace.trigger('tps-file-created', file, { subtypeId });
   app.workspace.trigger('tps-calendar:file-created', file, { subtypeId });
@@ -376,6 +400,30 @@ async function processTemplate(app: App, templateFile: TFile, vars: TemplateVars
 
 function normalizeKey(key: string): string {
   return String(key || "").trim().toLowerCase();
+}
+
+function buildEventIdentitySuffix(eventId: string): string {
+  const normalized = String(eventId ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const compact = normalized || "event";
+  return `evt-${compact.slice(0, 48)}`;
+}
+
+function findExistingNoteByEventId(app: App, eventId: string, eventIdKey: string): TFile | null {
+  if (!eventId) return null;
+  const targetId = String(eventId).trim();
+  const keyLower = eventIdKey.toLowerCase();
+  for (const file of app.vault.getMarkdownFiles()) {
+    const fm = app.metadataCache.getFileCache(file)?.frontmatter;
+    if (!fm) continue;
+    const storedId = Object.entries(fm).find(([k]) => k.toLowerCase() === keyLower)?.[1];
+    if (storedId == null) continue;
+    if (String(storedId).trim() === targetId) return file;
+  }
+  return null;
 }
 
 function setFrontmatterValueCaseInsensitive(

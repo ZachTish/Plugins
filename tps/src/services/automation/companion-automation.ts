@@ -1,5 +1,5 @@
 import * as logger from "../../logger";
-import type { TPSControllerSettings } from "../../types";
+import type { ControllerSettings as TPSControllerSettings } from "../../types";
 
 interface CompanionPluginAPI {
     applyRulesToAllFiles?(silent?: boolean): Promise<void | number>;

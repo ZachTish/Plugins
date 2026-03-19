@@ -30,6 +30,8 @@ const START_RE = /🛫\s*(\d{4}-\d{2}-\d{2})/;
 const KANBAN_SCHEDULED_RE = /(^|[^@])@\{([^}]+)\}/;
 const KANBAN_TIME_RE = /@@\{([^}]+)\}/;
 const YMD_IN_TOKEN_RE = /(\d{4}-\d{2}-\d{2})/;
+// Tasks-plugin dataview inline property format: [scheduled:: 2026-03-17]
+const INLINE_DATE_RE = /\[([a-zA-Z0-9_-]+)::\s*([^\]]+)\]/g;
 
 // Matches any markdown task line (any indentation level).
 // Group 1 = status char(s), Group 2 = remaining text.
@@ -47,6 +49,20 @@ function parseYMD(str: string): Date | null {
 function extractEmojiDate(text: string, re: RegExp): Date | null {
     const m = text.match(re);
     return m ? parseYMD(m[1]) : null;
+}
+
+function extractInlineDateProperty(text: string, ...keys: string[]): Date | null {
+    const keySet = new Set(keys.map(k => k.toLowerCase()));
+    INLINE_DATE_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = INLINE_DATE_RE.exec(text)) !== null) {
+        const key = String(match[1] ?? '').trim().toLowerCase();
+        if (!keySet.has(key)) continue;
+        const val = String(match[2] ?? '').trim();
+        const ymd = val.match(/(\d{4}-\d{2}-\d{2})/);
+        if (ymd?.[1]) return parseYMD(ymd[1]);
+    }
+    return null;
 }
 
 function extractKanbanScheduledDate(text: string): Date | null {
@@ -130,10 +146,13 @@ export function parseTasksFromContent(
         const rawText = taskMatch ? taskMatch[2] : (bulletMatch?.[1] ?? "");
         if (!rawText) continue;
 
-        const dueDate = extractEmojiDate(rawText, DUE_RE);
+        const dueDate =
+            extractEmojiDate(rawText, DUE_RE)
+            ?? extractInlineDateProperty(rawText, 'due', 'duedate', 'due-date');
         let scheduledDate =
             extractEmojiDate(rawText, SCHEDULED_RE)
-            ?? extractKanbanScheduledDate(rawText);
+            ?? extractKanbanScheduledDate(rawText)
+            ?? extractInlineDateProperty(rawText, 'scheduled', 'scheduleddate', 'scheduled-date');
         const scheduledMinutes = extractKanbanTimeMinutes(rawText);
         const hasScheduledTime = scheduledMinutes !== null;
         if (scheduledDate && scheduledMinutes !== null) {
@@ -149,7 +168,9 @@ export function parseTasksFromContent(
                 0,
             );
         }
-        const startDate = extractEmojiDate(rawText, START_RE);
+        const startDate =
+            extractEmojiDate(rawText, START_RE)
+            ?? extractInlineDateProperty(rawText, 'start', 'startdate', 'start-date');
 
         // Only keep tasks that have at least one recognised date annotation.
         if (!dueDate && !scheduledDate && !startDate) continue;

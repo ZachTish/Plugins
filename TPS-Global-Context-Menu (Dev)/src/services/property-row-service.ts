@@ -6,6 +6,7 @@ type Delegates = {
   addSafeClickListener: (element: HTMLElement, handler: (e: MouseEvent) => void) => void;
   showMenuAtAnchor: (menu: Menu, anchor: HTMLElement | MouseEvent | KeyboardEvent) => void;
   openAddTagModal: (entries: any[], key?: string) => void;
+  triggerTagSearch: (tag: string) => void;
   openScheduledModal: (entries: any[], key?: string) => void;
   openRecurrenceModalNative: (entries: any[]) => void;
   moveFiles: (entries: any[], folderPath: string) => Promise<void>;
@@ -124,9 +125,14 @@ export class PropertyRowService {
         const tagEl = document.createElement("span");
         tagEl.className = "tps-gcm-tag tps-gcm-tag-removable";
 
-        const tagText = document.createElement("span");
-        tagText.className = "tps-gcm-tag-text";
+        const tagText = document.createElement("a");
+        tagText.className = "tps-gcm-tag-text tps-gcm-tag-link";
+        tagText.href = "#";
         tagText.textContent = tag;
+        this.d.addSafeClickListener(tagText, (e) => {
+          e.preventDefault();
+          this.d.triggerTagSearch(normalizeTagValue(tag));
+        });
         tagEl.appendChild(tagText);
 
         const removeBtn = document.createElement("button");
@@ -160,11 +166,10 @@ export class PropertyRowService {
         addBtn.title = "Add tag";
       }
       this.d.addSafeClickListener(addBtn, async () => {
-        // Check if field needs initialization
-        if (await this.plugin.fieldInitializationService.checkAndInitialize(entries, prop.key, [])) {
-          refreshTags();
-          return; // Skip opening modal on first click
-        }
+        // Initialize the field if it doesn't exist yet, then immediately open the modal.
+        // (No two-click required — the label difference "Create" vs "Set" is cosmetic only.)
+        await this.plugin.fieldInitializationService.checkAndInitialize(entries, prop.key, []);
+        refreshTags();
         this.d.openAddTagModal(entries, prop.key);
       });
       addBtn.addEventListener("mousedown", (e) => e.stopPropagation());

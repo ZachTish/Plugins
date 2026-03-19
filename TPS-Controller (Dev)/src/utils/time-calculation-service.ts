@@ -243,12 +243,20 @@ export function shouldIgnoreForReminder(
     globalIgnoreTags: string[],
     globalIgnoreStatuses: string[]
 ): boolean {
-    const ignorePaths =
-        Array.isArray(reminder.ignorePaths) ? reminder.ignorePaths : globalIgnorePaths;
-    const ignoreTags =
-        Array.isArray(reminder.ignoreTags) ? reminder.ignoreTags : globalIgnoreTags;
-    const ignoreStatuses =
-        Array.isArray(reminder.ignoreStatuses) ? reminder.ignoreStatuses : globalIgnoreStatuses;
+    // Always merge global paths with per-reminder paths so global protections
+    // (vault root, _ folders, etc.) apply even when a reminder overrides the list.
+    const globalPaths = Array.isArray(globalIgnorePaths) ? globalIgnorePaths : [];
+    const ignorePaths = Array.isArray(reminder.ignorePaths)
+        ? [...new Set([...reminder.ignorePaths, ...globalPaths])]
+        : globalPaths;
+    const globalTags = Array.isArray(globalIgnoreTags) ? globalIgnoreTags : [];
+    const ignoreTags = Array.isArray(reminder.ignoreTags)
+        ? [...new Set([...reminder.ignoreTags, ...globalTags])]
+        : globalTags;
+    const globalStatuses = Array.isArray(globalIgnoreStatuses) ? globalIgnoreStatuses : [];
+    const ignoreStatuses = Array.isArray(reminder.ignoreStatuses)
+        ? [...new Set([...reminder.ignoreStatuses, ...globalStatuses])]
+        : globalStatuses;
 
     const normPath = normalizeComparablePath(file.path);
     const normBase = normalizeComparablePath(file.basename);
@@ -312,4 +320,17 @@ export function isAllDayEvent(rawPropertyValue: any, fm: any): boolean {
         .replace(/[\[\]]/g, '')
         .trim();
     return /^\d{4}-\d{2}-\d{2}$/.test(raw);
+}
+
+/**
+ * Returns true if the raw property value contains an explicit time component (HH:mm or h:mm AM/PM).
+ * Handles arrays (picks first element) and strips Obsidian link brackets.
+ */
+export function hasExplicitTimeInValue(rawValue: unknown): boolean {
+    const raw = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+    const value = String(raw ?? '').replace(/[\[\]]/g, '').trim();
+    if (!value) return false;
+    if (/[T ]\d{1,2}:\d{2}/.test(value)) return true;
+    if (/\b\d{1,2}:\d{2}\s*(AM|PM)\b/i.test(value)) return true;
+    return false;
 }

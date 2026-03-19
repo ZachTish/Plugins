@@ -19,6 +19,12 @@
         "jsxImportSource": "react"
     },
     "include": [
-        "**/*.ts"
+        "src/**/*.ts",
+        "src/**/*.tsx"
+    ],
+    "exclude": [
+        "src/handlers/**",
+        "src/ui/**",
+        "src/CalendarReactView.tsx"
     ]
 }

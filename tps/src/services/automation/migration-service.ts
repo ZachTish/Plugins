@@ -3,7 +3,7 @@
  * Migrates settings from old TPS plugins to unified format
  */
 
-import { TPSPlugin } from '../../main';
+import TPSPlugin from '../../main';
 import { TPSSettings } from '../../types';
 import * as logger from '../../logger';
 

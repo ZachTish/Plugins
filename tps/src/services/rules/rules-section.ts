@@ -1,5 +1,5 @@
 import { Menu, setIcon, Setting } from "obsidian";
-import { IconColorRule, RuleCondition } from "../types";
+import { IconColorRule, RuleCondition } from "./types";
 import {
   createDefaultCondition,
   getConditionValuePlaceholder,

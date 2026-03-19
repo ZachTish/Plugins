@@ -56,6 +56,7 @@ import {
   resolveFromPotentialDate,
 } from "./utils/date-value-utils";
 import * as logger from "./logger";
+import { parseDateFromFilename } from '../../tps/src/utils/daily-file-date';
 import { RRule } from "rrule";
 import { parseAllTaskItems, ParsedTaskItem } from "./services/task-parser-service";
 
@@ -87,6 +88,53 @@ export class CalendarView extends BasesView {
   private priorityField: BasesPropertyId | null = null;
   private statusField: BasesPropertyId | null = null;
   private condenseLevel: number = DEFAULT_CONDENSE_LEVEL;
+
+  private getDailyNoteDateFormat(): string | undefined {
+    const configured = (this.plugin as any)?.settings?.dailyNoteDateFormat;
+    if (typeof configured === "string" && configured.trim()) {
+      return configured.trim();
+    }
+
+    const dailyNotesFormat = (this.app as any)?.internalPlugins?.plugins?.["daily-notes"]?.instance?.options?.format;
+    if (typeof dailyNotesFormat === "string" && dailyNotesFormat.trim()) {
+      return dailyNotesFormat.trim();
+    }
+
+    return undefined;
+  }
+
+  private parseFilenameComponents(basename: string): { cleanTitle: string; dateSuffix: string | null } {
+    const userFormat = this.getDailyNoteDateFormat();
+
+    try {
+      const whole = parseDateFromFilename(basename, userFormat);
+      if (whole && whole.isValid && whole.isValid()) {
+        // @ts-ignore
+        const momentWhole = (window as any).moment(basename, [userFormat, (window as any).moment.ISO_8601, 'YYYY-MM-DD', 'YYYY_MM_DD', 'YYYYMMDD'], true);
+        if (momentWhole && momentWhole.isValid && momentWhole.isValid()) {
+          return { cleanTitle: '', dateSuffix: whole.format('YYYY-MM-DD') };
+        }
+      }
+
+      const datePattern = /\s*(\d{4}[-_/]\d{2}[-_/]\d{2}|\d{8})(?:\s+\d+)?$/;
+      const match = basename.match(datePattern);
+      if (match) {
+        const parsed = parseDateFromFilename(match[1], userFormat);
+        if (parsed && parsed.isValid && parsed.isValid()) {
+          return { cleanTitle: basename.substring(0, match.index).trim(), dateSuffix: parsed.format('YYYY-MM-DD') };
+        }
+      }
+    } catch {
+      // Fall through to naive behavior.
+    }
+
+    const match = basename.match(/\s*(\d{4}[-/]\d{2}[-/]\d{2}|\d{8})(?:\s+\d+)?$/);
+    if (match) {
+      return { cleanTitle: basename.substring(0, match.index).trim(), dateSuffix: match[1] };
+    }
+
+    return { cleanTitle: basename, dateSuffix: null };
+  }
 
   private showFullDay: boolean = false;
   private currentDate: Date | null = null;
@@ -801,7 +849,7 @@ export class CalendarView extends BasesView {
 
     for (const entry of queryData.data) {
       const entryFile = entry.file;
-      let startDate = extractDate(entry, this.startDateProp);
+      let startDate = extractDate(entry, this.startDateProp, this.getDailyNoteDateFormat());
       if (startDate) {
         // Read status and priority directly from cache for freshness
         let statusValue: any = null;
@@ -1017,7 +1065,7 @@ export class CalendarView extends BasesView {
             }
           } else {
             // End datetime mode: extract end date directly
-            endDate = extractDate(entry, this.endDateProp) ?? undefined;
+            endDate = extractDate(entry, this.endDateProp, this.getDailyNoteDateFormat()) ?? undefined;
           }
         }
 
@@ -1041,8 +1089,11 @@ export class CalendarView extends BasesView {
         }
 
         let title = baseTitle || frontmatterTitle || entryFile.basename;
-        if (title && !/^\d{4}-\d{2}-\d{2}$/.test(title)) {
-          title = title.replace(/ \d{4}-\d{2}-\d{2}$/, '');
+        if (title) {
+          const { cleanTitle } = this.parseFilenameComponents(title);
+          if (cleanTitle) {
+            title = cleanTitle;
+          }
         }
 
         // Resolve styles
@@ -1204,7 +1255,7 @@ export class CalendarView extends BasesView {
         const rule = new RRule(opts);
         const occurrences = rule.between(calEntry.startDate, calendarEnd, false /* exclusive start */);
 
-        const baseName = entryFile.basename.replace(/ \d{4}-\d{2}-\d{2}$/, '');
+        const { cleanTitle: baseName } = this.parseFilenameComponents(entryFile.basename);
         const duration = calEntry.endDate
           ? calEntry.endDate.getTime() - calEntry.startDate.getTime()
           : 60 * 60 * 1000;
@@ -1215,7 +1266,7 @@ export class CalendarView extends BasesView {
 
           // Build the expected path for a real instance at this date
           const dateStr = `${occDate.getFullYear()}-${String(occDate.getMonth() + 1).padStart(2, '0')}-${String(occDate.getDate()).padStart(2, '0')}`;
-          const expectedName = `${baseName} ${dateStr}.md`;
+          const expectedName = `${(baseName || entryFile.basename)} ${dateStr}.md`;
           const expectedPath = entryFile.parent
             ? normalizePath(`${entryFile.parent.path}/${expectedName}`)
             : normalizePath(expectedName);
@@ -1894,7 +1945,16 @@ export class CalendarView extends BasesView {
     // Get just the filename without extension
     const filename = path.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
 
-    // Try YYYY-MM-DD format (most common for daily notes)
+    // Try user-configured format first (via parseDateFromFilename)
+    try {
+      const userFormat = this.getDailyNoteDateFormat();
+      const m = parseDateFromFilename(filename, userFormat);
+      if (m && m.isValid && m.isValid()) return m.toDate();
+    } catch (e) {
+      // Fall through to conservative regex fallback below
+    }
+
+    // Conservative regex fallback for unambiguous YYYY-MM-DD style filenames
     const isoMatch = filename.match(/(\d{4})[-_](\d{2})[-_](\d{2})/);
     if (isoMatch) {
       const year = parseInt(isoMatch[1], 10);
@@ -1903,33 +1963,6 @@ export class CalendarView extends BasesView {
       const date = new Date(year, month, day);
       if (!isNaN(date.getTime())) {
         return date;
-      }
-    }
-
-    // Try MM-DD-YYYY format
-    const usMatch = filename.match(/(\d{2})[-_](\d{2})[-_](\d{4})/);
-    if (usMatch) {
-      const month = parseInt(usMatch[1], 10) - 1;
-      const day = parseInt(usMatch[2], 10);
-      const year = parseInt(usMatch[3], 10);
-      const date = new Date(year, month, day);
-      if (!isNaN(date.getTime())) {
-        return date;
-      }
-    }
-
-    // Try DD-MM-YYYY format (less common, so lower priority)
-    const euMatch = filename.match(/(\d{2})[-_](\d{2})[-_](\d{4})/);
-    if (euMatch) {
-      const day = parseInt(euMatch[1], 10);
-      const month = parseInt(euMatch[2], 10) - 1;
-      const year = parseInt(euMatch[3], 10);
-      // Only accept if day > 12 (otherwise ambiguous with US format)
-      if (day > 12) {
-        const date = new Date(year, month, day);
-        if (!isNaN(date.getTime())) {
-          return date;
-        }
       }
     }
 
@@ -3025,10 +3058,26 @@ export class CalendarView extends BasesView {
             pastEventOpacity={this.plugin.settings.pastEventOpacity}
             eventFontSize={this.plugin.settings.eventFontSize}
             activeEventHighlightColor={this.plugin.settings.activeEventHighlightColor}
+            doneStatuses={this.buildDoneStatuses()}
+            dailyNoteDateFormat={this.getDailyNoteDateFormat()}
           />
         </AppContext.Provider>
       </StrictMode>,
     );
+  }
+
+  /**
+   * Returns the set of status values that should be treated as "done" and dimmed.
+   * Uses `canceledStatusValue` from settings as the configurable "wont-do" equivalent,
+   * falling back to the standard "wont-do" if not set.
+   */
+  private buildDoneStatuses(): string[] {
+    const canceledStatus = (this.plugin.settings.canceledStatusValue || "").trim().toLowerCase();
+    const statuses = ["complete"];
+    const wontDo = canceledStatus || "wont-do";
+    if (!statuses.includes(wontDo)) statuses.push(wontDo);
+    if (wontDo !== "wont do") statuses.push("wont do"); // legacy alias
+    return statuses;
   }
 
   private isEditable(): boolean {
@@ -3733,6 +3782,21 @@ export class CalendarView extends BasesView {
   }
 
   private parseFrontmatterDateValue(value: unknown): Date | null {
+    // Handle Obsidian Bases { date: Date, time?: boolean } value objects.
+    // When time === false the Date is UTC midnight from a date-only ISO string;
+    // re-anchor to local midnight so the calendar shows the correct day.
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "date" in value &&
+      (value as any)["date"] instanceof Date
+    ) {
+      const d = (value as any)["date"] as Date;
+      if ((value as any)["time"] === false) {
+        return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+      }
+      return new Date(d.getTime());
+    }
     if (value instanceof Date && Number.isFinite(value.getTime())) {
       return new Date(value.getTime());
     }
@@ -4790,6 +4854,15 @@ export class CalendarView extends BasesView {
       this.app.workspace.on("tps-calendar-settings-changed" as any, () => {
         this.refreshFromPluginSettings();
       }),
+    );
+
+    // Refresh when any plugin (GCM, Controller, Kanban, etc.) makes a bulk file edit
+    // so status/icon/completedDate changes are reflected without waiting for next timer tick.
+    this.registerEvent(
+      this.app.workspace.on("tps-gcm-files-updated" as any, ((paths: string[] | undefined) => {
+        if (!Array.isArray(paths) || paths.length === 0) return;
+        this.scheduleRefresh(80);
+      }) as any),
     );
   }
 

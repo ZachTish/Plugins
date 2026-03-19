@@ -1,5 +1,6 @@
 import { App, Modal, TFile } from "obsidian";
-import { CalendarEntry } from "../CalendarReactView";
+// CalendarEntry is a minimal local type alias; the full UI component is excluded from this build.
+export type CalendarEntry = any;
 
 export class AllDayEventsModal extends Modal {
     private events: CalendarEntry[];

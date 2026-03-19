@@ -12,7 +12,7 @@ import {
   SortBucket,
   SortCriteria,
   ConditionGroup
-} from "../types";
+} from "./types";
 
 export interface RuleFieldResult {
   matched: boolean;

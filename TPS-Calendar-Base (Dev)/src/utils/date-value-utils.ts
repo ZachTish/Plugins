@@ -4,14 +4,28 @@
  */
 import { BasesEntry, BasesPropertyId, Value } from "obsidian";
 import * as logger from "../logger";
+import { parseDateFromFilename } from "../../../tps/src/utils/daily-file-date";
 
-export function extractDate(entry: BasesEntry, propId: BasesPropertyId): Date | null {
+export function extractDate(entry: BasesEntry, propId: BasesPropertyId, userFormat?: string): Date | null {
   try {
     const value = entry.getValue(propId);
     if (!value) return null;
 
     const parsedDate = resolveDateValue(value);
     if (parsedDate) return parsedDate;
+
+    // Fallback: try interpreting the string value as a filename-formatted date
+    // (handles "get day from title" when startDate property is note.name / note.basename)
+    const str = valueToString(value);
+    if (str) {
+      const cleaned = str.replace(/\.[^.]+$/, ''); // strip extension if present
+      try {
+        const m = parseDateFromFilename(cleaned, userFormat);
+        if (m && m.isValid && m.isValid()) {
+          return new Date(m.year(), m.month(), m.date());
+        }
+      } catch { /* ignore */ }
+    }
 
     return null;
   } catch (error) {
@@ -148,6 +162,25 @@ export function resolveFromPotentialDate(
   value: Record<string, unknown>,
   seen: Set<unknown>,
 ): Date | null {
+  // Handle Obsidian Bases { date: Date, time?: boolean } value objects.
+  //
+  // Bases constructs these from ISO-8601 frontmatter. A date-only value like
+  // "2026-03-16" becomes { date: new Date("2026-03-16T00:00:00.000Z"), time: false }.
+  // JavaScript treats bare ISO-date strings as UTC, so in any timezone west of UTC
+  // the Date lands on the *previous* local day — causing events to appear one day early.
+  //
+  // When time === false (date-only, no time component), re-anchor to local midnight
+  // using the UTC year/month/day so the calendar shows the correct day in every timezone.
+  if ("date" in value && value["date"] instanceof Date) {
+    const d = value["date"] as Date;
+    if ((value as any)["time"] === false) {
+      // Date-only: normalise UTC midnight → local midnight of the same calendar date
+      return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    }
+    // Datetime value: return as-is
+    return d;
+  }
+
   const candidates = ["date", "value", "timestamp", "start", "end"];
   for (const key of candidates) {
     if (key in value) {

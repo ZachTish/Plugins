@@ -9,7 +9,7 @@
  * All heavy lifting uses the metadata cache — never reads file content.
  */
 import { App, TFile, CachedMetadata } from 'obsidian';
-import { runInBatches } from '../core/operation-batch-utils';
+import { runInBatches } from '../../core/operation-batch-utils';
 import * as logger from '../logger';
 
 // ─────────────────────────────────────────────────────────────────────────────

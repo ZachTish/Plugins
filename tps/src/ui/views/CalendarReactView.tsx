@@ -33,6 +33,7 @@ import { ExternalCalendarEvent } from "./types";
 import { useCalendarZoom } from "./hooks/useCalendarZoom";
 import { useTimeFollowing } from "./hooks/useTimeFollowing";
 import { useCalendarEvents, normalizeValue, tryGetValue } from "./hooks/useCalendarEvents";
+import { parseDateFromFilename } from '../../utils/daily-file-date';
 
 // Extracted components
 import { useEventRenderer } from "./components/EventRenderer";
@@ -318,6 +319,7 @@ interface CalendarReactViewProps {
   pastEventOpacity?: number;
   eventFontSize?: "small" | "default" | "large";
   activeEventHighlightColor?: string;
+  dailyNoteDateFormat?: string;
 }
 
 const normalizeDisplayTitle = (raw: string): string => {
@@ -363,14 +365,18 @@ const pathsLikelyMatch = (a: string | null | undefined, b: string | null | undef
   return stripMdExtension(left) === stripMdExtension(right);
 };
 
-const extractDailyNoteDateKey = (path: string | null | undefined): string | null => {
+const extractDailyNoteDateKey = (path: string | null | undefined, userFormat?: string): string | null => {
   const raw = String(path || "").trim();
   if (!raw) return null;
   const filename = raw.split("/").pop() || raw;
   const basename = filename.replace(/\.[^.]+$/, "");
-  const match = basename.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  return `${match[1]}-${match[2]}-${match[3]}`;
+  try {
+    const m = parseDateFromFilename(basename, userFormat);
+    if (!m || !m.isValid || !m.isValid()) return null;
+    return (m as any).format('YYYY-MM-DD');
+  } catch {
+    return null;
+  }
 };
 
 const applyActiveNoteEventHighlight = (eventEl: HTMLElement, shouldHighlight: boolean): void => {
@@ -564,6 +570,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   pastEventOpacity = 55,
   eventFontSize = "default",
   activeEventHighlightColor = "#3b82f6",
+  dailyNoteDateFormat,
 }) => {
   const app = useApp() || ((window as any).app as App);
   const calendarRef = useRef<FullCalendar>(null);
@@ -600,6 +607,8 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   useEffect(() => { isEmbedModeRef.current = isEmbedMode; }, [isEmbedMode]);
   const activeFilePathRef = useRef<string | null>(activeFilePath);
   useEffect(() => { activeFilePathRef.current = activeFilePath; }, [activeFilePath]);
+  const dailyNoteDateFormatRef = useRef<string | undefined>(dailyNoteDateFormat);
+  useEffect(() => { dailyNoteDateFormatRef.current = dailyNoteDateFormat; }, [dailyNoteDateFormat]);
   const lastObservedScrollTopRef = useRef(0);
   const lastObservedScrollTargetRef = useRef<HTMLElement | null>(null);
   const [pendingChange, setPendingChange] = useState<{
@@ -681,7 +690,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   useEffect(() => {
     const rootEl = containerRef.current;
     if (!rootEl) return;
-    const activeDateKey = extractDailyNoteDateKey(activeFilePath);
+    const activeDateKey = extractDailyNoteDateKey(activeFilePath, dailyNoteDateFormat);
     const labelEls = rootEl.querySelectorAll<HTMLElement>(
       ".fc-col-header-cell[data-date] a.fc-col-header-cell-cushion, .fc-daygrid-day[data-date] a.fc-daygrid-day-number",
     );
@@ -1883,7 +1892,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
       };
       dayHeaderHoverHandlersRef.current.set(linkEl, hoverHandler);
       linkEl.addEventListener("mouseenter", hoverHandler);
-      const activeDateKey = extractDailyNoteDateKey(activeFilePathRef.current);
+      const activeDateKey = extractDailyNoteDateKey(activeFilePathRef.current, dailyNoteDateFormatRef.current);
       applyActiveDayLabelHighlight(linkEl, !!activeDateKey && formatDateKey(date) === activeDateKey);
     }
 

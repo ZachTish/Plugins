@@ -151,7 +151,17 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "TPS Auto Base Embed" });
 
-    new Setting(containerEl)
+    const createMainCategory = (title: string, defaultOpen = true): HTMLElement => {
+      const details = containerEl.createEl('details', { cls: 'tps-settings-main-category' });
+      if (defaultOpen) details.setAttr('open', 'true');
+      const summary = details.createEl('summary', { cls: 'tps-settings-main-summary' });
+      summary.createEl('h3', { text: title });
+      return details.createDiv({ cls: 'tps-settings-main-content' });
+    };
+
+    const featuresCategory = createMainCategory('Features');
+
+    new Setting(featuresCategory)
       .setName("Enable auto base embed")
       .setDesc("Render conditional Base embeds in matching notes.")
       .addToggle((toggle) =>
@@ -163,7 +173,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(featuresCategory)
       .setName("Enable in canvas files")
       .setDesc("Also render matching Base embeds when a .canvas file is open. Folder and path rules work best here because canvas files do not expose markdown frontmatter.")
       .addToggle((toggle) =>
@@ -175,7 +185,19 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(featuresCategory)
+      .setName("Enable on note cards within canvas")
+      .setDesc("Inject Base embeds directly onto note cards displayed inside canvas files. Rules are evaluated against each card's note file and appear as a floating bar at the bottom of each card.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableCanvasNodeEmbeds)
+          .onChange(async (value) => {
+            this.plugin.settings.enableCanvasNodeEmbeds = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(featuresCategory)
       .setName("Render mode")
       .setDesc("Choose between the current floating overlay and a virtual inline embed rendered inside the note view.")
       .addDropdown((dropdown) =>
@@ -191,7 +213,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
       );
 
     if (this.plugin.settings.renderMode === "inline") {
-      new Setting(containerEl)
+      new Setting(featuresCategory)
         .setName("Inline placement")
         .setDesc("Choose where the inline embed is inserted in markdown notes.")
         .addDropdown((dropdown) =>
@@ -206,7 +228,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
         );
     }
 
-    new Setting(containerEl)
+    new Setting(featuresCategory)
       .setName("Default expansion state")
       .setDesc("Whether embedded bases start expanded or collapsed.")
       .addToggle((toggle) =>
@@ -218,7 +240,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(featuresCategory)
       .setName("Accordion mode")
       .setDesc("Automatically collapse other bases when expanding one.")
       .addToggle((toggle) =>
@@ -230,16 +252,16 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Embed Rules" });
-    containerEl.createEl("p", {
+    const rulesCategory = createMainCategory('Rules');
+    rulesCategory.createEl("p", {
       text: "Define which bases to embed and under what conditions. Rules are evaluated in order; all matching rules will be embedded.",
       cls: "setting-item-description"
     });
 
-    const rulesContainer = containerEl.createDiv({ cls: "tps-auto-base-embed-rules" });
+    const rulesContainer = rulesCategory.createDiv({ cls: "tps-auto-base-embed-rules" });
     this.renderRules(rulesContainer);
 
-    new Setting(containerEl)
+    new Setting(rulesCategory)
       .setName("Add new rule")
       .addButton((button) =>
         button

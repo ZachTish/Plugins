@@ -108,7 +108,10 @@ export function matchesExclusionPattern(
     if (!normalizedTarget) return false;
 
     if (normalizedTarget.includes('*')) {
-        return matchesWildcard(normalizedTarget, normalizedPath) || matchesWildcard(normalizedTarget, normalizedBasename);
+        // Prepend '/' so patterns like '*/Folder/*' also match vault-root paths
+        // where normalizedPath has no leading slash (e.g. 'archive/file.md').
+        const slashedPath = '/' + normalizedPath;
+        return matchesWildcard(normalizedTarget, slashedPath) || matchesWildcard(normalizedTarget, normalizedBasename);
     }
 
     if (hasTrailingSlash) {

@@ -1,11 +1,6 @@
 {
   "version": 1,
   "ops": {
-    "medication|2026-03-06 16:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Events/Medication 2026-03-06.md",
-      "updatedAt": 1772732612779
-    },
     "log timesheet|2026-03-13 20:36:00": {
       "state": "complete",
       "targetPath": "Markdown/Action Items/Reminders/Log Timesheet 2026-03-13.md",
@@ -45,6 +40,16 @@
       "state": "complete",
       "targetPath": "Markdown/Action Items/Medication 2026-03-17.md",
       "updatedAt": 1773669946134
+    },
+    "medication|2026-03-19 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Medication 2026-03-19.md",
+      "updatedAt": 1773856379896
+    },
+    "medication|2026-03-20 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Medication 2026-03-20.md",
+      "updatedAt": 1773948950697
     }
   }
 }

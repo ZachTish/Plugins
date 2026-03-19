@@ -1,15 +1,15 @@
 import { App, Menu, TFile, TFolder, Notice, normalizePath } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
-import { SYSTEM_COMMANDS } from '../constants';
-import { TextInputModal } from '../modals/text-input-modal';
-import { FileSuggestModal } from '../modals/FileSuggestModal';
-import { MultiFileSelectModal } from '../modals/MultiFileSelectModal';
-import { ConfirmDeleteModal } from '../modals/confirm-delete-modal';
-import { mergeNormalizedTags, normalizeTagValue } from '../utils/tag-utils';
-import * as logger from '../logger';
-import { resolveCustomProperties } from '../resolve-profiles';
-import { ViewModeService } from '../services/view-mode-service';
-import { executeCommandById, hasCommand } from '../core';
+import { SYSTEM_COMMANDS } from '../../constants';
+import { TextInputModal } from '../../modals/text-input-modal';
+import { FileSuggestModal } from '../../modals/FileSuggestModal';
+import { MultiFileSelectModal } from '../../modals/MultiFileSelectModal';
+import { ConfirmDeleteModal } from '../../modals/confirm-delete-modal';
+import { mergeNormalizedTags, normalizeTagValue } from '../../utils/tag-utils';
+import * as logger from '../../logger';
+import { resolveCustomProperties } from '../../services/properties/resolve-profiles';
+import { ViewModeService } from '../../services/views/view-mode-service';
+import { executeCommandById, hasCommand } from '../../core';
 
 export class MenuBuilder {
   private plugin: TPSGlobalContextMenuPlugin;

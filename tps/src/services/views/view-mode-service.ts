@@ -3,7 +3,7 @@ import {
   TPSGlobalContextMenuSettings,
   ViewModeConditionOperator,
   ViewModeConditionType,
-  ViewModeRule,
+  ViewModeRuleExtended as ViewModeRule,
   ViewModeRuleCondition,
   ViewModeRuleMatch,
 } from "../../types";

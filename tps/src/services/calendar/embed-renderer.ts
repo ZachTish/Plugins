@@ -6,7 +6,7 @@ import {
     App,
     Component
 } from "obsidian";
-import { CalendarView } from "./calendar-view";
+import { CalendarView } from "./main";
 import { CalendarPluginBridge } from "./plugin-interface";
 
 // Mock QueryController since we can't easily instantiate the real one without internal API access.

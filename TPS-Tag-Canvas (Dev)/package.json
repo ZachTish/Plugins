@@ -1,0 +1,22 @@
+{
+  "name": "tps-tag-canvas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automatically creates and maintains Canvas files for each tag in your vault.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": ["obsidian", "plugin", "tps", "canvas", "tags"],
+  "author": "Codex",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^20.11.2",
+    "builtin-modules": "3.3.0",
+    "esbuild": "^0.19.3",
+    "obsidian": "latest",
+    "typescript": "^5.3.3"
+  }
+}

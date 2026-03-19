@@ -479,15 +479,29 @@ export class MetadataManager {
       return null;
     }
 
-    const closeIndex = content.indexOf("\n---\n", startIndex + 4);
-    if (closeIndex === -1) {
-      return null;
+    // Look for a closing delimiter. Accept typical cases like "\n---\n"
+    // and also allow a closing "\n---" at EOF (no trailing newline).
+    const closeWithTrailing = content.indexOf("\n---\n", startIndex + 4);
+    if (closeWithTrailing !== -1) {
+      return {
+        body: content.slice(startIndex + 4, closeWithTrailing),
+        end: closeWithTrailing + "\n---\n".length,
+      };
     }
 
-    return {
-      body: content.slice(startIndex + 4, closeIndex),
-      end: closeIndex + "\n---\n".length,
-    };
+    // Fallback: accept a closing delimiter followed by EOF or only whitespace.
+    const closeAtEof = content.indexOf("\n---", startIndex + 4);
+    if (closeAtEof !== -1) {
+      const after = content.slice(closeAtEof + "\n---".length);
+      if (/^\s*$/.test(after)) {
+        return {
+          body: content.slice(startIndex + 4, closeAtEof),
+          end: closeAtEof + "\n---".length,
+        };
+      }
+    }
+
+    return null;
   }
 
   private looksLikeYamlFrontmatter(body: string): boolean {

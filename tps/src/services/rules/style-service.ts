@@ -1,5 +1,5 @@
 import { App, TFile, FileView } from "obsidian";
-import { NotebookNavigatorCompanionSettings } from "../types";
+import { NotebookNavigatorCompanionSettings } from "./types";
 
 /**
  * Manages the runtime CSS override for Notebook Navigator icon colors,

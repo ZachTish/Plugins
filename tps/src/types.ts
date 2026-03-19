@@ -5,6 +5,51 @@
 
 import { TFile } from "obsidian";
 
+export type Frontmatter = Record<string, unknown>;
+export type PanelEntry = { file: TFile; frontmatter: Frontmatter };
+
+// ============================================================================
+// View-mode types (used by view-mode-service and settings UI)
+// ============================================================================
+
+export type ViewModeConditionType = "frontmatter" | "path" | "tag" | "scheduled" | "daily-note" | string;
+export type ViewModeConditionOperator = "equals" | "contains" | "starts-with" | "ends-with" | "exists" | "!exists" | "not-equals" | "not-contains" | "is-empty" | "missing" | "past" | "future" | "today" | "not-today" | string;
+export type ViewModeRuleMatch = "all" | "any";
+
+export interface ViewModeRuleCondition {
+    type: ViewModeConditionType;
+    key?: string;
+    operator: ViewModeConditionOperator;
+    value?: string;
+}
+
+// Extended ViewModeRule that supports both legacy single-condition and multi-condition formats.
+export interface ViewModeRuleExtended {
+    id: string;
+    name: string;
+    mode: "source" | "preview" | "reading";
+    enabled: boolean;
+    /** Legacy single-condition string */
+    condition?: string;
+    /** Multi-condition array (newer format) */
+    conditions?: ViewModeRuleCondition[];
+    match?: ViewModeRuleMatch;
+    /** Legacy key/value pair format */
+    key?: string;
+    value?: string;
+}
+
+// ============================================================================
+// Context-menu / GCM types
+// ============================================================================
+
+/** Used by view-mode-service; keeps compatibility with code importing TPSGlobalContextMenuSettings */
+export interface TPSGlobalContextMenuSettings {
+    viewModeFrontmatterKey?: string;
+    viewModeRules?: ViewModeRuleExtended[];
+    [key: string]: any;
+}
+
 // ============================================================================
 // Core Plugin Types
 // ============================================================================
@@ -27,6 +72,14 @@ export interface TPSSettings {
         logLevel: "error" | "warn" | "info" | "debug";
     };
     _migratedFromPlugins: boolean;
+    // Backwards-compatible top-level rule/navigation settings (some plugins expect these at root)
+    rules?: IconColorRule[];
+    hideRules?: HideRule[];
+    smartSort?: SmartSortSettings;
+    autoRemoveHiddenWhenNoMatch?: boolean;
+    autoApplyOnFileOpen?: boolean;
+    autoApplyOnMetadataChange?: boolean;
+    [key: string]: any;
 }
 
 // ============================================================================
@@ -280,11 +333,19 @@ export interface CalendarSettings {
 
 export interface CalendarStyleRule {
     id: string;
-    name: string;
-    condition: string;
-    color: string;
+    name?: string;
+    label?: string;
+    active?: boolean;
+    enabled?: boolean;
+    condition?: string;
+    conditions?: CalendarStyleCondition[];
+    match?: CalendarStyleMatch;
+    color?: string;
     backgroundColor?: string;
     borderColor?: string;
+    textColor?: string;
+    textStyle?: string;
+    icon?: string;
 }
 
 // ============================================================================
@@ -537,4 +598,285 @@ export const DEFAULT_TPS_SETTINGS: TPSSettings = {
             excludePaths: [],
         },
     },
+    // Backwards-compatible recurrence and companion flags
+    recurrenceCompletionStatuses: [],
+    // Backwards-compatible defaults for rule/navigation UI
+    rules: [],
+    hideRules: [],
+    smartSort: { enabled: false, field: "", separator: "|", appendBasename: false, clearWhenNoMatch: true, buckets: [] },
+    autoRemoveHiddenWhenNoMatch: false,
+    autoApplyOnFileOpen: false,
+    autoApplyOnMetadataChange: false,
 };
+
+// ---------------------------------------------------------------------------
+// Rules subsystem compatibility exports (aliases and helpers)
+// These types mirror the structures used by the Notebook Navigator Companion
+// and related settings/services. Keep minimal but explicit to aid refactors.
+// ---------------------------------------------------------------------------
+
+export type RuleMatchMode = "any" | "all";
+export type RuleOperator = "is" | "!is" | "contains" | "!contains" | "exists" | "!exists";
+export type SmartRuleOperator = RuleOperator | "is-not-empty" | "starts" | "!starts" | "within-next-days" | "!within-next-days" | "has-open-checkboxes" | "!has-open-checkboxes" | "is-today" | "!is-today" | "is-before-today" | "!is-before-today" | "is-after-today" | "!is-after-today";
+
+export type RuleConditionSource =
+    | "frontmatter"
+    | "path"
+    | "extension"
+    | "name"
+    | "tag"
+    | "tag-note-name"
+    | "body"
+    | "backlink"
+    | "date-created"
+    | "date-modified"
+    | "parent-frontmatter"
+    | "parent-tag"
+    | "parent-name"
+    | "parent-path";
+
+export interface RuleCondition {
+    source: RuleConditionSource;
+    field?: string;
+    operator: SmartRuleOperator;
+    value?: string;
+}
+
+export interface IconColorRule {
+    id: string;
+    name?: string;
+    enabled: boolean;
+    property: string;
+    operator: RuleOperator;
+    value: string;
+    pathPrefix?: string;
+    icon?: string;
+    color?: string;
+    match: RuleMatchMode;
+    conditions: RuleCondition[];
+}
+
+export interface HideRule {
+    id: string;
+    name?: string;
+    enabled: boolean;
+    match: RuleMatchMode;
+    conditions: RuleCondition[];
+    mode: "add" | "remove";
+    tagName?: string;
+}
+
+export type SortFieldType = "date" | "status" | "priority" | "text" | "number";
+
+export interface SortValueMapping { input: string; output: string }
+
+export interface SortCriteria {
+    source: RuleConditionSource;
+    field: string;
+    type: SortFieldType;
+    direction: "asc" | "desc";
+    mappings?: SortValueMapping[];
+    missingValuePlacement?: "first" | "last";
+}
+
+export interface SortSegmentRule {
+    id: string;
+    enabled: boolean;
+    source: RuleConditionSource;
+    field: string;
+    fallback?: string;
+    mappings?: SortValueMapping[];
+    match: RuleMatchMode;
+    conditions: RuleCondition[];
+}
+
+export interface SortBucket {
+    id: string;
+    enabled: boolean;
+    name: string;
+    match: RuleMatchMode;
+    conditions: RuleCondition[];
+    // Optional nested groups for complex bucket logic (legacy support)
+    conditionGroups?: ConditionGroup[];
+    sortCriteria: SortCriteria[];
+}
+
+export interface ConditionGroup {
+    id: string;
+    match: RuleMatchMode;
+    conditions: RuleCondition[];
+}
+
+export interface RuleEvaluationContext {
+    file: {
+        path: string;
+        name: string;
+        basename: string;
+        extension: string;
+    };
+    frontmatter: Record<string, unknown> | null;
+    tags: string[];
+    body?: string;
+    backlinks?: string[];
+    parent?: {
+        file: { path: string; name: string; basename: string; extension: string };
+        frontmatter: Record<string, unknown> | null;
+        tags: string[];
+    };
+}
+
+export interface SmartSortSettings {
+    enabled: boolean;
+    field: string;
+    separator: string;
+    appendBasename: boolean;
+    clearWhenNoMatch: boolean;
+    buckets: SortBucket[];
+}
+
+export interface NotebookNavigatorCompanionSettings {
+    enabled: boolean;
+    autoApplyOnFileOpen: boolean;
+    autoApplyOnMetadataChange: boolean;
+    applyOnStartup: boolean;
+    startupDelayMs: number;
+    metadataDebounceMs: number;
+    syncTitleFromFilename: boolean;
+    syncFilenameFromTitle: boolean;
+    frontmatterIconField: string;
+    frontmatterColorField: string;
+    writeBasesIconFields: boolean;
+    basesIconMarkdownField: string;
+    basesIconUriField: string;
+    upstreamLinkKeys: string[];
+    frontmatterWriteExclusions: string;
+    noteCheckboxIconColor?: string;
+    clearIconWhenNoMatch: boolean;
+    clearColorWhenNoMatch: boolean;
+    autoRemoveHiddenWhenNoMatch: boolean;
+    debugLogging: boolean;
+    rules: IconColorRule[];
+    smartSort: SmartSortSettings;
+    hideRules: HideRule[];
+}
+
+// Backwards-compatible export names and helpers expected by rules code
+export const DEFAULT_SETTINGS: NotebookNavigatorCompanionSettings = {
+    enabled: false,
+    autoApplyOnFileOpen: false,
+    autoApplyOnMetadataChange: false,
+    applyOnStartup: false,
+    startupDelayMs: 800,
+    metadataDebounceMs: 900,
+    syncTitleFromFilename: false,
+    syncFilenameFromTitle: false,
+    frontmatterIconField: "icon",
+    frontmatterColorField: "color",
+    writeBasesIconFields: false,
+    basesIconMarkdownField: "basesIconMarkdown",
+    basesIconUriField: "basesIconUri",
+    upstreamLinkKeys: [],
+    frontmatterWriteExclusions: "",
+    clearIconWhenNoMatch: true,
+    clearColorWhenNoMatch: true,
+    autoRemoveHiddenWhenNoMatch: false,
+    debugLogging: false,
+    rules: [],
+    smartSort: { enabled: false, field: "", separator: "|", appendBasename: false, clearWhenNoMatch: true, buckets: [] },
+    hideRules: []
+};
+
+export function createRuleId(): string { return `rule-${Date.now()}-${Math.floor(Math.random()*1000)}`; }
+export function createSortSegmentId(): string { return `segment-${Date.now()}-${Math.floor(Math.random()*1000)}`; }
+export function createSortBucketId(): string { return `bucket-${Date.now()}-${Math.floor(Math.random()*1000)}`; }
+
+export function createDefaultSortSegment(): SortSegmentRule {
+    return {
+        id: createSortSegmentId(), enabled: true, source: "frontmatter", field: "status", fallback: "", mappings: [], match: "all", conditions: []
+    };
+}
+
+export function createDefaultSortCriteria(): SortCriteria {
+    return { source: "frontmatter", field: "", type: "text", direction: "asc", mappings: [], missingValuePlacement: "last" };
+}
+
+export function createDefaultRule(): IconColorRule {
+    return { id: createRuleId(), name: "", enabled: true, property: "", operator: "is", value: "", pathPrefix: "", icon: "", color: "", match: "all", conditions: [] };
+}
+
+export function createDefaultSortBucket(): SortBucket {
+    return { id: createSortBucketId(), enabled: true, name: "New Bucket", match: "all", conditions: [], conditionGroups: [], sortCriteria: [] };
+}
+
+// ============================================================================
+// Calendar style rule types (used by style-rule-service and visual-builder)
+// ============================================================================
+
+export type CalendarField = "status" | "priority" | "tag" | "folder" | "frontmatter" | string;
+export type CalendarOperator = "equals" | "contains" | "starts-with" | "exists" | "!exists" | string;
+export type CalendarStyleMatch = "all" | "any";
+
+export interface CalendarStyleCondition {
+    field: CalendarField;
+    operator: CalendarOperator;
+    value?: string;
+}
+
+// ============================================================================
+// Property / Profile types (used by modals and resolve-profiles service)
+// ============================================================================
+
+export interface CustomPropertyProfile {
+    id: string;
+    name: string;
+    hidden?: boolean;
+    options?: string[];
+    showInCollapsed?: boolean;
+    showInContextMenu?: boolean;
+    [key: string]: any;
+}
+
+export interface CustomProperty {
+    key: string;
+    type?: string;
+    id?: string;
+    label?: string;
+    options?: string[];
+    profiles?: CustomPropertyProfile[];
+    showInCollapsed?: boolean;
+    showInContextMenu?: boolean;
+    disabled?: boolean;
+    hidden?: boolean;
+    [key: string]: any;
+}
+
+// ============================================================================
+// Calendar plugin settings (used by settings-migration and calendar services)
+// ============================================================================
+
+export interface CalendarPluginSettings {
+    enableExternalCalendars: boolean;
+    syncIntervalMinutes: number;
+    sidebarBasePath: string | null;
+    dailyDateLinkTarget: string;
+    primaryControllerId: string | null;
+    priorityValues: readonly string[];
+    statusValues: readonly string[];
+    defaultCondenseLevel: number;
+    externalCalendars: ExternalCalendarConfig[];
+    externalCalendarFilter: string;
+    enableLogging: boolean;
+    syncOnEventDelete: "archive" | "delete" | "nothing";
+    archiveFolder: string;
+    canceledStatusValue: string;
+    inProgressStatusValue: string;
+    parentLinkEnabled: boolean;
+    parentLinkKey: string;
+    childLinkKey: string;
+    eventIdKey: string;
+    uidKey: string;
+    titleKey: string;
+    statusKey: string;
+    [key: string]: any;
+}
+

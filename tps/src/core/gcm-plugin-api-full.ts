@@ -1,7 +1,7 @@
 import { TFile } from 'obsidian';
-import type TPSGlobalContextMenuPlugin from './main';
-import type { VaultQueryService } from './services/vault-query-service';
-import type { TaskIdentityService } from './services/task-identity-service';
+import type TPSGlobalContextMenuPlugin from '../main';
+import type { VaultQueryService } from '../services/files/vault-query-service';
+import type { TaskIdentityService } from '../services/files/task-identity-service';
 
 /**
  * Attaches the inter-plugin API object to the plugin instance as `plugin.api`.

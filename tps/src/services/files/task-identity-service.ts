@@ -11,6 +11,7 @@
  * services that don't need or can't instantiate the class.
  */
 import { TFile } from 'obsidian';
+import { isDailyBasename } from '../../utils/daily-file-date';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -82,8 +83,7 @@ export interface IdentitySettings {
 // Defaults
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** YYYY-MM-DD basename pattern used to detect daily note files. */
-const DAILY_NOTE_BASENAME_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+/** (deprecated) YYYY-MM-DD basename pattern was replaced by dynamic parser. */
 
 /** YYYY-MM-DD date-only pattern used to detect all-day values. */
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -271,8 +271,10 @@ function firstDefinedProperty(
 }
 
 /** Detect whether a file is a daily note by basename pattern or configured folder. */
+/** Detect whether a file is a daily note by basename pattern or configured folder. */
 function detectDailyNote(file: TFile, dailyNoteFolders: string[]): boolean {
-    if (DAILY_NOTE_BASENAME_PATTERN.test(file.basename)) return true;
+    // Prefer dynamic basename parsing (supports user formats)
+    if (isDailyBasename(file.basename)) return true;
 
     const folderPath = file.parent?.path ?? '';
     return dailyNoteFolders.some((f) => {

@@ -19,7 +19,7 @@ import {
   SortFieldType,
   createRuleId,
   createSortSegmentId
-} from "../types";
+} from "./types";
 import { Logger } from "./logger";
 
 interface PluginDataHost {

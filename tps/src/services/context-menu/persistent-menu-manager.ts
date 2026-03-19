@@ -14,7 +14,7 @@ import {
 import { MenuController, addSafeClickListener } from './menu-controller';
 import { MenuInstances } from '../types';
 import * as logger from '../logger';
-import { normalizeTagValue, parseTagInput } from '../utils/tag-utils';
+import { normalizeTagValue, parseTagInput } from '../../utils/tag-utils';
 // scroll-direction hide/reveal is handled inline â€” no gesture-handler import needed.
 
 // Get the LIVE mode constant if available
@@ -833,7 +833,7 @@ export class PersistentMenuManager {
       menuEl.style.transform = 'translate(0px, 0px)';
     } else {
       menuEl.style.top = 'auto';
-      menuEl.style.bottom = 'calc(var(--tps-gcm-live-bottom, 16px) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) - var(--tps-auto-base-embed-gap, 12px))';
+      menuEl.style.bottom = 'calc(var(--tps-auto-base-embed-bottom, var(--tps-gcm-live-bottom, 16px)) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) + 8px)';
       menuEl.style.transform = `translate(0px, ${offsetY}px)`;
     }
 

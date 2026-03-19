@@ -1,9 +1,9 @@
-import { CalendarPluginSettings, ExternalCalendarConfig } from "./types";
+import { CalendarPluginSettings, ExternalCalendarConfig } from "../../types";
 import {
     DEFAULT_CONDENSE_LEVEL,
     normalizeExternalCalendar
 } from "./utils";
-import { PRIORITY_KEYS, STATUS_KEYS } from "./services/style-rule-service";
+import { PRIORITY_KEYS, STATUS_KEYS } from "./style-rule-service";
 
 export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     enableExternalCalendars: true,

@@ -400,7 +400,7 @@ export class BulkEditService {
             .some((line) => /^[A-Za-z0-9_"'.-]+\s*:/.test(line));
     }
 
-    async applyToFiles(files: TFile[], callback: (fm: any, file: TFile) => void): Promise<number> {
+    async applyToFiles(files: TFile[], callback: (fm: Record<string, unknown>, file: TFile) => void): Promise<number> {
         let count = 0;
         const updatedFiles: TFile[] = [];
 
@@ -410,7 +410,7 @@ export class BulkEditService {
                 if (!(await this.canMutateFrontmatterSafely(file))) return;
                 await this.runSerializedFrontmatterWrite(file, async () => {
                     this.plugin.recurrenceService?.markFileAsModified(file.path);
-                    await this.plugin.app.fileManager.processFrontMatter(file, (fm) => {
+                    await this.plugin.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
                         callback(fm, file);
                     });
                 });
@@ -777,27 +777,6 @@ export class BulkEditService {
 
             // Copy files to recurring template folder (creates template on first set)
             await this.ensureRecurrenceTemplate(files);
-
-            // Write or clear the optional end-date on the series template
-            if (endsOn !== undefined) {
-                const templateFolderSetting = (this.plugin.settings.recurringTemplateFolder || '').trim();
-                if (templateFolderSetting) {
-                    for (const file of files) {
-                        const seriesBaseName = stripDateSuffix(file.basename).trim();
-                        const templatePath = normalizePath(`${templateFolderSetting}/${seriesBaseName}.md`);
-                        const seriesTemplateFile = this.plugin.app.vault.getAbstractFileByPath(templatePath);
-                        if (seriesTemplateFile instanceof TFile) {
-                            await this.plugin.app.fileManager.processFrontMatter(seriesTemplateFile, (fmw) => {
-                                if (endsOn) {
-                                    this.setFrontmatterValueCaseInsensitive(fmw, 'recurrenceEnds', endsOn);
-                                } else {
-                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrenceEnds');
-                                }
-                            });
-                        }
-                    }
-                }
-            }
         }
 
         return count;
@@ -859,12 +838,6 @@ export class BulkEditService {
                 // represents a clean "blueprint" for every future instance in this series.
                 await this.plugin.app.fileManager.processFrontMatter(templateFile, (fmw) => {
                     this.setFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate', true);
-                    // Stamp when this series started (once, on first template creation)
-                    const instanceScheduled = fm?.scheduled;
-                    const startedDate = instanceScheduled
-                        ? window.moment(instanceScheduled).format('YYYY-MM-DD')
-                        : window.moment().format('YYYY-MM-DD');
-                    this.setFrontmatterValueCaseInsensitive(fmw, 'recurrenceStarted', startedDate);
                     // Remove fields that belong to a specific instance, not the series
                     this.deleteFrontmatterValueCaseInsensitive(fmw, 'scheduled');
                     this.deleteFrontmatterValueCaseInsensitive(fmw, 'status');
@@ -964,6 +937,81 @@ export class BulkEditService {
         }
     }
 
+    private isFileInRecurrenceTemplateFolder(file: TFile): boolean {
+        const templateFolder = normalizePath((this.plugin.settings.recurringTemplateFolder || '').trim());
+        if (!templateFolder) return false;
+        const filePath = normalizePath(file.path);
+        return filePath === templateFolder || filePath.startsWith(`${templateFolder}/`);
+    }
+
+    private frontmatterReferencesSeriesTemplate(frontmatter: any, seriesBaseName: string): boolean {
+        const rawLink = String(frontmatter?.recurrenceTemplate ?? frontmatter?.recurrencetemplate ?? '').trim().toLowerCase();
+        if (!rawLink) return false;
+        return rawLink.includes(`[[${seriesBaseName.toLowerCase()}]]`);
+    }
+
+    private getFirstOccurrenceFromToday(recurrenceRule: string): Date | null {
+        try {
+            const todayStart = window.moment().startOf('day').toDate();
+            const options = RRule.parseString(recurrenceRule);
+            options.dtstart = todayStart;
+            const rule = new RRule(options);
+            return rule.after(todayStart, true);
+        } catch (error) {
+            logger.error('[TPS GCM] Failed to calculate first occurrence from today:', error);
+            return null;
+        }
+    }
+
+    private async bootstrapTemplateInstanceFromToday(templateFile: TFile, frontmatter: any): Promise<boolean> {
+        const recurrenceRule = frontmatter?.recurrenceRule || frontmatter?.recurrence;
+        if (!recurrenceRule) return false;
+
+        const seriesBaseName = stripDateSuffix(templateFile.basename).trim();
+        if (!seriesBaseName) return false;
+
+        const existingInstances = this.plugin.app.vault.getMarkdownFiles().filter((candidate) => {
+            if (candidate.path === templateFile.path) return false;
+            const cache = this.plugin.app.metadataCache.getFileCache(candidate);
+            const fm = cache?.frontmatter;
+            if (!fm || fm.isRecurrenceTemplate) return false;
+            return this.frontmatterReferencesSeriesTemplate(fm, seriesBaseName);
+        });
+
+        if (existingInstances.length > 0) {
+            return false;
+        }
+
+        const firstOccurrence = this.getFirstOccurrenceFromToday(recurrenceRule);
+        if (!firstOccurrence) return false;
+
+        const dateStr = window.moment(firstOccurrence).format('YYYY-MM-DD');
+        const newFileName = `${seriesBaseName} ${dateStr}.md`;
+        const parentPath = templateFile.parent?.path || '';
+        const newFilePath = normalizePath(parentPath ? `${parentPath}/${newFileName}` : newFileName);
+
+        const exists = this.plugin.app.vault.getAbstractFileByPath(newFilePath);
+        if (exists instanceof TFile) {
+            return false;
+        }
+
+        const content = await this.plugin.app.vault.read(templateFile);
+        const created = await this.plugin.app.vault.create(newFilePath, content);
+        if (!(created instanceof TFile)) return false;
+
+        const scheduled = window.moment(firstOccurrence).format('YYYY-MM-DD HH:mm:ss');
+        await this.plugin.app.fileManager.processFrontMatter(created, (fmw) => {
+            this.setFrontmatterValueCaseInsensitive(fmw, 'scheduled', scheduled);
+            this.setFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate', `[[${seriesBaseName}]]`);
+            this.deleteFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate');
+            this.deleteFrontmatterValueCaseInsensitive(fmw, 'completedDate');
+            this.deleteFrontmatterValueCaseInsensitive(fmw, 'status');
+        });
+
+        logger.log(`[TPS GCM] Bootstrapped recurring series from template ${templateFile.path} -> ${created.path}`);
+        return true;
+    }
+
     private advanceOccurrenceToFuture(recurrenceRule: string, seedDate: string | undefined): Date | null {
         const now = new Date();
         let nextDate = this.getNextOccurrence(recurrenceRule, seedDate);
@@ -1013,27 +1061,21 @@ export class BulkEditService {
             // starts from a clean blueprint rather than cloning the completing file.
             const recurrenceTemplateFolderSetting = (this.plugin.settings.recurringTemplateFolder || '').trim();
             let contentSource: TFile = file;
-            let seriesTemplateFm: any = null;
             if (recurrenceTemplateFolderSetting) {
                 const templatePath = normalizePath(`${recurrenceTemplateFolderSetting}/${baseName}.md`);
                 const seriesTemplateFile = this.plugin.app.vault.getAbstractFileByPath(templatePath);
                 if (seriesTemplateFile instanceof TFile) {
                     contentSource = seriesTemplateFile;
-                    seriesTemplateFm = this.plugin.app.metadataCache.getFileCache(seriesTemplateFile)?.frontmatter ?? null;
                     logger.log('[TPS GCM] Using series template for next recurrence instance:', templatePath);
                 } else {
-                    logger.log('[TPS GCM] No series template found at', templatePath, '— cloning completing instance instead');
-                }
-            }
-
-            // Respect the optional series end date stored on the template
-            if (seriesTemplateFm?.recurrenceEnds) {
-                const endsOnMoment = window.moment(seriesTemplateFm.recurrenceEnds, 'YYYY-MM-DD', true);
-                if (endsOnMoment.isValid() && window.moment(nextDate).isAfter(endsOnMoment, 'day')) {
-                    logger.log('[TPS GCM] Recurrence series "' + baseName + '" has reached its end date:', seriesTemplateFm.recurrenceEnds);
-                    await this.clearRecurrenceRule(file);
-                    new Notice(`Recurring series "${baseName}" ended on ${seriesTemplateFm.recurrenceEnds}. No new instance created.`);
-                    return true;
+                    logger.log('[TPS GCM] No series template found at', templatePath, '— creating/relinking template now');
+                    await this.ensureRecurrenceTemplate([file]);
+                    const createdTemplate = this.plugin.app.vault.getAbstractFileByPath(templatePath);
+                    if (createdTemplate instanceof TFile) {
+                        contentSource = createdTemplate;
+                    } else {
+                        logger.log('[TPS GCM] Template still missing after ensureRecurrenceTemplate, cloning completing instance instead');
+                    }
                 }
             }
 
@@ -1241,6 +1283,27 @@ export class BulkEditService {
 
                 const hasRule = fm.recurrenceRule || fm.recurrence;
                 if (!hasRule) continue;
+
+                if (this.isFileInRecurrenceTemplateFolder(file)) {
+                    if (!fm.isRecurrenceTemplate) {
+                        if (await this.canMutateFrontmatterSafely(file)) {
+                            await this.runSerializedFrontmatterWrite(file, async () => {
+                                await this.plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+                                    this.setFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate', true);
+                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'scheduled');
+                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'status');
+                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'completedDate');
+                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate');
+                                });
+                            });
+                        }
+                    }
+                    const bootstrapped = await this.bootstrapTemplateInstanceFromToday(file, fm);
+                    if (bootstrapped) {
+                        createdCount++;
+                    }
+                    continue;
+                }
 
                 // Skip template files themselves
                 if (fm.isRecurrenceTemplate) continue;

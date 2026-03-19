@@ -3,7 +3,7 @@
  * Automated folder icons and colors
  */
 
-import { TPSPlugin } from '../../main';
+import TPSPlugin from '../../main';
 import { NavigatorSettings } from '../../types';
 import * as logger from '../../logger';
 

@@ -1,8 +1,8 @@
 
 import ICAL from 'ical.js';
 import { moment } from 'obsidian';
-import * as logger from "../../../logger";
-import { ExternalCalendarEvent } from "../../../types";
+import * as logger from '../../logger';
+import { ExternalCalendarEvent } from '../../types';
 
 export class ICalParserService {
     public static warnedZones: Set<string> = new Set();

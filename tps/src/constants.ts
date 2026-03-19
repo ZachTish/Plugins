@@ -2,6 +2,11 @@
  * TPS Constants
  */
 
+export const SYSTEM_COMMANDS = {
+    openFile: 'app:open-file',
+    revealInSidebar: 'app:reveal-in-sidebar',
+} as const;
+
 export const PLUGIN_NAME = "TPS";
 export const PLUGIN_VERSION = "2.0.0";
 export const API_VERSION = "2.0.0";
@@ -77,3 +82,11 @@ export const MIGRATION_FLAGS = {
     KANBAN: "tps-kanban",
     AUTO_EMBED: "tps-auto-base-embed",
 } as const;
+
+// Recurrence options for UI dropdowns
+export const RECURRENCE_OPTIONS = [
+    { value: "FREQ=DAILY", label: "Daily" },
+    { value: "FREQ=WEEKLY", label: "Weekly" },
+    { value: "FREQ=MONTHLY", label: "Monthly" },
+    { value: "FREQ=YEARLY", label: "Yearly" },
+] as const;

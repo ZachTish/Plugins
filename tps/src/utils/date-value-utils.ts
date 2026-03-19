@@ -4,14 +4,28 @@
  */
 import { BasesEntry, BasesPropertyId, Value } from "obsidian";
 import * as logger from "../logger";
+import { parseDateFromFilename } from "./daily-file-date";
 
-export function extractDate(entry: BasesEntry, propId: BasesPropertyId): Date | null {
+export function extractDate(entry: BasesEntry, propId: BasesPropertyId, userFormat?: string): Date | null {
   try {
     const value = entry.getValue(propId);
     if (!value) return null;
 
     const parsedDate = resolveDateValue(value);
     if (parsedDate) return parsedDate;
+
+    // Fallback: try interpreting the string value as a filename-formatted date
+    // (handles "get day from title" when startDate property is note.name / note.basename)
+    const str = valueToString(value);
+    if (str) {
+      const cleaned = str.replace(/\.[^.]+$/, ''); // strip extension if present
+      try {
+        const m = parseDateFromFilename(cleaned, userFormat);
+        if (m && m.isValid && m.isValid()) {
+          return new Date(m.year(), m.month(), m.date());
+        }
+      } catch { /* ignore */ }
+    }
 
     return null;
   } catch (error) {

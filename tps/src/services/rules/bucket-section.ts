@@ -1,5 +1,5 @@
 import { Menu, Setting } from "obsidian";
-import { SortBucket, SortCriteria, RuleCondition, createDefaultSortCriteria } from "../types";
+import { SortBucket, SortCriteria, RuleCondition, createDefaultSortCriteria } from "./types";
 import {
     createDefaultCondition,
     getConditionValuePlaceholder,

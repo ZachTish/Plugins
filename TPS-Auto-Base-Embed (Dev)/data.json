@@ -1,61 +1,33 @@
 {
   "enabled": true,
   "enableCanvasEmbeds": true,
-  "renderMode": "inline",
+  "enableCanvasNodeEmbeds": false,
+  "renderMode": "floating",
   "inlinePlacement": "after-title",
   "rules": [
     {
-      "id": "rule-1773432939212",
-      "basePath": "scheduled.base",
+      "id": "rule-1773748857727",
+      "basePath": "Area Task List.base",
       "enabled": true,
       "conditions": {
-        "requireProperty": "scheduled",
-        "excludeFolders": [
-          "_templates"
-        ],
         "excludeTags": [
           "dailynote"
-        ]
+        ],
+        "requirePropertyEmpty": "parentOf"
+      }
+    },
+    {
+      "id": "rule-1773800108173",
+      "basePath": "Relative Calendar.base",
+      "enabled": true,
+      "conditions": {
+        "requireProperty": "scheduled"
       },
-      "initialState": "collapsed"
+      "initialState": "expanded"
     },
     {
-      "id": "rule-1773435009274",
-      "basePath": "Project.base",
-      "enabled": true,
-      "conditions": {
-        "requireProperty": "parentOf",
-        "excludeFolders": [
-          "_templates"
-        ],
-        "excludeTagMatchingNoteName": true
-      }
-    },
-    {
-      "id": "rule-1773438593857",
-      "basePath": "scheduled.base",
-      "enabled": true,
-      "conditions": {
-        "tags": [
-          "dailynote"
-        ],
-        "excludeFolders": [
-          "_templates",
-          "_attachments"
-        ]
-      }
-    },
-    {
-      "id": "rule-1773502375379",
-      "basePath": "Area.base",
-      "enabled": true,
-      "conditions": {
-        "requireTagMatchingNoteName": true
-      }
-    },
-    {
-      "id": "rule-1773608648106",
-      "basePath": "Project feed.base",
+      "id": "rule-1773801915163",
+      "basePath": "Project Task List.base",
       "enabled": true,
       "conditions": {
         "requireProperty": "parentOf"
@@ -68,9 +40,16 @@
   "manualExpansionState": {
     "Stretched 5d calendar.base": true,
     "Tagpage base.base": true,
-    "scheduled.base": true,
+    "scheduled.base": false,
     "Area.base": true,
     "Project.base": false,
-    "Project feed.base": false
+    "Project feed.base": true,
+    "Scheduled Task Calendar.base": false,
+    "Project Note feed.base": false,
+    "Project Task List.base": true,
+    "Area Note Feed.base": false,
+    "Scheduled Task list.base": false,
+    "Area Task List.base": false,
+    "Relative Calendar.base": true
   }
 }

@@ -1,4 +1,5 @@
 import { App, TFile } from "obsidian";
+import { parseDateFromFilename } from '../../../tps/src/utils/daily-file-date';
 import {
   HideRule,
   IconColorRule,
@@ -11,7 +12,8 @@ import {
   SortValueMapping,
   SortBucket,
   SortCriteria,
-  ConditionGroup
+  ConditionGroup,
+  RelationshipLineageNode,
 } from "../types";
 
 export interface RuleFieldResult {
@@ -49,6 +51,51 @@ export class RuleEngine {
     "updated",
     "dateupdated"
   ]);
+
+  private getDailyNoteDateFormat(): string | undefined {
+    const tpsFormat = (this.app as any)?.plugins?.plugins?.tps?.settings?.dailyNoteDateFormat;
+    if (typeof tpsFormat === "string" && tpsFormat.trim()) {
+      return tpsFormat.trim();
+    }
+
+    const dailyNotesFormat = (this.app as any)?.internalPlugins?.plugins?.["daily-notes"]?.instance?.options?.format;
+    if (typeof dailyNotesFormat === "string" && dailyNotesFormat.trim()) {
+      return dailyNotesFormat.trim();
+    }
+
+    return undefined;
+  }
+
+  private parseComparableDate(value: string): any | null {
+    const text = String(value ?? "").trim();
+    if (!text) {
+      return null;
+    }
+
+    const userFormat = this.getDailyNoteDateFormat();
+
+    try {
+      const fromFilename = parseDateFromFilename(text, userFormat);
+      if (fromFilename && fromFilename.isValid && fromFilename.isValid()) {
+        return fromFilename;
+      }
+    } catch {
+      // Fall through to direct moment parsing.
+    }
+
+    // @ts-ignore
+    const m = window.moment(text, [
+      // @ts-ignore
+      window.moment.ISO_8601,
+      ...(userFormat ? [userFormat] : []),
+      "YYYY-MM-DD",
+      "YYYY-MM-DD HH:mm",
+      "YYYY-MM-DDTHH:mm:ss",
+      "YYYY/MM/DD"
+    ], true);
+
+    return m.isValid() ? m : null;
+  }
 
   resolveVisualOutputs(rules: IconColorRule[], context: RuleEvaluationContext): VisualRuleResult {
     const icon: RuleFieldResult = { matched: false, value: "", ruleId: null };
@@ -90,6 +137,127 @@ export class RuleEngine {
 
   composeSortKey(settings: SmartSortSettings, context: RuleEvaluationContext): string {
     const separator = String(settings.separator || "").trim() || "_";
+    if (settings.relationshipGrouping === "children-under-parent") {
+      return this.composeRelationshipSortKey(settings, context, separator);
+    }
+
+    return this.composeBaseSortKey(settings, context, separator);
+  }
+
+  private composeRelationshipSortKey(
+    settings: SmartSortSettings,
+    context: RuleEvaluationContext,
+    separator: string,
+  ): string {
+    const lineage = Array.isArray(context.relationshipLineage) && context.relationshipLineage.length > 0
+      ? context.relationshipLineage
+      : [this.createRelationshipNodeFromContext(context)];
+
+    // If there is no parent in the lineage, fallback to base behavior.
+    if (lineage.length <= 1) {
+      return this.composeBaseSortKey(settings, context, separator);
+    }
+
+    // Immediate parent is the element before the leaf in the lineage
+    const leafIndex = lineage.length - 1;
+    const parentIndex = leafIndex - 1;
+    const parentContext = this.createContextForRelationshipNode(lineage, parentIndex, context);
+
+    // Find matched bucket for the parent (so children follow the parent's bucket rules)
+    const parentBucketInfo = this.getMatchedBucketForContext(settings, parentContext);
+
+    // If parent didn't match any bucket, fall back to composing the file's own base key
+    if (!parentBucketInfo) {
+      return this.composeBaseSortKey(settings, context, separator);
+    }
+
+    const { bucket: parentBucket } = parentBucketInfo;
+
+    // Parent full prefix (includes bucket index + parent criteria + optional basename)
+    const parentParts = this.composeBaseSortParts(settings, parentContext, separator);
+
+    // Child ordering within the parent: apply the parent's bucket.sortCriteria to the child's context
+    const childContext = this.createContextForRelationshipNode(lineage, leafIndex, context);
+    const childCriteriaParts: string[] = [];
+    for (const criteria of parentBucket.sortCriteria) {
+      const raw = this.getSortCriteriaValue(criteria, childContext);
+      const normalized = this.normalizeSortKeyPart(raw, separator) || this.normalizeSortKeyPart(String(raw || ""), separator);
+      // ensure there is always a placeholder so sibling ordering is deterministic
+      childCriteriaParts.push(normalized || (criteria.direction === "desc" ? this.invertSortValue("999") : "000"));
+    }
+
+    const identity =
+      this.normalizeSortKeyPart(context.file.path, separator) ||
+      this.normalizeSortKeyPart(context.file.basename, separator) ||
+      `node${leafIndex}`;
+
+    // Parent should sort before its children — append a marker to guarantee ordering
+    const parentMarker = "0";
+    const childMarker = "1";
+
+    // Build final key: parentParts + parentMarker for parent; for child: parentParts + childCriteriaParts + childMarker + identity
+    // For the current file (leaf), return the child form so it appears under the parent prefix.
+    const finalParts = [...parentParts, ...childCriteriaParts, childMarker, identity];
+    return finalParts.join(separator);
+  }
+
+  private getMatchedBucketForContext(settings: SmartSortSettings, context: RuleEvaluationContext): { bucket: SortBucket; index: number } | null {
+    for (let i = 0; i < settings.buckets.length; i++) {
+      const bucket = settings.buckets[i];
+      if (!bucket.enabled) continue;
+      if (this.matchesBucket(bucket, context)) {
+        return { bucket, index: i };
+      }
+    }
+    return null;
+  }
+
+  private createRelationshipNodeFromContext(context: RuleEvaluationContext): RelationshipLineageNode {
+    return {
+      file: context.file,
+      frontmatter: context.frontmatter,
+      tags: Array.isArray(context.tags) ? [...context.tags] : [],
+    };
+  }
+
+  private createContextForRelationshipNode(
+    lineage: RelationshipLineageNode[],
+    index: number,
+    originalContext: RuleEvaluationContext,
+  ): RuleEvaluationContext {
+    const node = lineage[index];
+    const parent = index > 0 ? lineage[index - 1] : undefined;
+
+    return {
+      file: node.file,
+      frontmatter: node.frontmatter,
+      tags: node.tags,
+      parent: parent
+        ? {
+          file: parent.file,
+          frontmatter: parent.frontmatter,
+          tags: parent.tags,
+        }
+        : undefined,
+      relationshipLineage: lineage.slice(0, index + 1),
+      body: index === lineage.length - 1 ? originalContext.body : undefined,
+      backlinks: index === lineage.length - 1 ? originalContext.backlinks : undefined,
+    };
+  }
+
+  private composeBaseSortKey(
+    settings: SmartSortSettings,
+    context: RuleEvaluationContext,
+    separator: string,
+  ): string {
+    return this.composeBaseSortParts(settings, context, separator).join(separator);
+  }
+
+  private composeBaseSortParts(
+    settings: SmartSortSettings,
+    context: RuleEvaluationContext,
+    separator: string,
+  ): string[] {
     const parts: string[] = [];
 
     // Find the first matching bucket
@@ -135,17 +303,7 @@ export class RuleEngine {
       }
     }
 
-    const finalSortKey = parts.join(separator);
-
-    // Debug logging to help diagnose sort issues
-    // Debug logging removed to prevent console spam
-    // if (matchedBucket) {
-    //   console.log(`[Sort] ${context.file.name} → Bucket ${bucketIndex} "${matchedBucket.name}" → ${finalSortKey}`);
-    // } else {
-    //   console.log(`[Sort] ${context.file.name} → NO MATCH → ${finalSortKey}`);
-    // }
-
-    return finalSortKey;
+    return parts;
   }
 
   private matchesBucket(bucket: SortBucket, context: RuleEvaluationContext): boolean {
@@ -650,28 +808,10 @@ export class RuleEngine {
     if (operator === "is-today" || operator === "!is-today") {
       // @ts-ignore
       const today = window.moment().startOf('day');
-      // @ts-ignore
-      const todayStr = today.format("YYYY-MM-DD");
 
       const isToday = trimmedValues.some((value) => {
-        // 1. Try date parsing for structured fields
-        // @ts-ignore
-        const m = window.moment(value, [
-          window.moment.ISO_8601,
-          "YYYY-MM-DD",
-          "YYYY-MM-DD HH:mm",
-          "YYYY-MM-DDTHH:mm:ss",
-          "YYYY/MM/DD"
-        ], true);
-
-        if (m.isValid()) {
-          const same = m.isSame(today, 'day');
-          return same;
-        }
-
-        // 2. Fallback to string includes (needed for filenames like "My Note 2026-02-17")
-        const matches = value.includes(todayStr);
-        return matches;
+        const m = this.parseComparableDate(value);
+        return !!m && m.isSame(today, 'day');
       });
       return operator === "is-today" ? isToday : !isToday;
     }
@@ -681,19 +821,8 @@ export class RuleEngine {
       const today = window.moment().startOf('day');
 
       const isBefore = trimmedValues.some((value) => {
-        // @ts-ignore
-        const m = window.moment(value, [
-          window.moment.ISO_8601,
-          "YYYY-MM-DD",
-          "YYYY-MM-DD HH:mm",
-          "YYYY-MM-DDTHH:mm:ss",
-          "YYYY/MM/DD"
-        ], true);
-
-        if (m.isValid()) {
-          return m.isBefore(today, 'day');
-        }
-        return false;
+        const m = this.parseComparableDate(value);
+        return !!m && m.isBefore(today, 'day');
       });
       return operator === "is-before-today" ? isBefore : !isBefore;
     }
@@ -703,19 +832,8 @@ export class RuleEngine {
       const today = window.moment().startOf('day');
 
       const isAfter = trimmedValues.some((value) => {
-        // @ts-ignore
-        const m = window.moment(value, [
-          window.moment.ISO_8601,
-          "YYYY-MM-DD",
-          "YYYY-MM-DD HH:mm",
-          "YYYY-MM-DDTHH:mm:ss",
-          "YYYY/MM/DD"
-        ], true);
-
-        if (m.isValid()) {
-          return m.isAfter(today, 'day');
-        }
-        return false;
+        const m = this.parseComparableDate(value);
+        return !!m && m.isAfter(today, 'day');
       });
       return operator === "is-after-today" ? isAfter : !isAfter;
     }
@@ -812,9 +930,8 @@ export class RuleEngine {
     const limit = window.moment().add(days, 'days').endOf('day');
 
     const matched = values.some((value) => {
-      // @ts-ignore
-      const m = window.moment(value, [window.moment.ISO_8601, "YYYY-MM-DD", "YYYY-MM-DD HH:mm", "YYYY/MM/DD"], false);
-      if (!m.isValid()) {
+      const m = this.parseComparableDate(value);
+      if (!m) {
         return false;
       }
       return m.isSameOrAfter(today) && m.isSameOrBefore(limit);

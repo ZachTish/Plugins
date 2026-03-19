@@ -716,6 +716,8 @@ export class KanbanView extends BasesView {
     return String(text || '')
       .replace(/@@\{[^}]*\}/g, '')
       .replace(/@\{[^}]*\}/g, '')
+      // Also strip Tasks-plugin dataview inline properties (e.g. [scheduled:: 2026-03-17])
+      .replace(/\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, '')
       .trim();
   }
 
@@ -812,6 +814,75 @@ export class KanbanView extends BasesView {
     if (!updated.changed) return false;
 
     lines[meta.lineNumber] = updated.line;
+    await this.app.vault.modify(parentFile, lines.join('\n'));
+    return true;
+  }
+
+  /**
+   * Apply a generic frontmatter-like property to a virtual task line.
+   * Write order preference:
+   *  1. If the task already has a Kanban @{date} token and the prop is a scheduled alias → update that token
+   *  2. If the task already has a [prop:: value] inline property → update it in-place
+   *  3. Otherwise append as [prop:: value] at the end of the task body (before Kanban tokens)
+   */
+  private async applyPropertyToVirtualTask(
+    meta: VirtualKanbanTaskMeta,
+    propName: string,
+    targetValue: string | null,
+  ): Promise<boolean> {
+    const parentFile = this.app.vault.getFileByPath(meta.parentPath);
+    if (!parentFile) return false;
+
+    const content = await this.app.vault.cachedRead(parentFile);
+    const lines = content.split('\n');
+    if (meta.lineNumber < 0 || meta.lineNumber >= lines.length) return false;
+
+    const line = lines[meta.lineNumber];
+    const taskMatch = line.match(/^([\t ]*-\s+\[[^\]]\]\s+)(.*)$/);
+    if (!taskMatch) return false;
+
+    const prefix = taskMatch[1];
+    let body = taskMatch[2] ?? '';
+    const propLower = propName.trim().toLowerCase();
+
+    // Aliases that map to Kanban @{date} token
+    const kanbanDateAliases = new Set(['scheduled', 'start', 'scheduleddate', 'scheduled-date']);
+
+    // 1. Update existing Kanban @{date} token if prop is a scheduled-like alias
+    if (kanbanDateAliases.has(propLower) && /@\{[^}]*\}/.test(body)) {
+      if (targetValue == null) {
+        body = body.replace(/\s*@@?\{[^}]*\}/g, '').trim();
+      } else {
+        // Preserve @@{time} token but replace @{date}
+        body = body.replace(/(^|[^@])@\{[^}]*\}/, `$1@{${targetValue}}`);
+      }
+      const newLine = `${prefix}${body}`;
+      if (newLine === line) return false;
+      lines[meta.lineNumber] = newLine;
+      await this.app.vault.modify(parentFile, lines.join('\n'));
+      return true;
+    }
+
+    // 2 & 3. Update or append [prop:: value] inline property
+    const propRe = new RegExp(`\\[${propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}::\\s*[^\\]]*\\]`, 'i');
+    if (propRe.test(body)) {
+      // Update in-place
+      if (targetValue == null) {
+        body = body.replace(propRe, '').replace(/\s+/g, ' ').trim();
+      } else {
+        body = body.replace(propRe, `[${propName}:: ${targetValue}]`);
+      }
+    } else if (targetValue != null) {
+      // Append before trailing Kanban tokens so they stay at the end
+      const trailingMatch = body.match(/(\s+@@?\{[^}]*\})+$/);
+      const trailing = trailingMatch?.[0] ?? '';
+      const mainBody = trailing ? body.slice(0, -trailing.length) : body;
+      body = `${mainBody.trimEnd()} [${propName}:: ${targetValue}]${trailing}`;
+    }
+
+    const newLine = `${prefix}${body}`.trimEnd();
+    if (newLine === line) return false;
+    lines[meta.lineNumber] = newLine;
     await this.app.vault.modify(parentFile, lines.join('\n'));
     return true;
   }
@@ -1022,6 +1093,63 @@ export class KanbanView extends BasesView {
     keys.add('childOf');
     keys.add('parent');
     return Array.from(keys);
+  }
+
+  /** Returns the set of "done" status values from GCM settings (or defaults). */
+  private getDoneStatuses(): Set<string> {
+    const gcmSettings = this.getGcmSettings();
+    const raw: string[] = gcmSettings?.recurrenceCompletionStatuses?.length
+      ? gcmSettings.recurrenceCompletionStatuses
+      : ['complete', 'wont-do'];
+    return new Set(raw.map((s: string) => String(s || '').trim().toLowerCase()));
+  }
+
+  /**
+   * Write a property update to a file's frontmatter.
+   * When propName is 'status', also manages completedDate automatically.
+   * Fires tps-gcm-files-updated so all listening views refresh immediately.
+   */
+  private async applyFrontmatterProperty(
+    file: TFile,
+    propName: string,
+    value: string | null,
+  ): Promise<void> {
+    const isStatusProp = propName.trim().toLowerCase() === 'status';
+    const doneStatuses = isStatusProp ? this.getDoneStatuses() : null;
+    const nowStamp = (): string =>
+      typeof (window as any).moment === 'function'
+        ? (window as any).moment().format('YYYY-MM-DD HH:mm:ss')
+        : new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+    await this.app.fileManager.processFrontMatter(file, (fm) => {
+      if (value == null) {
+        delete fm[propName];
+      } else {
+        fm[propName] = value;
+      }
+      if (isStatusProp && doneStatuses) {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        if (value != null && doneStatuses.has(normalized)) {
+          fm['completedDate'] = nowStamp();
+        } else {
+          const cdKey = Object.keys(fm).find((k) => k.toLowerCase() === 'completeddate');
+          if (cdKey) delete fm[cdKey];
+        }
+      }
+    });
+    (this.app.workspace as any).trigger('tps-gcm-files-updated', [file.path]);
+  }
+
+  /** Returns true if `ancestorPath` is a direct or transitive ancestor of `childPath`. */
+  private isDescendantOf(childPath: string, ancestorPath: string, visited = new Set<string>()): boolean {
+    if (visited.has(childPath)) return false; // cycle guard
+    visited.add(childPath);
+    const file = this.app.vault.getFileByPath(childPath);
+    if (!file) return false;
+    const parentPath = this.resolveParentPath(file);
+    if (!parentPath) return false;
+    if (parentPath === ancestorPath) return true;
+    return this.isDescendantOf(parentPath, ancestorPath, visited);
   }
 
   private getChildLinkKeys(): string[] {
@@ -1914,7 +2042,7 @@ export class KanbanView extends BasesView {
           if (selectedFiles.length > 1) {
             menu.addItem(it => it.setTitle(`Move ${selectedFiles.length} cards → ${label}`).onClick(async () => {
               for (const file of selectedFiles) {
-                await this.app.fileManager.processFrontMatter(file, fm => { fm[propName] = val; });
+                await this.applyFrontmatterProperty(file, propName, val);
                 await this.applyCompanionRulesToFile(file);
               }
               this.render();
@@ -1922,7 +2050,7 @@ export class KanbanView extends BasesView {
           } else {
             const target = selectedFiles[0] ?? entry.file;
             menu.addItem(it => it.setTitle(`Move → ${label}`).onClick(async () => {
-              await this.app.fileManager.processFrontMatter(target, fm => { fm[propName] = val; });
+              await this.applyFrontmatterProperty(target, propName, val);
               await this.applyCompanionRulesToFile(target);
               this.render();
             }));
@@ -1931,6 +2059,73 @@ export class KanbanView extends BasesView {
       }
       menu.showAtPosition({ x: e.clientX, y: e.clientY });
     });
+
+    // Drag-onto-card: make dragged card a subitem of this card
+    // Only available for real (non-virtual-task) cards that have a known parent key.
+    if (!isVirtualTask) {
+      cardEl.addEventListener('dragover', (e: DragEvent) => {
+        if (!e.dataTransfer) return;
+        if (!e.dataTransfer.types.includes('application/x-kanban-entry')) return;
+        const draggedPath = e.dataTransfer.getData('application/x-kanban-entry');
+        // Can't nest onto itself, and skip if dragged path not yet available (security restriction)
+        if (draggedPath === entry.file.path) return;
+        // Don't allow nesting virtual tasks
+        if (e.dataTransfer.types.includes('application/x-kanban-virtual-task')) return;
+        e.preventDefault();
+        e.stopPropagation(); // don't also highlight the lane cardsWrap
+        e.dataTransfer.dropEffect = 'move';
+        cardEl.addClass('tps-kanban-card--drop-nest');
+      });
+
+      cardEl.addEventListener('dragleave', (e: DragEvent) => {
+        // Only clear if we're leaving the card entirely (not entering a child element)
+        if (!cardEl.contains(e.relatedTarget as Node)) {
+          cardEl.removeClass('tps-kanban-card--drop-nest');
+        }
+      });
+
+      cardEl.addEventListener('drop', async (e: DragEvent) => {
+        cardEl.removeClass('tps-kanban-card--drop-nest');
+        if (!e.dataTransfer) return;
+        if (!e.dataTransfer.types.includes('application/x-kanban-entry')) return;
+        if (e.dataTransfer.types.includes('application/x-kanban-virtual-task')) return;
+        const draggedPath = e.dataTransfer.getData('application/x-kanban-entry');
+        if (!draggedPath || draggedPath === entry.file.path) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        const draggedFile = this.app.vault.getFileByPath(draggedPath);
+        if (!draggedFile) return;
+
+        // Circular-parent guard: disallow if target is already a descendant of dragged
+        if (this.isDescendantOf(entry.file.path, draggedPath)) return;
+
+        // Determine the parent key to write (prefer GCM-configured, else 'parent')
+        const parentKeys = this.getParentLinkKeys();
+        const parentKey = parentKeys[0] ?? 'parent';
+
+        const existingParentPath = this.resolveParentPath(draggedFile);
+        
+        if (existingParentPath === entry.file.path) {
+          // Already a child of this card — toggle off (remove parent link)
+          await this.app.fileManager.processFrontMatter(draggedFile, (fm) => {
+            const actualKey = this.findFrontmatterKeyCaseInsensitive(fm, parentKey);
+            if (actualKey) delete fm[actualKey];
+          });
+        } else {
+          // Generate the correct link format for this vault (respects shortest-path vs full-path settings)
+          const linktext = this.app.metadataCache.fileToLinktext(entry.file, draggedFile.path, true);
+          const linkValue = `[[${linktext}]]`;
+          // Set as subitem of this card
+          await this.app.fileManager.processFrontMatter(draggedFile, (fm) => {
+            fm[parentKey] = linkValue;
+          });
+          // Auto-expand the target so the new child is immediately visible
+          this.expandedSubtreePaths.add(entry.file.path);
+        }
+        this.render();
+      });
+    }
 
     return cardEl;
   }
@@ -2153,22 +2348,21 @@ export class KanbanView extends BasesView {
           const targetValue = targetSelection.value;
           const virtualMeta = this.virtualTaskMetaByPath.get(filePath);
           if (virtualMeta) {
-            if (!this.isTagsPropId(propName)) return;
-            const laneTags = this.collectLaneTagSet(groups);
-            const targetTag = targetValue;
-            const changed = await this.applyLaneTagToVirtualTask(virtualMeta, laneTags, targetTag);
-            if (changed) this.render();
+            if (this.isTagsPropId(propName)) {
+              // Tag-based lane: update the inline #tag on the task line
+              const laneTags = this.collectLaneTagSet(groups);
+              const changed = await this.applyLaneTagToVirtualTask(virtualMeta, laneTags, targetValue);
+              if (changed) this.render();
+            } else {
+              // Property-based lane (date, status, etc.): write back to task line
+              const changed = await this.applyPropertyToVirtualTask(virtualMeta, propName, targetValue);
+              if (changed) this.render();
+            }
             return;
           }
           const file = this.app.vault.getFileByPath(filePath);
           if (!file) return;
-          await this.app.fileManager.processFrontMatter(file, fm => {
-            if (targetValue == null) {
-              delete fm[propName];
-            } else {
-              fm[propName] = targetValue;
-            }
-          });
+          await this.applyFrontmatterProperty(file, propName, targetValue);
           await this.applyCompanionRulesToFile(file);
           this.render();
         });

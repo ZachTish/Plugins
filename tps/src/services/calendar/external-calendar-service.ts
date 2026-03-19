@@ -1,7 +1,7 @@
 
 import { requestUrl } from 'obsidian';
-import * as logger from "../../../logger";
-import { ExternalCalendarEvent } from "../../../types";
+import * as logger from '../../logger';
+import { ExternalCalendarEvent } from '../../types';
 import { ICalParserService } from "./ical-parser-service";
 
 export class ExternalCalendarService {

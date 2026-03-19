@@ -324,7 +324,7 @@ export const PLUGIN_STYLES = `
         
         position: fixed;
         /* Move up to clear Obsidian mobile toolbar (approx 50px) + status bar */
-        bottom: calc(var(--tps-gcm-live-bottom, 16px) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) - var(--tps-auto-base-embed-gap, 12px));
+        bottom: calc(var(--tps-auto-base-embed-bottom, var(--tps-gcm-live-bottom, 16px)) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) + 8px);
         left: var(--tps-gcm-live-left);
         right: var(--tps-gcm-live-right);
         /* Respect Obsidian UI text scaling */

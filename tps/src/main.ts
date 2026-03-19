@@ -13,11 +13,13 @@ import { CalendarFeature } from './features/calendar/calendar-feature';
 import { NavigatorFeature } from './features/notebook-navigator/navigator-feature';
 import { NotifierFeature } from './features/notifier/notifier-feature';
 import { KanbanFeature } from './features/kanban/kanban-feature';
+import { AutoEmbedFeature } from './features/auto-embed/auto-embed-feature';
 import { MigrationService } from './services/automation/migration-service';
 
 export default class TPSPlugin extends Plugin {
     settings: TPSSettings;
     api: TPSAPI;
+    [key: string]: any;
 
     // Features
     features = {

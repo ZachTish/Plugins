@@ -43,9 +43,13 @@ export class PersistentMenuManager {
   private handleWindowResize: (() => void) | null = null;
   private visualViewportResizeHandler: (() => void) | null = null;
   private visualViewportScrollHandler: (() => void) | null = null;
+  private keyboardFocusInHandler: ((evt: Event) => void) | null = null;
+  private keyboardFocusOutHandler: (() => void) | null = null;
+  private keyboardFocusTimer: number | null = null;
   private baseHeight: number = window.innerHeight;
   private isCurrentlyHidden: boolean = false;
   private keyboardVisible: boolean = false;
+  private editableFocused: boolean = false;
   private swipeCollapsed: boolean = false;
   private scrollHideListeners: Map<MarkdownView, { scroller: HTMLElement; listener: () => void; lastTop: number; accum: number }> = new Map();
   private topLinkPreviewArmedPath: string | null = null;
@@ -169,6 +173,43 @@ export class PersistentMenuManager {
     // Critical fallback for Obsidian Mobile where visualViewport doesn't always fire
     window.addEventListener('resize', this.visualViewportResizeHandler);
 
+    // focusin/focusout: most reliable keyboard-appear signal on mobile.
+    // When the user taps into a text editor the keyboard animates in over ~300ms;
+    // we re-evaluate after that delay so the viewport has finished shrinking.
+    this.keyboardFocusInHandler = (evt: Event) => {
+      const target = evt.target as HTMLElement | null;
+      if (!target) return;
+      const isEditable =
+        target.isContentEditable ||
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        !!target.closest('.cm-editor');
+      if (!isEditable) return;
+      // Immediately hide menus before the keyboard animation begins — don't wait
+      // for the viewport-height delta to cross the threshold (that's too late).
+      this.editableFocused = true;
+      this.applyAllMenuVisibility();
+      if (this.keyboardFocusTimer !== null) window.clearTimeout(this.keyboardFocusTimer);
+      // Re-evaluate after keyboard animation completes (~350 ms on most phones).
+      this.keyboardFocusTimer = window.setTimeout(() => {
+        this.keyboardFocusTimer = null;
+        evaluateKeyboardState();
+      }, 350);
+    };
+    this.keyboardFocusOutHandler = () => {
+      // Clear the anticipation flag immediately so the menu can restore as soon
+      // as the keyboard-gone evaluation confirms the viewport is full-height again.
+      this.editableFocused = false;
+      if (this.keyboardFocusTimer !== null) window.clearTimeout(this.keyboardFocusTimer);
+      // Keyboard dismissal is faster; 100 ms is enough.
+      this.keyboardFocusTimer = window.setTimeout(() => {
+        this.keyboardFocusTimer = null;
+        evaluateKeyboardState();
+      }, 100);
+    };
+    document.addEventListener('focusin', this.keyboardFocusInHandler, { passive: true, capture: true });
+    document.addEventListener('focusout', this.keyboardFocusOutHandler, { passive: true, capture: true });
+
     evaluateKeyboardState();
   }
 
@@ -188,8 +229,33 @@ export class PersistentMenuManager {
       window.removeEventListener('resize', this.visualViewportResizeHandler);
     }
 
+    if (this.keyboardFocusInHandler) {
+      document.removeEventListener('focusin', this.keyboardFocusInHandler, { capture: true });
+      this.keyboardFocusInHandler = null;
+    }
+    if (this.keyboardFocusOutHandler) {
+      document.removeEventListener('focusout', this.keyboardFocusOutHandler, { capture: true });
+      this.keyboardFocusOutHandler = null;
+    }
+    if (this.keyboardFocusTimer !== null) {
+      window.clearTimeout(this.keyboardFocusTimer);
+      this.keyboardFocusTimer = null;
+    }
+
     this.visualViewportResizeHandler = null;
     this.visualViewportScrollHandler = null;
+  }
+
+  private applyAuxElementVisibility(el: HTMLElement, keyboardVisible: boolean): void {
+    if (keyboardVisible) {
+      el.style.visibility = 'hidden';
+      el.style.opacity = '0';
+      el.style.pointerEvents = 'none';
+    } else {
+      el.style.removeProperty('visibility');
+      el.style.removeProperty('opacity');
+      el.style.removeProperty('pointer-events');
+    }
   }
 
   private handleKeyboardVisibilityChange(visible: boolean): void {
@@ -210,6 +276,20 @@ export class PersistentMenuManager {
       if (panel?.isConnected) {
         this.applyInlinePanelVisibility(panel);
       }
+    }
+
+    // Also hide/show inline overlay elements that aren't tracked in `menus`.
+    for (const el of this.noteGraphPanels.values()) {
+      if (el.isConnected) this.applyAuxElementVisibility(el, visible);
+    }
+    for (const el of this.topParentNavs.values()) {
+      if (el.isConnected) this.applyAuxElementVisibility(el, visible);
+    }
+    for (const el of this.titleIcons.values()) {
+      if (el.isConnected) this.applyAuxElementVisibility(el, visible);
+    }
+    for (const el of this.noteReferencesPanels.values()) {
+      if (el.isConnected) this.applyInlinePanelVisibility(el);
     }
   }
 
@@ -791,8 +871,11 @@ export class PersistentMenuManager {
     // Note: the subitems panel sits BELOW the context menu bar via flexbox order â€” no offsetY adjustment needed here.
     const position = isReadingMenu ? 'center' : (this.plugin.settings?.liveMenuPosition || 'center');
 
-    // Only set visibility if not gesture-collapsed (don't override gesture state)
-    if (!this.swipeCollapsed) {
+    // Only restore visibility if not gesture-collapsed AND not keyboard-suppressed.
+    // Do NOT restore visibility when the keyboard is up or anticipated: the ResizeObserver
+    // fires this method continuously during the keyboard animation and would fight the
+    // keyboard-hidden state, causing the menu to flash visible as the keyboard slides in.
+    if (!this.swipeCollapsed && !this.shouldHideForKeyboard()) {
       menuEl.style.visibility = 'visible';
       menuEl.style.opacity = '1';
       menuEl.style.pointerEvents = 'auto';
@@ -833,7 +916,7 @@ export class PersistentMenuManager {
       menuEl.style.transform = 'translate(0px, 0px)';
     } else {
       menuEl.style.top = 'auto';
-      menuEl.style.bottom = 'calc(var(--tps-gcm-live-bottom, 16px) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) - var(--tps-auto-base-embed-gap, 12px))';
+      menuEl.style.bottom = 'calc(var(--tps-auto-base-embed-bottom, var(--tps-gcm-live-bottom, 16px)) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) + 8px)';
       menuEl.style.transform = `translate(0px, ${offsetY}px)`;
     }
 
@@ -2398,10 +2481,7 @@ export class PersistentMenuManager {
   }
 
   private applyMenuVisibility(menuEl: HTMLElement): void {
-    const keyboardHidden =
-      this.keyboardVisible &&
-      Platform.isMobile &&
-      (this.plugin.settings.suppressMobileKeyboard ?? true);
+    const keyboardHidden = this.shouldHideForKeyboard();
     menuEl.classList.toggle('tps-gcm-gesture-collapsed', this.swipeCollapsed);
     menuEl.classList.toggle('tps-gcm-menu--keyboard-hidden', keyboardHidden);
 
@@ -2418,8 +2498,8 @@ export class PersistentMenuManager {
   }
 
   private applyInlinePanelVisibility(panelEl: HTMLElement): void {
-    // When keyboard appears, force-hide panel so it does not cover the viewport.
-    const keyboardHidden = this.keyboardVisible && Platform.isMobile;
+    // When keyboard appears (or is anticipated), force-hide panel so it does not cover the viewport.
+    const keyboardHidden = this.shouldHideForKeyboard();
     panelEl.classList.toggle('tps-gcm-subitems-panel--keyboard-hidden', keyboardHidden);
     panelEl.classList.toggle('tps-gcm-gesture-collapsed', this.swipeCollapsed);
 
@@ -2438,12 +2518,29 @@ export class PersistentMenuManager {
   private setSwipeCollapsed(collapsed: boolean): void {
     if (this.swipeCollapsed === collapsed) return;
     this.swipeCollapsed = collapsed;
+    this.applyAllMenuVisibility();
+  }
 
+  /**
+   * Returns true when the menu should be hidden due to the keyboard being up
+   * or a focused editable signalling the keyboard is about to appear.
+   */
+  private shouldHideForKeyboard(): boolean {
+    if (!Platform.isMobile) return false;
+    if (!(this.plugin.settings.suppressMobileKeyboard ?? true)) return false;
+    return this.keyboardVisible || this.editableFocused;
+  }
+
+  /**
+   * Push the current visibility state to all tracked menus and panels without
+   * triggering a geometry recalculation. Used for fast state changes (keyboard
+   * appear/disappear, focus in/out).
+   */
+  private applyAllMenuVisibility(): void {
     for (const instances of this.menus.values()) {
       if (instances.reading?.isConnected) this.applyMenuVisibility(instances.reading);
       if (instances.live?.isConnected) this.applyMenuVisibility(instances.live);
     }
-
     for (const panel of this.inlineSubitemsPanels.values()) {
       if (panel.isConnected) this.applyInlinePanelVisibility(panel);
     }

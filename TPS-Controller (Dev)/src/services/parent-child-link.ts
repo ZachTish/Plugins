@@ -176,10 +176,7 @@ function resolveLinkToFile(app: App, value: any, sourcePath: string): TFile | nu
 
 function linkReferencesFile(app: App, value: any, sourcePath: string, target: TFile): boolean {
     const resolved = resolveLinkToFile(app, value, sourcePath);
-    if (resolved) return resolved.path === target.path;
-
-    const basename = extractLinkTargetBasename(value);
-    return !!basename && basename.toLowerCase() === target.basename.toLowerCase();
+    return resolved ? resolved.path === target.path : false;
 }
 
 function extractLinkTargetBasename(value: any): string | null {

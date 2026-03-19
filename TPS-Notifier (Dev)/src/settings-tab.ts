@@ -45,10 +45,12 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
             cls: 'setting-item-description'
         });
 
-        const createMainCategory = (title: 'Features' | 'Rules' | 'Interaction' | 'UI Display'): HTMLElement => {
-            const category = containerEl.createDiv({ cls: 'tps-settings-main-category' });
-            category.createEl('h3', { text: title });
-            return category.createDiv({ cls: 'tps-settings-main-content' });
+        const createMainCategory = (title: 'Features' | 'Rules' | 'Interaction' | 'UI Display', defaultOpen = true): HTMLElement => {
+            const details = containerEl.createEl('details', { cls: 'tps-settings-main-category' });
+            if (defaultOpen) details.setAttr('open', 'true');
+            const summary = details.createEl('summary', { cls: 'tps-settings-main-summary' });
+            summary.createEl('h3', { text: title });
+            return details.createDiv({ cls: 'tps-settings-main-content' });
         };
 
         const featuresCategory = createMainCategory('Features');

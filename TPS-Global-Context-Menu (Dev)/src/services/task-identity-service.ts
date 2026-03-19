@@ -83,10 +83,10 @@ export interface IdentitySettings {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** YYYY-MM-DD basename pattern used to detect daily note files. */
-const DAILY_NOTE_BASENAME_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const DAILY_NOTE_BASENAME_PATTERN = /^\d{4}[-_/]\d{2}[-_/]\d{2}$/;
 
 /** YYYY-MM-DD date-only pattern used to detect all-day values. */
-const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_ONLY_PATTERN = /^\d{4}[-_/]\d{2}[-_/]\d{2}$/;
 
 const DEFAULT_COMPLETION_STATUSES = ['complete', 'done', 'finished'];
 const DEFAULT_WONT_DO_STATUSES    = ['wont-do', 'cancelled', 'canceled', 'skipped'];

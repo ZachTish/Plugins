@@ -46,9 +46,6 @@ export class ICalParserService {
             const exceptions = new Map<string, ICAL.Time[]>();
             const parsedEvents: { event: ICAL.Event; vevent: ICAL.Component }[] = [];
 
-            // Pass 1: Parse all events and index exceptions
-            const singleEventUidCounts = new Map<string, number>();
-
             // Pass 1: Gather recurrence exceptions and count UIDs
             for (const vevent of vevents) {
                 try {
@@ -64,10 +61,6 @@ export class ICalParserService {
                             exceptions.set(uid, []);
                         }
                         exceptions.get(uid)?.push(event.recurrenceId);
-                    } else if (!isRecurringMaster) {
-                        // Count single events to detect identical UIDs across different events
-                        const uid = event.uid;
-                        singleEventUidCounts.set(uid, (singleEventUidCounts.get(uid) || 0) + 1);
                     }
                 } catch (e) {
                     logger.warn('[ICalParser] Error pre-parsing event:', e);
@@ -236,16 +229,10 @@ export class ICalParserService {
                             // Use raw ICAL.Time components for deterministic ID
                             stableId = `${uid}-${this.icalTimeToStableString(event.recurrenceId)}`;
                         } else {
-                            // Always suffix single events with their start components.
-                            // This prevents the ID from flipping between `uid` and `uid-dup-...`
-                            // when the number of events sharing this UID varies across fetches
-                            // (e.g., an old duplicate ages out of the query range).
-                            const duplicateCount = singleEventUidCounts.get(uid) || 1;
-                            if (duplicateCount > 1) {
-                                stableId = `${uid}-dup-${this.icalTimeToStableString(event.startDate)}`;
-                            } else {
-                                stableId = uid;
-                            }
+                            // Keep single-event identity stable across sync runs.
+                            // Always suffix with start components to avoid ID drift when
+                            // feeds intermittently include/exclude duplicate UIDs.
+                            stableId = `${uid}-${this.icalTimeToStableString(event.startDate)}`;
                         }
 
                         this.pushEvent(

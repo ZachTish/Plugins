@@ -34,6 +34,7 @@ export interface BaseEmbedRule {
 export interface AutoBaseEmbedSettings {
   enabled: boolean;
   enableCanvasEmbeds: boolean;
+  enableCanvasNodeEmbeds: boolean;
   renderMode: "floating" | "inline";
   inlinePlacement: "after-title" | "after-content";
   rules: BaseEmbedRule[];
@@ -50,6 +51,7 @@ export interface AutoBaseEmbedSettings {
 const DEFAULT_SETTINGS: AutoBaseEmbedSettings = {
   enabled: true,
   enableCanvasEmbeds: false,
+  enableCanvasNodeEmbeds: false,
   renderMode: "floating",
   inlinePlacement: "after-content",
   rules: [],
@@ -93,9 +95,22 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   private keyboardBaseHeight: number = window.innerHeight;
   private keyboardHidden: boolean = false;
   private modalObserver: MutationObserver | null = null;
+  private panelEmbeds = new WeakMap<HTMLElement, any>();
   private lastEditorFocused: boolean = false;
   private queuedRefreshAllTimer: number | null = null;
   private queuedRefreshAllOptions: { resetExpanded?: boolean } | null = null;
+
+  // ── Canvas node embed state ──────────────────────────────────────────────
+  /** Per-canvas-leaf data: overlay map, expanded state, MutationObserver. */
+  private canvasLeafData = new Map<WorkspaceLeaf, {
+    observer: MutationObserver | null;
+    nodeOverlays: Map<HTMLElement, HTMLElement>; // nodeEl → overlay container
+    nodeExpanded: Map<HTMLElement, Set<string>>; // nodeEl → expanded basePaths
+    nodeSig: Map<HTMLElement, string>;           // nodeEl → last render signature
+  }>();
+  /** Guards against concurrent scans for the same node element. */
+  private canvasNodeBuilding = new WeakSet<HTMLElement>();
+  private canvasScanTimers = new Map<WorkspaceLeaf, number>();
 
   private getLeafScrollSnapshot(leaf: WorkspaceLeaf): Record<string, number> {
     const view = leaf.view as any;
@@ -161,7 +176,18 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("layout-change", () => {
-        debouncedRefresh();
+        // Skip if every supported leaf already has a freshly-rendered connected host.
+        // Rendering an inline embed triggers layout-change on the reading view;
+        // acting on it would start a render → layout-change → render loop.
+        const leaves = this.getSupportedLeaves();
+        const allFresh = leaves.length > 0 && leaves.every((leaf) => {
+          const overlay = this.overlayByLeaf.get(leaf);
+          if (!overlay?.isConnected) return false;
+          if (!this.hasRenderableHost(overlay)) return false;
+          const lastRender = this.lastRefreshMetaByLeaf.get(leaf);
+          return !!lastRender && Date.now() - lastRender.at < REFRESH_COOLDOWN_MS;
+        });
+        if (!allFresh) debouncedRefresh();
       })
     );
     this.registerEvent(
@@ -200,6 +226,12 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         const activeLeaf = this.app.workspace.getMostRecentLeaf?.() || this.app.workspace.activeLeaf;
         const activeFile = activeLeaf ? this.getLeafFile(activeLeaf) : null;
         if (file && activeFile && file.path === activeFile.path && activeLeaf) {
+          // MarkdownRenderer.render(…, sourcePath) causes Obsidian to register a
+          // virtual embed from the source file, which fires metadataCache.changed
+          // for that same file. Guard against this render-triggered noise by
+          // ignoring changes that arrive within the post-render cooldown window.
+          const lastRender = this.lastRefreshMetaByLeaf.get(activeLeaf);
+          if (lastRender && Date.now() - lastRender.at < REFRESH_COOLDOWN_MS) return;
           this.scheduleTypingRefresh(activeLeaf);
           this.scheduleLeafRefresh(activeLeaf, { resetExpanded: false }, 250);
           return;
@@ -208,6 +240,9 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           const impactedLeaves = this.getLeavesImpactedByFile(file.path);
           if (impactedLeaves.length > 0) {
             for (const leaf of impactedLeaves) {
+              // Same guard: skip base-file metadata changes that arise from rendering.
+              const lastRender = this.lastRefreshMetaByLeaf.get(leaf);
+              if (lastRender && Date.now() - lastRender.at < REFRESH_COOLDOWN_MS) continue;
               this.scheduleLeafRefresh(leaf, { resetExpanded: false }, 250);
             }
             return;
@@ -226,11 +261,38 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     this.registerInterval(
       window.setInterval(() => {
         this.checkAndReattachOverlays();
+        if (this.settings.enableCanvasNodeEmbeds) {
+          for (const leaf of this.canvasLeafData.keys()) {
+            this.scheduleCanvasScan(leaf);
+          }
+        }
       }, 2000)
     );
 
     // Force a clean first render on startup even if editor focus is active.
     this.refreshAllSupportedViews({ resetExpanded: true });
+
+    // Start canvas-node embed watchers after layout is ready.
+    this.app.workspace.onLayoutReady(() => {
+      if (this.settings.enableCanvasNodeEmbeds) {
+        this.app.workspace.getLeavesOfType("canvas").forEach(leaf => this.startCanvasLeafWatcher(leaf));
+      }
+    });
+
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        if (!this.settings.enableCanvasNodeEmbeds) return;
+        const currentCanvasLeaves = this.app.workspace.getLeavesOfType("canvas");
+        // Start watchers for new canvas leaves
+        currentCanvasLeaves.forEach(leaf => {
+          if (!this.canvasLeafData.has(leaf)) this.startCanvasLeafWatcher(leaf);
+        });
+        // Stop watchers for canvas leaves that no longer exist
+        for (const leaf of this.canvasLeafData.keys()) {
+          if (!currentCanvasLeaves.includes(leaf)) this.stopCanvasLeafWatcher(leaf);
+        }
+      })
+    );
   }
 
   private isEditorFocused(): boolean {
@@ -376,6 +438,14 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
   onunload(): void {
     this.clearAllOverlaysFromDom();
+    // Stop all canvas node watchers
+    for (const leaf of this.canvasLeafData.keys()) {
+      this.stopCanvasLeafWatcher(leaf);
+    }
+    for (const timer of this.canvasScanTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    this.canvasScanTimers.clear();
     this.teardownKeyboardDetection();
     this.modalObserver?.disconnect();
     this.modalObserver = null;
@@ -477,6 +547,10 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   private getLeavesImpactedByFile(filePath: string): WorkspaceLeaf[] {
     const normalizedFilePath = normalizePath(filePath);
     if (!normalizedFilePath) return [];
+    // .base files are managed reactively by the Bases plugin itself. Responding
+    // to their metadataCache.changed events would cause an infinite refresh loop
+    // (Bases updates its cache entry → we re-render → Bases updates again → ...).
+    if (normalizedFilePath.endsWith(".base")) return [];
 
     const impacted: WorkspaceLeaf[] = [];
     for (const leaf of this.getSupportedLeaves()) {
@@ -1082,7 +1156,8 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
     const shouldResetExpanded = options?.resetExpanded ?? true;
     const prevFilePath = this.currentFileByLeaf.get(leaf);
-    if (shouldResetExpanded || (prevFilePath && prevFilePath !== file.path)) {
+    const fileChanged = !!prevFilePath && prevFilePath !== file.path;
+    if (shouldResetExpanded || fileChanged) {
       this.expandedPanels.delete(leaf);
     }
     this.currentFileByLeaf.set(leaf, file.path);
@@ -1163,14 +1238,28 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     container.setAttribute("data-base-paths", basePaths.join(","));
     container.setAttribute("data-source-path", file.path);
 
+    // Seed the cooldown timestamp BEFORE rendering so the metadataCache.changed
+    // guard is active if MarkdownRenderer.render (fallback path) is used.
+    this.lastRefreshMetaByLeaf.set(leaf, { signature: renderSignature, at: Date.now() });
+
     const nextPanels: HTMLElement[] = [];
-    const oldPanels = Array.from(container.querySelectorAll(`.${EMBED_CLASS}__panel`));
+    const oldPanels = Array.from(container.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
+
+    // When the file has changed, immediately remove old panels so the previous
+    // file's content is never displayed under the new file context. For same-file
+    // re-renders (metadata updates, etc.) we keep the old panels alive until the
+    // new ones are ready to avoid a flash of empty content.
+    if (fileChanged && oldPanels.length > 0) {
+      for (const p of oldPanels) this.unloadPanel(p);
+    }
 
     for (const rule of matchingRules) {
       if (this.renderTokens.get(leaf) !== nextToken) return;
       if (file.path === rule.basePath) continue;
       const baseFile = this.app.vault.getAbstractFileByPath(rule.basePath);
       if (!(baseFile instanceof TFile)) continue;
+      // Pass file.path as sourcePath so the Bases plugin resolves queries and
+      // relative paths in the context of the note that contains the embed.
       const panel = await this.buildPanel(leaf, baseFile, rule.basePath, file.path, view as any, nextToken, container);
       if (panel && this.renderTokens.get(leaf) === nextToken) {
         nextPanels.push(panel);
@@ -1181,8 +1270,11 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       const currentNew = Array.from(container.querySelectorAll(`.${EMBED_CLASS}__panel`)).filter((p) => !oldPanels.includes(p as HTMLElement));
       currentNew.forEach((p) => p.remove());
 
+      // Only tolerate a transient cache drop for same-file re-renders.
+      // If the file has changed, never preserve panels from the old file.
       if (
-        container.getAttribute("data-source-path") === file.path
+        !fileChanged
+        && container.getAttribute("data-source-path") === file.path
         && oldPanels.length > 0
       ) {
         this.logScrollSnapshot("refresh-preserved-empty", leaf, file, { token: nextToken });
@@ -1195,14 +1287,11 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     }
     
     for (const oldPanel of oldPanels) {
-      const headerObserver = this.headerObservers.get(oldPanel as HTMLElement);
-      if (headerObserver) {
-        headerObserver.disconnect();
-        this.headerObservers.delete(oldPanel as HTMLElement);
-      }
-      oldPanel.remove();
+      this.unloadPanel(oldPanel as HTMLElement);
     }
     this.renderSignatureByLeaf.set(leaf, renderSignature);
+    // Refresh the timestamp now that all panels have finished rendering, so the
+    // cooldown window extends from render-end rather than only from render-start.
     this.lastRefreshMetaByLeaf.set(leaf, { signature: renderSignature, at: Date.now() });
     this.logScrollSnapshot("refresh-end", leaf, file, {
       token: nextToken,
@@ -1283,32 +1372,8 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     update();
   }
 
-  private scheduleHeaderSync(leaf: WorkspaceLeaf): void {
-    const lastTyping = this.lastTypingAt.get(leaf);
-    if (lastTyping && Date.now() - lastTyping < 5000) return;
-    if (!this.hasExpandedPanel(leaf)) return;
-    const existing = this.headerSyncTimers.get(leaf);
-    if (existing != null) window.clearTimeout(existing);
-    const timer = window.setTimeout(() => {
-      this.headerSyncTimers.delete(leaf);
-      this.syncLeafHeaders(leaf);
-    }, 250);
-    this.headerSyncTimers.set(leaf, timer);
-  }
-
   private scheduleTypingRefresh(leaf: WorkspaceLeaf): void {
     this.lastTypingAt.set(leaf, Date.now());
-  }
-
-  private syncLeafHeaders(leaf: WorkspaceLeaf): void {
-    const overlay = this.overlayByLeaf.get(leaf);
-    if (!overlay?.isConnected) return;
-    const panels = Array.from(overlay.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
-    for (const panel of panels) {
-      if (panel.getAttribute(COLLAPSED_ATTR) === "true") continue;
-      const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
-      if (contentEl) this.syncBaseHeader(contentEl, panel);
-    }
   }
 
   private hasExpandedPanel(leaf: WorkspaceLeaf): boolean {
@@ -1318,15 +1383,29 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     return panels.some((panel) => panel.getAttribute(COLLAPSED_ATTR) === "false");
   }
 
+  private unloadPanel(panel: HTMLElement): void {
+    const headerObserver = this.headerObservers.get(panel);
+    if (headerObserver) {
+      headerObserver.disconnect();
+      this.headerObservers.delete(panel);
+    }
+    const embed = this.panelEmbeds.get(panel);
+    if (embed) {
+      try {
+        // removeChild triggers embed.unload() and removes it from the component tree.
+        this.removeChild(embed);
+      } catch {
+        try { embed.unload?.(); } catch { /* ignore */ }
+      }
+      this.panelEmbeds.delete(panel);
+    }
+    panel.remove();
+  }
+
   private clearPanels(container: HTMLElement): void {
     const panels = Array.from(container.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
     for (const panel of panels) {
-      const headerObserver = this.headerObservers.get(panel);
-      if (headerObserver) {
-        headerObserver.disconnect();
-        this.headerObservers.delete(panel);
-      }
-      panel.remove();
+      this.unloadPanel(panel);
     }
     container.innerHTML = "";
   }
@@ -1347,11 +1426,12 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     panel.setAttribute(COLLAPSED_ATTR, isExpanded ? "false" : "true");
     panel.setAttribute(RENDERING_ATTR, "true");
     panel.setAttribute("data-base-path", basePath);
+    // Derive a human-readable label from the base filename (strip directory and extension).
+    const baseLabel = basePath.replace(/.*\//, "").replace(/\.base$/i, "");
     panel.innerHTML = `
       <div class="${EMBED_CLASS}__bar">
         <div class="${EMBED_CLASS}__bar-left">
-          <div class="${EMBED_CLASS}__title">Related</div>
-          <span class="${EMBED_CLASS}__count"></span>
+          <span class="${EMBED_CLASS}__bar-label">${baseLabel}</span>
         </div>
         <div class="${EMBED_CLASS}__bar-right">
           <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded base">▸</button>
@@ -1359,12 +1439,6 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       </div>
       <div class="${EMBED_CLASS}__content"></div>
     `;
-
-    const titleEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__title`);
-    if (titleEl) {
-      const headerTitle = await this.getBaseHeaderTitle(baseFile);
-      titleEl.textContent = headerTitle;
-    }
 
     const toggle = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
     const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
@@ -1408,9 +1482,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         this.setManualExpansionState(basePath, false);
       }
       if (contentEl) {
-        if (collapsed) {
-          this.attachHeaderObserver(leaf, contentEl, panel);
-        } else {
+        if (!collapsed) {
           const existing = this.headerObservers.get(panel);
           if (existing) {
             existing.disconnect();
@@ -1439,38 +1511,49 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       container.appendChild(panel);
     }
 
-    await MarkdownRenderer.render(this.app, `![[${basePath}]]`, renderTarget, sourcePath, view);
+    // Prefer app.embedRegistry over MarkdownRenderer.render.
+    //
+    // MarkdownRenderer.render(app, "![[base.base]]", el, sourcePath, view)
+    // causes Obsidian to register sourcePath as embedding base.base in the
+    // metadataCache. This fires metadataCache.changed for the NOTE repeatedly
+    // as the Bases plugin updates its query results — creating an infinite
+    // refresh loop in inline mode.
+    //
+    // app.embedRegistry instantiates the Bases embed component directly,
+    // bypassing markdown parsing and metadata registration entirely while
+    // still passing the correct sourcePath for query/filter resolution.
+    let usedEmbedRegistry = false;
+    {
+      const embedRegistry = (this.app as any).embedRegistry;
+      const embedCtor = embedRegistry?.embedByExtension?.get?.("base");
+      if (embedCtor) {
+        try {
+          const ctx = { app: this.app, sourcePath };
+          const embed = embedCtor(ctx, baseFile, "");
+          if (embed?.containerEl) {
+            renderTarget.appendChild(embed.containerEl);
+            // addChild registers the embed in Obsidian's component tree and calls
+            // embed.load() (which triggers onload). This is critical for multiple
+            // embeds: without it, embed instances are orphaned and may conflict.
+            try {
+              this.addChild(embed as any);
+            } catch {
+              try { if (typeof embed.load === "function") embed.load(); } catch { /* ignore */ }
+            }
+            this.panelEmbeds.set(panel, embed);
+            usedEmbedRegistry = true;
+          }
+        } catch (e) {
+          console.warn("[TPS Auto Base Embed] embedRegistry failed, falling back to MarkdownRenderer", e);
+        }
+      }
+    }
+    if (!usedEmbedRegistry) {
+      await MarkdownRenderer.render(this.app, `![[${basePath}]]`, renderTarget, sourcePath, view);
+    }
     if (this.renderTokens.get(leaf) !== renderToken) return null;
     this.syncEmbeddedPanelMode(contentEl, panel);
-    // Always capture the latest count once after render (even if collapsed)
-    this.syncBaseCount(contentEl, panel);
-    window.setTimeout(() => {
-      if (this.renderTokens.get(leaf) !== renderToken) return;
-      this.syncEmbeddedPanelMode(contentEl, panel);
-      this.syncBaseCount(contentEl, panel);
-    }, 250);
-    window.setTimeout(() => {
-      if (this.renderTokens.get(leaf) !== renderToken) return;
-      this.syncEmbeddedPanelMode(contentEl, panel);
-      this.syncBaseCount(contentEl, panel);
-    }, 1000);
-    this.pollForCount(leaf, contentEl, panel, renderToken);
     this.attachHeaderObserver(leaf, contentEl, panel);
-    if (panel.getAttribute(COLLAPSED_ATTR) === "false") {
-      // Extra sync passes to catch late results count updates
-      window.setTimeout(() => {
-        if (this.renderTokens.get(leaf) !== renderToken) return;
-        this.syncBaseHeader(contentEl, panel);
-        this.syncBaseCount(contentEl, panel);
-      }, 250);
-      window.setTimeout(() => {
-        if (this.renderTokens.get(leaf) !== renderToken) return;
-        this.syncBaseHeader(contentEl, panel);
-        this.syncBaseCount(contentEl, panel);
-      }, 1000);
-    }
-
-    // Keep rendering state until we capture a count (or polling exhausts) so Bases can fully mount.
     if (panel.getAttribute(COLLAPSED_ATTR) === "false") {
       panel.setAttribute(RENDERING_ATTR, "false");
     }
@@ -1485,33 +1568,9 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   }
 
   private attachHeaderObserver(leaf: WorkspaceLeaf, contentEl: HTMLElement, panel: HTMLElement): void {
-    const existing = this.headerObservers.get(panel);
-    if (existing) {
-      existing.disconnect();
-      this.headerObservers.delete(panel);
-    }
-    const sync = () => {
-      this.syncEmbeddedPanelMode(contentEl, panel);
-      this.syncBaseHeader(contentEl, panel);
-      this.syncBaseCount(contentEl, panel);
-      if (panel.getAttribute(COLLAPSED_ATTR) === "true") {
-        const cached = panel.getAttribute("data-last-count") || "";
-        const parsedCached = this.extractCountValue(cached);
-        if (cached && parsedCached !== 0) {
-          const observer = this.headerObservers.get(panel);
-          if (observer) {
-            observer.disconnect();
-            this.headerObservers.delete(panel);
-          }
-        }
-      }
-    };
-    sync();
-    if (typeof MutationObserver !== "function") return;
-    const debouncedSync = this.debounce(() => sync(), 100);
-    const observer = new MutationObserver(() => debouncedSync());
-    observer.observe(contentEl, { childList: true, subtree: true, characterData: true, attributes: true });
-    this.headerObservers.set(panel, observer);
+    // No longer needed — we don't touch the Bases DOM at all.
+    // The bar label is set from the file name at panel-build time.
+    panel.setAttribute(RENDERING_ATTR, "false");
   }
 
   private syncEmbeddedPanelMode(contentEl: HTMLElement, panel: HTMLElement): void {
@@ -1520,214 +1579,9 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     panel.classList.toggle(`${EMBED_CLASS}__panel--calendar`, isCalendarPanel);
   }
 
-  private syncBaseHeader(contentEl: HTMLElement, panel: HTMLElement): void {
-    if (panel.getAttribute(COLLAPSED_ATTR) === "true") {
-      this.syncBaseCount(contentEl, panel);
-      return;
-    }
-    if (this.isInlinePanel(panel)) {
-      this.syncBaseCount(contentEl, panel);
-      return;
-    }
-    const barLeft = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar-left`);
-    if (!barLeft) return;
-    const baseHeader =
-      contentEl.querySelector<HTMLElement>(".bases-view-header") ??
-      contentEl.querySelector<HTMLElement>(".base-view-header") ??
-      contentEl.querySelector<HTMLElement>(".bases-header") ??
-      contentEl.querySelector<HTMLElement>(".view-header");
-    if (!baseHeader) return;
-    if (baseHeader.parentElement !== barLeft) {
-      baseHeader.classList.add(`${EMBED_CLASS}__base-header`);
-      barLeft.empty();
-      barLeft.appendChild(baseHeader);
-    }
-    const duplicates = contentEl.querySelectorAll<HTMLElement>(
-      ".bases-view-header, .base-view-header, .bases-header, .view-header"
-    );
-    duplicates.forEach((el) => {
-      if (el !== baseHeader) {
-        el.classList.add(`${EMBED_CLASS}__hidden-header`);
-      }
-    });
-    this.syncBaseCount(contentEl, panel);
-  }
-
-  private syncBaseCount(contentEl: HTMLElement, panel: HTMLElement): void {
-    const barLeft = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar-left`);
-    if (!barLeft) return;
-    const cached = panel.getAttribute("data-last-count") || "";
-    const baseHeader =
-      contentEl.querySelector<HTMLElement>(".bases-view-header") ??
-      contentEl.querySelector<HTMLElement>(".base-view-header") ??
-      contentEl.querySelector<HTMLElement>(".bases-header") ??
-      contentEl.querySelector<HTMLElement>(".view-header");
-    if (!baseHeader && !cached) return;
-    const countText = this.resolveBestCountText(contentEl, baseHeader, cached);
-    if (!countText) return;
-    panel.setAttribute("data-last-count", countText);
-    let badge = barLeft.querySelector<HTMLElement>(`.${EMBED_CLASS}__count`);
-    if (!badge) {
-      badge = document.createElement("span");
-      badge.className = `${EMBED_CLASS}__count`;
-      barLeft.appendChild(badge);
-    }
-    if (badge.textContent !== countText) {
-      badge.textContent = countText;
-    }
-    if (panel.getAttribute(RENDERING_ATTR) === "true") {
-      panel.setAttribute(RENDERING_ATTR, "false");
-    }
-  }
-
-  private resolveBestCountText(
-    contentEl: HTMLElement,
-    baseHeader: HTMLElement | null,
-    cached: string,
-  ): string {
-    const selectors = [
-      ".view-header-count",
-      ".bases-view-results-count",
-      ".bases-results-count",
-      ".bases-view-result-count",
-      ".bases-result-count",
-      "[class*=\"results-count\"]",
-      "[class*=\"result-count\"]",
-      ".bases-view-results",
-      ".bases-results",
-      "[class*=\"results\"]",
-      "[class*=\"result\"]",
-    ];
-
-    const seen = new Set<string>();
-    const candidates: string[] = [];
-    const pushCandidate = (raw: string | null | undefined) => {
-      const value = String(raw || "").trim();
-      if (!value || seen.has(value)) return;
-      seen.add(value);
-      candidates.push(value);
-    };
-
-    if (baseHeader) {
-      for (const selector of selectors) {
-        const nodes = Array.from(baseHeader.querySelectorAll<HTMLElement>(selector));
-        for (const node of nodes) {
-          pushCandidate(node.textContent);
-        }
-      }
-      pushCandidate(baseHeader.textContent);
-    }
-
-    const embeddedHeaders = Array.from(
-      contentEl.querySelectorAll<HTMLElement>(".bases-view-header, .base-view-header, .bases-header, .view-header"),
-    );
-    for (const header of embeddedHeaders) {
-      for (const selector of selectors) {
-        const nodes = Array.from(header.querySelectorAll<HTMLElement>(selector));
-        for (const node of nodes) {
-          pushCandidate(node.textContent);
-        }
-      }
-      pushCandidate(header.textContent);
-    }
-
-    if (candidates.length === 0) {
-      return cached;
-    }
-
-    // Prefer explicit "N results/items" candidates that are non-zero.
-    const ranked = candidates
-      .map((candidate) => ({
-        raw: candidate,
-        parsed: this.extractCountValue(candidate),
-        hasLabel: /\b(results?|items?)\b/i.test(candidate),
-      }))
-      .filter((candidate) => candidate.parsed !== null);
-
-    const nonZeroLabeled = ranked.find((candidate) => (candidate.parsed ?? 0) > 0 && candidate.hasLabel);
-    if (nonZeroLabeled) return nonZeroLabeled.raw;
-
-    const nonZeroAny = ranked.find((candidate) => (candidate.parsed ?? 0) > 0);
-    if (nonZeroAny) return nonZeroAny.raw;
-
-    const firstLabeled = ranked.find((candidate) => candidate.hasLabel);
-    if (firstLabeled) {
-      const cachedValue = this.extractCountValue(cached);
-      const renderedFallback = this.resolveRenderedResultCount(contentEl);
-      if ((firstLabeled.parsed ?? 0) === 0 && renderedFallback > 0) {
-        return `${renderedFallback} results`;
-      }
-      if ((firstLabeled.parsed ?? 0) === 0 && (cachedValue ?? 0) > 0) {
-        return cached;
-      }
-      return firstLabeled.raw;
-    }
-
-    const renderedFallback = this.resolveRenderedResultCount(contentEl);
-    if (renderedFallback > 0) {
-      return `${renderedFallback} results`;
-    }
-    return cached || candidates[0];
-  }
-
-  private resolveRenderedResultCount(contentEl: HTMLElement): number {
-    // Kanban: lane count badges are the most reliable built-in counters in this view.
-    const laneCounts = Array.from(contentEl.querySelectorAll<HTMLElement>(".bases-kanban-column-count"));
-    if (laneCounts.length > 0) {
-      const total = laneCounts.reduce((sum, el) => {
-        const parsed = this.extractCountValue(el.textContent || "");
-        return sum + (parsed ?? 0);
-      }, 0);
-      if (total > 0) return total;
-    }
-
-    // Calendar fallback: count rendered events.
-    const calendarEvents = contentEl.querySelectorAll(
-      ".fc-event:not(.fc-event-mirror):not(.bases-calendar-external-drop-preview)",
-    );
-    if (calendarEvents.length > 0) {
-      return calendarEvents.length;
-    }
-
-    return 0;
-  }
-
-  private extractCountValue(raw: string | null | undefined): number | null {
-    const value = String(raw || "").trim();
-    if (!value) return null;
-    const match = value.match(/\b(\d+)\b/);
-    if (!match) return null;
-    const parsed = Number.parseInt(match[1], 10);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  private pollForCount(
-    leaf: WorkspaceLeaf,
-    contentEl: HTMLElement,
-    panel: HTMLElement,
-    renderToken: number,
-    attempts = 0
-  ): void {
-    if (this.renderTokens.get(leaf) !== renderToken) return;
-    const cached = panel.getAttribute("data-last-count") || "";
-    const parsedCached = this.extractCountValue(cached);
-    if (cached && parsedCached !== 0) {
-      if (panel.getAttribute(RENDERING_ATTR) === "true") {
-        panel.setAttribute(RENDERING_ATTR, "false");
-      }
-      return;
-    }
-    if (attempts >= 10) {
-      if (panel.getAttribute(RENDERING_ATTR) === "true") {
-        panel.setAttribute(RENDERING_ATTR, "false");
-      }
-      return;
-    }
-    window.setTimeout(() => {
-      if (this.renderTokens.get(leaf) !== renderToken) return;
-      this.syncBaseCount(contentEl, panel);
-      this.pollForCount(leaf, contentEl, panel, renderToken, attempts + 1);
-    }, 400);
+  private syncBaseHeader(_contentEl: HTMLElement, _panel: HTMLElement): void {
+    // No-op: we no longer touch the Bases DOM. The bar label is a static text
+    // node set from the base filename when the panel is built.
   }
 
   private removeOverlay(leaf: WorkspaceLeaf): void {
@@ -1927,22 +1781,6 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       .${EMBED_CLASS}__bar-right {
         flex: 0 0 auto;
       }
-      .${EMBED_CLASS}__title {
-        font-size: 0.78em;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color: var(--text-muted);
-      }
-      .${EMBED_CLASS}__count {
-        margin-left: 8px;
-        font-size: 0.72em;
-        color: var(--text-muted);
-        white-space: nowrap;
-      }
-      body.is-mobile .${EMBED_CLASS}__title,
-      body.is-phone .${EMBED_CLASS}__title {
-        font-size: 0.7em;
-      }
       .${EMBED_CLASS}__toggle {
         background: var(--interactive-normal);
         border: 1px solid var(--background-modifier-border);
@@ -2030,32 +1868,156 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         padding: 0;
         margin: 0;
       }
-      .${EMBED_CLASS}__base-header {
-        width: 100%;
-        margin: 0;
-        padding: 0;
-        border: none;
-        background: transparent;
-        box-shadow: none;
-      }
-      .${EMBED_CLASS}__base-header .view-header-title-container {
-        padding: 0;
-      }
-      .${EMBED_CLASS}__base-header .bases-view-results-count,
-      .${EMBED_CLASS}__base-header .bases-results-count,
-      .${EMBED_CLASS}__base-header .bases-view-result-count,
-      .${EMBED_CLASS}__base-header .bases-result-count,
-      .${EMBED_CLASS}__base-header .bases-view-results,
-      .${EMBED_CLASS}__base-header .bases-results,
-      .${EMBED_CLASS}__base-header .view-header-count,
-      .${EMBED_CLASS}__base-header [class*="results-count"],
-      .${EMBED_CLASS}__base-header [class*="result-count"],
-      .${EMBED_CLASS}__base-header [class*="results"],
-      .${EMBED_CLASS}__base-header [class*="result"] {
-        display: none !important;
+      .${EMBED_CLASS}__bar-label {
+        font-size: 0.95em;
+        font-weight: 600;
+        color: var(--text-normal);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .${EMBED_CLASS}__hidden-header {
         display: none !important;
+      }
+      /* ── Embedded content cleanup ────────────────────────────────────── */
+      /* Strip the "[[filename]]" link Obsidian renders above MarkdownRenderer embeds */
+      .${EMBED_CLASS}__content .markdown-embed-link {
+        display: none !important;
+      }
+      /* Strip the floating "edit block" affordance in reading-view previews */
+      .${EMBED_CLASS}__content .edit-block-button {
+        display: none !important;
+      }
+      /* Remove markdown-embed wrapper chrome when using MarkdownRenderer fallback */
+      .${EMBED_CLASS}__content .markdown-embed {
+        border: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        box-shadow: none !important;
+        background: transparent !important;
+      }
+      .${EMBED_CLASS}__content .markdown-embed-content {
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      /* ── Feed-bases: hide leaf chrome ────────────────────────────────── */
+      /* view.containerEl wraps the full workspace leaf including the header bar.
+         Strip everything except the actual editor content. */
+      .${EMBED_CLASS}__content .bases-feed-entry-content .view-header,
+      .${EMBED_CLASS}__content .bases-feed-entry-content .view-header-container,
+      .${EMBED_CLASS}__content .bases-feed-entry-content .view-actions,
+      .${EMBED_CLASS}__content .bases-feed-entry-content .view-header-nav-buttons,
+      .${EMBED_CLASS}__content .bases-feed-entry-content .workspace-leaf-resize-handle,
+      .${EMBED_CLASS}__content .bases-feed-entry-content .inline-title,
+      .${EMBED_CLASS}__content .bases-feed-entry-content .edit-block-button,
+      .${EMBED_CLASS}__content .bases-feed-entry-content .metadata-container {
+        display: none !important;
+      }
+      /* Remove leaf padding/margins and make the editor fill the card naturally */
+      .${EMBED_CLASS}__content .bases-feed-entry-content .workspace-leaf-content {
+        padding: 0 !important;
+      }
+      .${EMBED_CLASS}__content .bases-feed-entry-content .cm-editor {
+        padding: 0 !important;
+      }
+      .${EMBED_CLASS}__content .bases-feed-entry-content .cm-content {
+        padding: 4px 0 8px !important;
+      }
+      .${EMBED_CLASS}__content .bases-feed-entry-content .cm-scroller {
+        overflow: visible !important;
+      }
+      /* ── Feed-bases: layout ──────────────────────────────────────────── */
+      .${EMBED_CLASS}__content .bases-feed-container {
+        max-height: 100%;
+        overflow: auto;
+        position: relative;
+        width: 100%;
+      }
+      .${EMBED_CLASS}__content .bases-feed,
+      .${EMBED_CLASS}__content .bases-feed-single-column,
+      .${EMBED_CLASS}__content .bases-feed-masonry {
+        max-width: 100% !important;
+        width: 100%;
+      }
+      /* ── Kill Tanstack virtual positioning — revert to normal flow ──── */
+      /* The virtualizer sets height on the wrapper and position:absolute +
+         translateY(Npx) on each item via inline styles.  Inside our embed panel
+         those absolute offsets create large blank gaps.  Force document flow. */
+      .${EMBED_CLASS}__content .bases-feed-virtualizer {
+        height: auto !important;   /* override inline height: NNNpx from React */
+        position: static !important;
+        width: 100%;
+      }
+      .${EMBED_CLASS}__content .bases-feed-virtual-item {
+        position: relative !important;  /* override position: absolute from Obsidian CSS */
+        transform: none !important;     /* override inline translateY(Npx) from React */
+        width: 100%;
+      }
+      /* Let the workspace-leaf embedded in each entry render at natural height */
+      .${EMBED_CLASS}__content .bases-feed-entry-content > *,
+      .${EMBED_CLASS}__content .bases-feed-entry-content .view-content,
+      .${EMBED_CLASS}__content .bases-feed-entry-content .markdown-source-view {
+        height: auto !important;
+        min-height: 0 !important;
+        flex: unset !important;
+      }
+      /* ── Feed entry card — reset to native-note appearance ───────────── */
+      /* Strip the card box: no border, no background, no shadow, no radius */
+      .${EMBED_CLASS}__content .bases-feed-entry {
+        background: transparent !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        padding: 0 0 16px 0 !important;
+        margin: 0 !important;
+      }
+      .${EMBED_CLASS}__content .bases-feed-entry:last-child {
+        padding-bottom: 0 !important;
+      }
+      /* Thin separator line between entries instead of the card border */
+      .${EMBED_CLASS}__content .bases-feed-virtual-item + .bases-feed-virtual-item .bases-feed-entry,
+      .${EMBED_CLASS}__content .bases-feed-entry + .bases-feed-entry {
+        border-top: 1px solid var(--background-modifier-border) !important;
+        padding-top: 14px !important;
+      }
+      /* ── Feed entry header / title ───────────────────────────────────── */
+      .${EMBED_CLASS}__content .bases-feed-entry-header {
+        margin: 0 0 4px 0;
+        padding: 0;
+      }
+      /* Make the title look like a plain heading, not a hyperlink */
+      .${EMBED_CLASS}__content .bases-feed-entry-title {
+        display: block;
+        font-size: 1em;
+        font-weight: 600;
+        color: var(--text-normal) !important;
+        text-decoration: none !important;
+        cursor: default;
+        pointer-events: none;
+      }
+      /* Re-enable pointer events just for hover preview so Ctrl+hover still works */
+      .${EMBED_CLASS}__content .bases-feed-entry-title:hover {
+        color: var(--text-normal) !important;
+        text-decoration: none !important;
+      }
+      /* \u2500\u2500 Canvas-node embed overlay \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+      /* Override position: the overlay sits at the bottom inside the canvas node */
+      .${EMBED_CLASS}--canvas-node {
+        position: absolute;
+        bottom: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: min(calc(100% - 14px), 560px);
+        z-index: 10;
+        pointer-events: auto;
+      }
+      /* Collapse the expanded-panel max-height for canvas since nodes can be small */
+      .${EMBED_CLASS}--canvas-node .${EMBED_CLASS}__panel[${COLLAPSED_ATTR}="false"] .${EMBED_CLASS}__content {
+        max-height: 50vh;
+      }
+      /* Make the bar slightly more compact inside canvas nodes */
+      .${EMBED_CLASS}--canvas-node .${EMBED_CLASS}__bar {
+        padding: 3px 7px;
       }
       /* Settings styles */
       .tps-auto-base-embed-rules {
@@ -2280,5 +2242,293 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       .split(/[,\n]/)
       .map((entry) => entry.trim())
       .filter(Boolean);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Canvas-node embed system
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private startCanvasLeafWatcher(leaf: WorkspaceLeaf): void {
+    if (this.canvasLeafData.has(leaf)) return;
+
+    const data = {
+      observer: null as MutationObserver | null,
+      nodeOverlays: new Map<HTMLElement, HTMLElement>(),
+      nodeExpanded: new Map<HTMLElement, Set<string>>(),
+      nodeSig: new Map<HTMLElement, string>(),
+    };
+    this.canvasLeafData.set(leaf, data);
+
+    const containerEl = (leaf.view as any)?.containerEl as HTMLElement | undefined;
+    if (containerEl) {
+      data.observer = new MutationObserver(() => this.scheduleCanvasScan(leaf));
+      data.observer.observe(containerEl, { childList: true, subtree: true });
+    }
+
+    this.scheduleCanvasScan(leaf);
+  }
+
+  private stopCanvasLeafWatcher(leaf: WorkspaceLeaf): void {
+    const data = this.canvasLeafData.get(leaf);
+    if (!data) return;
+
+    data.observer?.disconnect();
+
+    for (const [, overlay] of data.nodeOverlays) {
+      this.clearPanels(overlay);
+      overlay.remove();
+    }
+    data.nodeOverlays.clear();
+    data.nodeExpanded.clear();
+    data.nodeSig.clear();
+
+    const timer = this.canvasScanTimers.get(leaf);
+    if (timer != null) {
+      window.clearTimeout(timer);
+      this.canvasScanTimers.delete(leaf);
+    }
+
+    this.canvasLeafData.delete(leaf);
+  }
+
+  private scheduleCanvasScan(leaf: WorkspaceLeaf): void {
+    const existing = this.canvasScanTimers.get(leaf);
+    if (existing != null) window.clearTimeout(existing);
+    const timer = window.setTimeout(() => {
+      this.canvasScanTimers.delete(leaf);
+      void this.scanCanvasNodes(leaf);
+    }, 400);
+    this.canvasScanTimers.set(leaf, timer);
+  }
+
+  private async scanCanvasNodes(leaf: WorkspaceLeaf): Promise<void> {
+    if (!this.settings.enableCanvasNodeEmbeds || !this.settings.enabled) return;
+    const data = this.canvasLeafData.get(leaf);
+    if (!data) return;
+
+    const canvas = (leaf.view as any)?.canvas as any;
+    if (!canvas?.nodes) return;
+
+    const activeNodeEls = new Set<HTMLElement>();
+
+    for (const [, node] of canvas.nodes as Map<string, any>) {
+      const file = node.file as TFile | undefined;
+      const nodeEl = node.nodeEl as HTMLElement | undefined;
+      if (!nodeEl || !(file instanceof TFile)) continue;
+
+      activeNodeEls.add(nodeEl);
+
+      const matchingRules = this.settings.rules.filter(r => this.shouldEmbedRule(r, file));
+
+      if (matchingRules.length === 0) {
+        const overlay = data.nodeOverlays.get(nodeEl);
+        if (overlay) {
+          this.clearPanels(overlay);
+          overlay.remove();
+          data.nodeOverlays.delete(nodeEl);
+          data.nodeSig.delete(nodeEl);
+        }
+        continue;
+      }
+
+      const newSig = `canvas::${file.path}::${matchingRules.map(r => r.id + ":" + r.basePath).join("|")}`;
+      const existingSig = data.nodeSig.get(nodeEl);
+      const existingOverlay = data.nodeOverlays.get(nodeEl);
+
+      // Skip rebuild if signature and DOM match
+      if (
+        existingSig === newSig &&
+        existingOverlay?.isConnected &&
+        existingOverlay.querySelector(`.${EMBED_CLASS}__panel`)
+      ) {
+        continue;
+      }
+
+      // Prevent concurrent builds for the same node
+      if (this.canvasNodeBuilding.has(nodeEl)) continue;
+      this.canvasNodeBuilding.add(nodeEl);
+
+      try {
+        // Get or create overlay container inside the canvas node
+        let overlay = data.nodeOverlays.get(nodeEl);
+        if (!overlay || !overlay.isConnected) {
+          overlay = this.createCanvasNodeOverlayContainer(nodeEl);
+          if (!overlay) {
+            this.canvasNodeBuilding.delete(nodeEl);
+            continue;
+          }
+          data.nodeOverlays.set(nodeEl, overlay);
+        }
+
+        // Get or initialise expanded set for this node
+        if (!data.nodeExpanded.has(nodeEl)) {
+          const initial = new Set<string>();
+          for (const rule of matchingRules) {
+            const manualState = this.getManualExpansionState(rule.basePath);
+            let expand = this.settings.defaultExpanded;
+            if (rule.initialState === "expanded") expand = true;
+            if (rule.initialState === "collapsed") expand = false;
+            if (manualState !== null) expand = manualState;
+            if (expand) initial.add(rule.basePath);
+          }
+          data.nodeExpanded.set(nodeEl, initial);
+        }
+        const expandedSet = data.nodeExpanded.get(nodeEl)!;
+
+        // Remove old panels
+        const oldPanels = Array.from(overlay.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
+        for (const p of oldPanels) this.unloadPanel(p);
+
+        // Build new panels
+        const excludedFiles = this.parseList(this.settings.excludeFiles);
+        if (!excludedFiles.some(p => normalizePath(p) === file.path)) {
+          for (const rule of matchingRules) {
+            if (file.path === rule.basePath) continue;
+            const baseFile = this.app.vault.getAbstractFileByPath(rule.basePath);
+            if (!(baseFile instanceof TFile)) continue;
+            await this.buildCanvasNodePanel(nodeEl, overlay, baseFile, rule.basePath, file.path, expandedSet);
+          }
+        }
+
+        data.nodeSig.set(nodeEl, newSig);
+
+        // If no panels were built, remove the overlay container
+        if (!overlay.querySelector(`.${EMBED_CLASS}__panel`)) {
+          overlay.remove();
+          data.nodeOverlays.delete(nodeEl);
+          data.nodeSig.delete(nodeEl);
+        }
+      } finally {
+        this.canvasNodeBuilding.delete(nodeEl);
+      }
+    }
+
+    // Remove overlays for canvas nodes that no longer exist
+    for (const [nodeEl, overlay] of data.nodeOverlays) {
+      if (!activeNodeEls.has(nodeEl)) {
+        this.clearPanels(overlay);
+        overlay.remove();
+        data.nodeOverlays.delete(nodeEl);
+        data.nodeSig.delete(nodeEl);
+      }
+    }
+  }
+
+  /**
+   * Creates an overlay container div and attaches it to the canvas node's
+   * display element. Returns null if no suitable insertion point is found.
+   */
+  private createCanvasNodeOverlayContainer(nodeEl: HTMLElement): HTMLElement | null {
+    const display = nodeEl.querySelector<HTMLElement>(".canvas-node-display") ?? nodeEl;
+    // Ensure the parent has relative positioning so our absolute overlay works
+    if (getComputedStyle(display).position === "static") {
+      (display as HTMLElement).style.position = "relative";
+    }
+    const container = document.createElement("div");
+    container.className = `${EMBED_CLASS} ${EMBED_CLASS}--canvas-node`;
+    container.setAttribute("data-render-mode", "canvas-node");
+    display.appendChild(container);
+    return container;
+  }
+
+  /**
+   * Builds a single embed panel for a canvas node. Mirrors buildPanel() but
+   * takes node-local state instead of a WorkspaceLeaf.
+   */
+  private async buildCanvasNodePanel(
+    nodeEl: HTMLElement,
+    overlay: HTMLElement,
+    baseFile: TFile,
+    basePath: string,
+    sourcePath: string,
+    expandedSet: Set<string>,
+  ): Promise<HTMLElement | null> {
+    const panel = document.createElement("div");
+    panel.className = `${EMBED_CLASS}__panel`;
+    const isExpanded = expandedSet.has(basePath);
+    panel.setAttribute(COLLAPSED_ATTR, isExpanded ? "false" : "true");
+    panel.setAttribute(RENDERING_ATTR, "true");
+    panel.setAttribute("data-base-path", basePath);
+    const baseLabel = basePath.replace(/.*\//, "").replace(/\.base$/i, "");
+    panel.innerHTML = `
+      <div class="${EMBED_CLASS}__bar">
+        <div class="${EMBED_CLASS}__bar-left">
+          <span class="${EMBED_CLASS}__bar-label">${baseLabel}</span>
+        </div>
+        <div class="${EMBED_CLASS}__bar-right">
+          <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded base">▸</button>
+        </div>
+      </div>
+      <div class="${EMBED_CLASS}__content"></div>
+    `;
+
+    const toggle = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
+    const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
+
+    if (toggle) {
+      toggle.textContent = isExpanded ? "▾" : "▸";
+      toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
+        panel.setAttribute(COLLAPSED_ATTR, collapsed ? "false" : "true");
+        if (toggle) toggle.textContent = collapsed ? "▾" : "▸";
+        if (collapsed) {
+          expandedSet.add(basePath);
+          this.setManualExpansionState(basePath, true);
+        } else {
+          expandedSet.delete(basePath);
+          this.setManualExpansionState(basePath, false);
+        }
+      });
+    }
+
+    if (!contentEl) return panel;
+    contentEl.empty();
+
+    const renderTarget = document.createElement("div");
+    renderTarget.className = "markdown-preview-view markdown-rendered";
+    renderTarget.setAttribute("data-mode", "preview");
+    contentEl.appendChild(renderTarget);
+
+    overlay.appendChild(panel);
+
+    // Prefer embedRegistry (avoids metadataCache loop)
+    let usedEmbedRegistry = false;
+    {
+      const embedRegistry = (this.app as any).embedRegistry;
+      const embedCtor = embedRegistry?.embedByExtension?.get?.("base");
+      if (embedCtor) {
+        try {
+          const ctx = { app: this.app, sourcePath };
+          const embed = embedCtor(ctx, baseFile, "");
+          if (embed?.containerEl) {
+            renderTarget.appendChild(embed.containerEl);
+            try {
+              this.addChild(embed as any);
+            } catch {
+              try { if (typeof embed.load === "function") embed.load(); } catch { /* ignore */ }
+            }
+            this.panelEmbeds.set(panel, embed);
+            usedEmbedRegistry = true;
+          }
+        } catch (e) {
+          console.warn("[TPS Auto Base Embed] canvas-node embedRegistry failed, falling back", e);
+        }
+      }
+    }
+    if (!usedEmbedRegistry) {
+      await MarkdownRenderer.render(this.app, `![[${basePath}]]`, renderTarget, sourcePath, null as any);
+    }
+
+    this.syncEmbeddedPanelMode(contentEl, panel);
+    panel.setAttribute(RENDERING_ATTR, "false");
+
+    if (!expandedSet.has(basePath)) {
+      panel.setAttribute(COLLAPSED_ATTR, "true");
+      if (toggle) toggle.textContent = "▸";
+    }
+
+    return panel;
   }
 }

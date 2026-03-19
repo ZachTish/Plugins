@@ -5,8 +5,8 @@
   "showWelcomeModal": false,
   "collapseEmbeds": false,
   "favoriteTemplate": "blank.pdf",
-  "templatesAtCustom": false,
-  "templatesPath": "/templates/",
+  "templatesAtCustom": true,
+  "templatesPath": "/_templates/",
   "openInNewTab": false,
   "createFolderIfNotExists": true
 }

@@ -301,6 +301,14 @@
   background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-secondary));
 }
 
+/* Nest-as-subitem drop target — card is highlighted when dragging another card over it */
+.tps-kanban-card--drop-nest {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-secondary));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
+}
+
 /* ─── Add card button ─────────────────────────────────────────────────────── */
 .tps-kanban-add-card {
   margin: 0 calc(var(--size-4-2) * var(--tps-kanban-scale)) calc(var(--size-4-2) * var(--tps-kanban-scale));

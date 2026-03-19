@@ -3,7 +3,7 @@
  * Kanban board views
  */
 
-import { TPSPlugin } from '../../main';
+import TPSPlugin from '../../main';
 import { KanbanSettings } from '../../types';
 import * as logger from '../../logger';
 

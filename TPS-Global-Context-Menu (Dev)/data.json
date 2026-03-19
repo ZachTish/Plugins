@@ -245,6 +245,7 @@
   ],
   "showCustomPropertiesInInlineUi": true,
   "showCustomPropertiesInContextMenu": true,
+  "inheritNotebookNavigatorTagColors": true,
   "enableRecurrence": true,
   "promptOnRecurrenceEdit": true,
   "recurrencePromptTimeout": 5,
@@ -255,18 +256,19 @@
     "blocked"
   ],
   "recurrenceDefaultStatus": "",
-  "recurringTemplateFolder": "Markdown/Action Items/_templates",
+  "recurringTemplateFolder": "_recurringtemplates",
   "enableAutoRename": true,
   "autoSyncTitleFromFilename": true,
   "autoSaveFolderPath": true,
   "seedNewSubitemVisualMetadata": false,
   "applyCompanionRulesOnSubitemCreate": false,
-  "frontmatterAutoWriteExclusions": "re:(^|/)_templates(/|$)",
+  "frontmatterAutoWriteExclusions": "re:(^|/)_[^/]*($|/|$)\nre: ^[^/]+\\.md$",
   "folderExclusions": "System/Templates",
   "checkOpenChecklistItems": true,
   "checkParentLinkStatuses": true,
   "parentLinkFrontmatterKey": "childOf",
   "childLinkFrontmatterKey": "parentOf",
+  "autoSelfLinkParentInParentKey": true,
   "parentLinkFormat": "markdown-title",
   "parentTagOnChildLink": "",
   "parentCompletionStatuses": [
@@ -295,8 +297,8 @@
         {
           "type": "frontmatter",
           "key": "parentOf",
-          "operator": "exists",
-          "value": ""
+          "operator": "equals",
+          "value": "123"
         }
       ]
     },
@@ -328,7 +330,7 @@
   "archiveTag": "archive",
   "archiveFolderPath": "Archive",
   "archiveUseDailyFolder": true,
-  "lastArchiveTagSweepDate": "2026-03-16",
+  "lastArchiveTagSweepDate": "2026-03-19",
   "enablePomodoro": false,
   "pomodoroWorkDuration": 25,
   "pomodoroBreakDuration": 5,
@@ -337,11 +339,12 @@
   "pomodoroEventFolder": "Action Items/Events",
   "pomodoroDefaultTags": "pomodoro, timebox",
   "workspaceRibbonButtons": true,
+  "workspaceRibbonIcons": {},
   "enableCanvasBaseSplit": false,
-  "enableDailyNoteNav": true,
+  "enableDailyNoteNav": false,
   "enableTopParentNav": true,
   "ignoreEmbeddedChildrenInTopLinks": true,
-  "dailyNavShowToday": true,
+  "dailyNavShowToday": false,
   "ignoredBacklinksFrontmatterKeys": [
     "dateModified",
     "sort",
@@ -394,6 +397,7 @@
   "defaultSubitemsPath": "Markdown/Action Items",
   "defaultNewSubitemStatus": "",
   "defaultNewSubitemPriority": "",
+  "checklistPromotionBehavior": "remove",
   "menuTextScale": 0.95,
   "buttonScale": 1,
   "controlScale": 1,
@@ -402,7 +406,7 @@
   "inlinePanelMaxWidth": 1400,
   "liveMenuPosition": "center",
   "liveMenuOffsetX": 0,
-  "liveMenuOffsetY": -8,
+  "liveMenuOffsetY": -32,
   "modalWidth": 520,
   "modalMaxHeightVh": 80,
   "subitemsMarginBottom": 17,
@@ -1232,9 +1236,5 @@
       "enabled": true,
       "icon": "lucide-check-square"
     }
-  ],
-  "inheritNotebookNavigatorTagColors": true,
-  "autoSelfLinkParentInParentKey": true,
-  "workspaceRibbonIcons": {},
-  "checklistPromotionBehavior": "remove"
+  ]
 }

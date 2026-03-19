@@ -142,7 +142,7 @@ export class PropertyProfilesModal extends Modal {
                     }));
 
             const conditions = profile.conditions || [];
-            conditions.forEach((condition, conditionIndex) => {
+            conditions.forEach((condition: any, conditionIndex: number) => {
                 // Ensure operator has a valid default for its type
                 const isPath = condition.type === "path";
                 const validPathOps = ["contains", "equals", "starts-with", "ends-with", "not-contains"];

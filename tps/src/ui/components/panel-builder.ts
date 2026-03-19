@@ -1,6 +1,7 @@
 ﻿import { App, TFile, TFolder, Notice, Modal, Setting, setIcon, WorkspaceLeaf, normalizePath, Menu, FuzzySuggestModal, Platform, MarkdownView, getAllTags } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
 import { BuildPanelOptions } from '../types';
+import { PanelEntry } from '../../types';
 import { SYSTEM_COMMANDS, STATUSES, PRIORITIES } from '../constants';
 import { PropertyRowService } from '../services/property-row-service';
 import { FileSuggestModal } from '../modals/FileSuggestModal';
@@ -224,7 +225,7 @@ export class PanelBuilder {
     }).open();
   }
 
-  private async archiveEntries(entries: any[]): Promise<void> {
+  private async archiveEntries(entries: PanelEntry[]): Promise<void> {
     const archiveTag = normalizeTagValue(this.plugin.settings.archiveTag || 'archive');
     const archiveFolder = this.plugin.getArchiveFolderPath();
     if (!archiveTag || !archiveFolder) {
@@ -275,7 +276,7 @@ export class PanelBuilder {
   // --- NEW 2-ROW LAYOUT ---
 
   buildSpecialPanel(files: TFile[], options: BuildPanelOptions = {}): HTMLElement {
-    const entries = this.delegates.createFileEntries(files);
+    const entries = this.delegates.createFileEntries(files) as PanelEntry[];
     const panel = document.createElement('div');
     panel.className = 'tps-gcm-panel';
 
@@ -310,7 +311,7 @@ export class PanelBuilder {
   /**
    * Creates the horizontal scrolling strip of property chips
    */
-  createContextStrip(entries: any[]): HTMLElement {
+  createContextStrip(entries: PanelEntry[]): HTMLElement {
     const strip = document.createElement('div');
     strip.className = 'tps-gcm-context-strip';
 
@@ -379,7 +380,7 @@ export class PanelBuilder {
     return strip;
   }
 
-  createStatusChip(entries: any[], resolvedProp: any): HTMLElement {
+  createStatusChip(entries: PanelEntry[], resolvedProp: any): HTMLElement {
     const fm = entries[0].frontmatter;
     const statusKey = String(resolvedProp?.key || 'status').trim() || 'status';
     const statusRaw = this.getFrontmatterValueCaseInsensitive(fm, statusKey);
@@ -435,7 +436,7 @@ export class PanelBuilder {
     }
   }
 
-  createPriorityChip(entries: any[], resolvedProp: any): HTMLElement {
+  createPriorityChip(entries: PanelEntry[], resolvedProp: any): HTMLElement {
     const fm = entries[0].frontmatter;
     const priorityRaw = fm.priority;
     const currentPrio = typeof priorityRaw === 'string' ? priorityRaw.trim() : '';
@@ -469,7 +470,7 @@ export class PanelBuilder {
     return chip;
   }
 
-  createDateChip(entries: any[], resolvedProp: any): HTMLElement {
+  createDateChip(entries: PanelEntry[], resolvedProp: any): HTMLElement {
     const fm = entries[0].frontmatter;
     const dateVal = fm.scheduled || fm.date || null;
 
@@ -499,7 +500,7 @@ export class PanelBuilder {
     return chip;
   }
 
-  createTagsChip(entries: any[], resolvedProp: any): HTMLElement {
+  createTagsChip(entries: PanelEntry[], resolvedProp: any): HTMLElement {
     const chip = document.createElement('div');
     chip.className = 'tps-gcm-chip';
 

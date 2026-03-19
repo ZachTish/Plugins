@@ -3,6 +3,7 @@ import { Logger } from "./logger";
 import { MetadataManager } from "./metadata-manager";
 import { NotebookNavigatorCompanionSettings } from "../types";
 import { FrontmatterWriteExclusionService } from "./frontmatter-write-exclusion-service";
+import { parseDateFromFilename } from '../../../tps/src/utils/daily-file-date';
 
 /**
  * Handles bidirectional sync between filenames and the frontmatter `title` field:
@@ -130,11 +131,24 @@ export class TitleSyncService {
 
         const { cleanTitle: currentClean, dateSuffix } = this.parseFilenameComponents(file.basename);
 
-        if (desiredTitle === currentClean) return;
+        const dailyNoteFormat = this.getDailyNoteDateFormat();
+        const desiredTitleIsDailyDate = this.isDailyDateLike(desiredTitle, dailyNoteFormat);
+        const isDateOnlyDailyNote = !currentClean && !!dateSuffix;
+
+        // Daily notes should keep their configured filename format instead of
+        // being rewritten as "<title> YYYY-MM-DD".
+        if (isDateOnlyDailyNote) return;
+
+        const needsDailyNoteRepair =
+            !!dateSuffix &&
+            desiredTitleIsDailyDate &&
+            file.basename !== desiredTitle;
+
+        if (desiredTitle === currentClean && !needsDailyNoteRepair) return;
 
         let newBasename = desiredTitle;
-        if (dateSuffix) {
-            newBasename = `${newBasename} ${dateSuffix}`;
+        if (dateSuffix && !desiredTitleIsDailyDate) {
+            newBasename = `${newBasename} ${this.formatDateSuffixForFilename(dateSuffix, dailyNoteFormat)}`;
         }
 
         // @ts-ignore: Internal API
@@ -156,14 +170,79 @@ export class TitleSyncService {
         }
     }
 
+    private getDailyNoteDateFormat(): string | undefined {
+        const configured = (this.getSettings() as any)?.dailyNoteDateFormat;
+        if (typeof configured === 'string' && configured.trim()) return configured.trim();
+
+        const tpsFormat = (this.app as any)?.plugins?.plugins?.tps?.settings?.dailyNoteDateFormat;
+        if (typeof tpsFormat === 'string' && tpsFormat.trim()) return tpsFormat.trim();
+
+        const dailyNotesPlugin = (this.app as any)?.internalPlugins?.getPluginById?.('daily-notes')
+            || (this.app as any)?.internalPlugins?.plugins?.['daily-notes'];
+        const dailyNotesFormat = dailyNotesPlugin?.instance?.options?.format
+            || dailyNotesPlugin?.options?.format;
+        if (typeof dailyNotesFormat === 'string' && dailyNotesFormat.trim()) return dailyNotesFormat.trim();
+
+        return 'dddd, MMMM Do YYYY';
+    }
+
+    private isDailyDateLike(value: string, userFormat?: string): boolean {
+        const parsed = parseDateFromFilename(value, userFormat);
+        if (parsed && parsed.isValid && parsed.isValid()) return true;
+
+        const m = (window as any).moment;
+        if (!m) return false;
+
+        const fallbackFormats = [
+            'dddd, MMMM Do YYYY',
+            'dddd, MMMM D YYYY',
+            'ddd, MMM D YYYY',
+            'YYYY-MM-DD',
+            'YYYYMMDD',
+        ];
+
+        const fallback = m(value, fallbackFormats, true);
+        return !!(fallback && fallback.isValid && fallback.isValid());
+    }
+
+    private formatDateSuffixForFilename(dateSuffix: string, userFormat?: string): string {
+        const m = (window as any).moment;
+        if (!m) return dateSuffix;
+
+        const parsed = m(dateSuffix, ['YYYY-MM-DD', 'YYYYMMDD'], true);
+        if (!parsed || !parsed.isValid || !parsed.isValid()) return dateSuffix;
+
+        const desiredFormat = String(userFormat || '').trim();
+        if (!desiredFormat) return dateSuffix;
+
+        return parsed.format(desiredFormat);
+    }
+
     private parseFilenameComponents(basename: string): { cleanTitle: string; dateSuffix: string | null } {
-        const datePattern = /\s*(\d{4}[-/]\d{2}[-/]\d{2}|\d{8})(?:\s+\d+)?$/;
-        const match = basename.match(datePattern);
-        if (match) {
-            const dateSuffix = match[1];
-            const cleanTitle = basename.substring(0, match.index).trim();
-            return { cleanTitle, dateSuffix };
+        const userFormat = this.getDailyNoteDateFormat();
+
+        try {
+            // Whole-basename date (e.g., daily note)
+            const whole = parseDateFromFilename(basename, userFormat);
+            if (whole && whole.isValid && whole.isValid()) {
+                return { cleanTitle: '', dateSuffix: (whole as any).format('YYYY-MM-DD') };
+            }
+
+            // Trailing token (e.g., "Meeting 2026-03-18")
+            const datePattern = /\s*(\d{4}[-_/]\d{2}[-_/]\d{2}|\d{8})(?:\s+\d+)?$/;
+            const match = basename.match(datePattern);
+            if (match) {
+                const token = match[1];
+                const parsed = parseDateFromFilename(token, userFormat);
+                if (parsed && parsed.isValid && parsed.isValid()) {
+                    const cleanTitle = basename.substring(0, match.index).trim();
+                    return { cleanTitle, dateSuffix: (parsed as any).format('YYYY-MM-DD') };
+                }
+            }
+        } catch (e) {
+            // ignore and fall back
         }
+
         return { cleanTitle: basename, dateSuffix: null };
     }
 }

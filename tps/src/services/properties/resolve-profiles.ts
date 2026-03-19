@@ -1,6 +1,6 @@
-import { CustomProperty, CustomPropertyProfile } from './types';
-import { ViewModeService } from './services/view-mode-service';
-import * as logger from './logger';
+import { CustomProperty, CustomPropertyProfile } from '../../types';
+import { ViewModeService } from '../views/view-mode-service';
+import * as logger from '../../logger';
 
 export function resolveCustomProperties(
     properties: CustomProperty[],

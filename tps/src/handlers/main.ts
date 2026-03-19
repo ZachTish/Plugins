@@ -464,7 +464,16 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       });
     };
 
-    const fallbackLeaf = (): WorkspaceLeaf | null => workspace.activeLeaf ?? null;
+    const fallbackLeaf = (): WorkspaceLeaf | null => {
+      try {
+        const leaf = (typeof originalGetUnpinnedLeaf === 'function' ? originalGetUnpinnedLeaf() : undefined)
+          ?? (typeof workspace.getLeaf === 'function' ? workspace.getLeaf('tab') : undefined)
+          ?? workspace.activeLeaf;
+        return leaf ?? null;
+      } catch {
+        return workspace.activeLeaf ?? (workspace.getLeaf ? workspace.getLeaf('tab') : null) ?? null;
+      }
+    };
 
     const leafLooksEmpty = (leaf: WorkspaceLeaf): boolean => {
       try {
@@ -516,7 +525,13 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       workspace.getUnpinnedLeaf = function (...args: any[]) {
         if (plugin.shouldSuppressOpenForRecentCanvasDrag()) {
           logSuppressedOpen('workspace.getUnpinnedLeaf', 'tab');
-          return fallbackLeaf();
+          try {
+            const fb = fallbackLeaf();
+            if (fb) return fb;
+          } catch (_e) {
+            // ignore and return safe active leaf below
+          }
+          return workspace.activeLeaf ?? (typeof originalGetLeaf === 'function' ? originalGetLeaf('tab') : null);
         }
         return originalGetUnpinnedLeaf(...args);
       };

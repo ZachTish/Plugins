@@ -1,6 +1,6 @@
 import { TFile } from "obsidian";
 import { Logger } from "./logger";
-import { NotebookNavigatorCompanionSettings } from "../types";
+import { NotebookNavigatorCompanionSettings } from "./types";
 
 /**
  * Determines whether a file should be excluded from companion frontmatter writes.

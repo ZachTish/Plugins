@@ -1,6 +1,6 @@
 import { moment, getAllTags, TFile } from 'obsidian';
-import type { PropertyReminder } from '../types';
-import { matchesExclusionPattern, matchesRequiredPath, normalizeComparablePath } from '../utils';
+import type { PropertyReminder } from '../../types';
+import { matchesExclusionPattern, matchesRequiredPath, normalizeComparablePath } from '../../utils';
 
 // ============================================================================
 // Date/Time Parsing
@@ -243,12 +243,20 @@ export function shouldIgnoreForReminder(
     globalIgnoreTags: string[],
     globalIgnoreStatuses: string[]
 ): boolean {
-    const ignorePaths =
-        Array.isArray(reminder.ignorePaths) ? reminder.ignorePaths : globalIgnorePaths;
-    const ignoreTags =
-        Array.isArray(reminder.ignoreTags) ? reminder.ignoreTags : globalIgnoreTags;
-    const ignoreStatuses =
-        Array.isArray(reminder.ignoreStatuses) ? reminder.ignoreStatuses : globalIgnoreStatuses;
+    // Always merge global paths with per-reminder paths so global protections
+    // (vault root, _ folders, etc.) apply even when a reminder overrides the list.
+    const globalPaths = Array.isArray(globalIgnorePaths) ? globalIgnorePaths : [];
+    const ignorePaths = Array.isArray(reminder.ignorePaths)
+        ? [...new Set([...reminder.ignorePaths, ...globalPaths])]
+        : globalPaths;
+    const globalTags = Array.isArray(globalIgnoreTags) ? globalIgnoreTags : [];
+    const ignoreTags = Array.isArray(reminder.ignoreTags)
+        ? [...new Set([...reminder.ignoreTags, ...globalTags])]
+        : globalTags;
+    const globalStatuses = Array.isArray(globalIgnoreStatuses) ? globalIgnoreStatuses : [];
+    const ignoreStatuses = Array.isArray(reminder.ignoreStatuses)
+        ? [...new Set([...reminder.ignoreStatuses, ...globalStatuses])]
+        : globalStatuses;
 
     const normPath = normalizeComparablePath(file.path);
     const normBase = normalizeComparablePath(file.basename);

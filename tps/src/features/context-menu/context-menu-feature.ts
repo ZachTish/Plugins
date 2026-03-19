@@ -3,7 +3,7 @@
  * Universal context menus and inline UI panels
  */
 
-import { TPSPlugin } from '../../main';
+import TPSPlugin from '../../main';
 import { ContextMenuSettings } from '../../types';
 import * as logger from '../../logger';
 

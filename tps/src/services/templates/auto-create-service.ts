@@ -540,6 +540,14 @@ export class AutoCreateService {
         logger.log(`[AutoCreateService] Creating new note for: ${event.title}`);
 
         const resolvedFolder = calendarInfo?.folder || calendarInfo?.typeFolder || "";
+
+        // Hard protection: never auto-create at vault root or inside any _ folder.
+        const folderSegments = resolvedFolder.split('/').filter(Boolean);
+        if (!resolvedFolder || folderSegments.some(seg => seg.startsWith('_'))) {
+            logger.warn(`[AutoCreateService] Refusing to create in protected path "${resolvedFolder || '(vault root)'}" for: ${event.title}`);
+            return { action: 'none' };
+        }
+
         const resolvedTemplate = calendarInfo?.template || null;
 
         const file = await createMeetingNoteFromExternalEvent(

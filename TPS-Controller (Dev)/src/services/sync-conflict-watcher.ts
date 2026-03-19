@@ -51,10 +51,23 @@ export class SyncConflictWatcher {
 
         logger.log("🔍 SyncConflictWatcher: Started listening for file conflicts.");
 
-        // 2. Do an initial sweep to catch any created while Obsidian was closed
-        setTimeout(() => {
-            this.sweepVaultForConflicts();
-        }, 5000);
+        // 2. Do an initial sweep to catch any created while Obsidian was closed.
+        // Must wait for metadataCache to be fully populated: hasCalendarIdentity()
+        // calls getFileCache(), which returns null before 'resolved' fires.
+        // If it returns false early, a meeting note that happens to have a
+        // conflict-style name would bypass the guard and be incorrectly archived.
+        let startupSweepDone = false;
+        const runStartupSweep = () => {
+            if (startupSweepDone) return;
+            startupSweepDone = true;
+            void this.sweepVaultForConflicts();
+        };
+        this.events.push(
+            this.app.metadataCache.on("resolved", runStartupSweep),
+        );
+        // Fallback: if the vault was already fully resolved before we registered
+        // the event (common on subsequent loads), fire after a generous delay.
+        setTimeout(runStartupSweep, 8000);
     }
 
     public stop() {

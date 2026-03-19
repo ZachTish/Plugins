@@ -1,8 +1,8 @@
 import { Plugin, PluginSettingTab, Setting, debounce } from "obsidian";
 import ObsidianCalendarPlugin from "./main";
 import { normalizeCalendarUrl } from "./utils";
-import { getPluginById } from "./core";
-import { renderListWithControls } from "./utils/list-renderer";
+import { getPluginById } from "../../core";
+import { renderListWithControls } from "../../utils/list-renderer";
 
 const createCalendarId = () =>
   `calendar-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
@@ -168,7 +168,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
                 this.plugin.settings.externalCalendars = [];
               }
               const existing = new Set(
-                this.plugin.settings.externalCalendars.map((calendar) => calendar.url),
+                this.plugin.settings.externalCalendars.map((calendar: any) => calendar.url),
               );
               urls.forEach((url) => {
                 if (existing.has(url)) return;
@@ -804,7 +804,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       return;
     }
 
-    calendars.forEach((calendar, index) => {
+    calendars.forEach((calendar: any, index: number) => {
       const card = container.createDiv();
       card.style.border = "1px solid var(--background-modifier-border)";
       card.style.borderRadius = "8px";

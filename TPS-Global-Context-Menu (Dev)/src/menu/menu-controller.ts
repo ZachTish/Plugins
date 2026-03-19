@@ -12,7 +12,6 @@ import { normalizeTagValue, parseTagInput } from '../utils/tag-utils';
 import { BadgeRenderer, hashStringToHue } from './badge-renderer';
 import { PanelBuilder } from './panel-builder';
 import { MenuBuilder } from './menu-builder';
-import { getInternalPlugin } from '../core';
 import { stripDateSuffix } from '../utils/date-suffix-utils';
 
 export function addSafeClickListener(element: HTMLElement, handler: (e: MouseEvent) => void) {
@@ -41,6 +40,7 @@ export class MenuController {
       addSafeClickListener,
       showMenuAtAnchor: this.showMenuAtAnchor.bind(this),
       openAddTagModal: this.openAddTagModal.bind(this),
+      triggerTagSearch: this.triggerTagSearch.bind(this),
       openScheduledModal: this.openScheduledModal.bind(this),
       openRecurrenceModalNative: this.openRecurrenceModalNative.bind(this),
       moveFiles: this.moveFiles.bind(this),
@@ -79,6 +79,29 @@ export class MenuController {
       moveFiles: this.moveFiles.bind(this),
       getTypeFolderOptions: this.getTypeFolderOptions.bind(this),
     });
+  }
+
+  private resolvePreferredContentLeaf(): WorkspaceLeaf | null {
+    const activeLeaf = this.app.workspace.activeLeaf;
+    const activeType = activeLeaf?.view?.getViewType?.();
+
+    if (activeLeaf && activeType !== 'notebook-navigator') {
+      return activeLeaf;
+    }
+
+    const markdownLeaves = this.app.workspace.getLeavesOfType('markdown');
+    if (markdownLeaves.length > 0) return markdownLeaves[0];
+
+    const canvasLeaves = this.app.workspace.getLeavesOfType('canvas');
+    if (canvasLeaves.length > 0) return canvasLeaves[0];
+
+    const mostRecentLeaf = (this.app.workspace as any)?.getMostRecentLeaf?.();
+    const mostRecentType = mostRecentLeaf?.view?.getViewType?.();
+    if (mostRecentLeaf && mostRecentType !== 'notebook-navigator') {
+      return mostRecentLeaf;
+    }
+
+    return this.app.workspace.getLeaf('tab');
   }
 
   detach() {
@@ -488,9 +511,7 @@ export class MenuController {
 
   triggerTagSearch(tag: string): void {
     const cleanTag = normalizeTagValue(tag);
-    const fallbackToSearch = () => this.openTagSearch(cleanTag);
-
-    try {
+    const fallbackToNotebookNavigator = () => {
       const pluginManager = (this.app as any)?.plugins;
       const notebookNavigator =
         pluginManager?.getPlugin?.('notebook-navigator') ??
@@ -500,36 +521,95 @@ export class MenuController {
       if (typeof notebookNavigatorNavigateToTag === 'function') {
         Promise.resolve(notebookNavigatorNavigateToTag.call(notebookNavigator.api.navigation, cleanTag))
           .catch((error: unknown) => {
-            logger.error('[TPS GCM] Notebook Navigator tag navigation failed; falling back to global search:', error);
-            fallbackToSearch();
+            logger.error('[TPS GCM] Notebook Navigator tag navigation failed:', error);
+            new Notice('Tag Canvas and Notebook Navigator tag navigation are unavailable.');
           });
         return;
       }
-      fallbackToSearch();
-    } catch (error) {
-      logger.error('[TPS GCM] Failed to navigate tag from context menu:', error);
-      fallbackToSearch();
-    }
-  }
+      new Notice('Tag Canvas and Notebook Navigator tag navigation are unavailable.');
+    };
 
-  private openTagSearch(cleanTag: string): void {
-    const searchQuery = `tag:#${cleanTag}`;
     try {
-      const globalSearch = getInternalPlugin<any>(this.app, 'global-search');
-      if (globalSearch && globalSearch.instance) {
-        globalSearch.instance.openGlobalSearch(searchQuery);
+      const anyWindow = window as any;
+      const globalOpenForTag = anyWindow?._tps_tagCanvas?.openForTag;
+      if (typeof globalOpenForTag === 'function') {
+        Promise.resolve(globalOpenForTag.call(anyWindow._tps_tagCanvas, cleanTag))
+          .catch((error: unknown) => {
+            logger.warn('[TPS GCM] Tag Canvas API (window).openForTag failed; falling back:', error);
+            fallbackToNotebookNavigator();
+          });
         return;
       }
 
-      const leaf = this.app.workspace.getLeaf(false);
-      if (!leaf) return;
-      leaf.setViewState({
-        type: 'search',
-        state: { query: searchQuery }
-      });
+      const pluginManager = (this.app as any)?.plugins;
+      const tagCanvas =
+        pluginManager?.getPlugin?.('tps-tag-canvas') ??
+        pluginManager?.plugins?.['tps-tag-canvas'];
+      const tagCanvasOpenForTag = tagCanvas?.api?.openForTag;
+      if (typeof tagCanvasOpenForTag === 'function') {
+        Promise.resolve(tagCanvasOpenForTag.call(tagCanvas.api, cleanTag))
+          .catch((error: unknown) => {
+            logger.warn('[TPS GCM] Tag Canvas API (plugin).openForTag failed; falling back:', error);
+            fallbackToNotebookNavigator();
+          });
+        return;
+      }
+
+      // Fallback: if openForTag isn't available, use sync->getCanvasPath->openFile as before
+      const globalApiSyncForTag = anyWindow?._tps_tagCanvas?.syncForTag;
+      const globalApiGetCanvasPath = anyWindow?._tps_tagCanvas?.getCanvasPath;
+      if (typeof globalApiSyncForTag === 'function' && typeof globalApiGetCanvasPath === 'function') {
+        Promise.resolve((async () => {
+          await globalApiSyncForTag(cleanTag);
+          const canvasPath = String(globalApiGetCanvasPath(cleanTag) || '').trim();
+          if (!canvasPath) throw new Error('No canvas path returned for tag');
+          const canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
+          if (!(canvasFile instanceof TFile)) throw new Error(`Canvas file not found: ${canvasPath}`);
+          const leaf = this.resolvePreferredContentLeaf();
+          if (!leaf) throw new Error('No target leaf available');
+          await leaf.openFile(canvasFile);
+        })())
+          .catch((error: unknown) => {
+            logger.error('[TPS GCM] Tag Canvas API (window) failed; falling back to Notebook Navigator:', error);
+            fallbackToNotebookNavigator();
+          });
+        return;
+      }
+
+      const tagCanvasSyncForTag = tagCanvas?.api?.syncForTag;
+      const tagCanvasGetCanvasPath = tagCanvas?.api?.getCanvasPath;
+      if (typeof tagCanvasSyncForTag === 'function' && typeof tagCanvasGetCanvasPath === 'function') {
+        Promise.resolve((async () => {
+          await tagCanvasSyncForTag.call(tagCanvas.api, cleanTag);
+          const canvasPath = String(tagCanvasGetCanvasPath.call(tagCanvas.api, cleanTag) || '').trim();
+          if (!canvasPath) throw new Error('No canvas path returned for tag');
+          const canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
+          if (!(canvasFile instanceof TFile)) throw new Error(`Canvas file not found: ${canvasPath}`);
+          const leaf = this.resolvePreferredContentLeaf();
+          if (!leaf) throw new Error('No target leaf available');
+          await leaf.openFile(canvasFile);
+        })())
+          .catch((error: unknown) => {
+            logger.error('[TPS GCM] Tag Canvas API (plugin) failed; falling back to Notebook Navigator:', error);
+            fallbackToNotebookNavigator();
+          });
+        return;
+      }
+
+      const notebookNavigator =
+        pluginManager?.getPlugin?.('notebook-navigator') ??
+        pluginManager?.plugins?.['notebook-navigator'];
+      const notebookNavigatorNavigateToTag = notebookNavigator?.api?.navigation?.navigateToTag;
+
+      if (typeof notebookNavigatorNavigateToTag === 'function') {
+        Promise.resolve(notebookNavigatorNavigateToTag.call(notebookNavigator.api.navigation, cleanTag))
+          .catch((error: unknown) => logger.error('[TPS GCM] Notebook Navigator tag navigation failed:', error));
+        return;
+      }
+      new Notice('Tag Canvas and Notebook Navigator tag navigation are unavailable.');
     } catch (error) {
-      logger.error('[TPS GCM] Failed to trigger tag search:', error);
-      new Notice('Failed to search for tag');
+      logger.error('[TPS GCM] Failed to navigate tag from context menu:', error);
+      new Notice('Tag Canvas and Notebook Navigator tag navigation are unavailable.');
     }
   }
 

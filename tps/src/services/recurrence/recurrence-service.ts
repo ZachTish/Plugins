@@ -1,7 +1,7 @@
 import { App, TFile, TFolder, Modal, Notice } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
 import * as logger from "../../logger";
-import { RecurrenceModal } from '../modals/recurrence-modal';
+import { RecurrenceModal } from '../../modals/recurrence-modal';
 
 /**
  * Tracks which files have been modified in this session to avoid repeated prompts.

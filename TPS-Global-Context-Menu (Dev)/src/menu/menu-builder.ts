@@ -866,9 +866,8 @@ export class MenuBuilder {
       sub.setTitle(title)
         .setIcon('plus')
         .onClick(async () => {
-          if (await this.plugin.fieldInitializationService.checkAndInitialize(entries, prop.key, [])) {
-            return; // Field initialized, user can click again to add
-          }
+          // Initialize the field if it doesn't exist yet, then immediately open the modal.
+          await this.plugin.fieldInitializationService.checkAndInitialize(entries, prop.key, []);
           this.delegates.openAddTagModal(entries, prop.key);
         });
     });

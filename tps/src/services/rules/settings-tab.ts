@@ -1,6 +1,6 @@
 import { App, ColorComponent, PluginSettingTab, Setting, TextComponent } from "obsidian";
 import NotebookNavigatorCompanionPlugin from "./main";
-import { DebounceMap } from "./utils/debounce";
+import { DebounceMap } from "./debounce";
 import { RulesSectionRenderer } from "./settings/rules-section";
 import { BucketSectionRenderer } from "./settings/bucket-section";
 import { HideSectionRenderer } from "./settings/hide-section";
@@ -83,7 +83,7 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
     }
 
     const sectionContext: SettingsSectionContext = {
-      plugin: this.plugin,
+      plugin: this.plugin as any,
       bindCommittedText: this.bindCommittedText.bind(this),
       refresh: () => this.display(),
       persistRuleChange: (applyActive = false) => this.persistRuleChange(applyActive)

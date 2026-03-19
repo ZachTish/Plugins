@@ -212,9 +212,20 @@ export class SettingsManager {
       field: this.normalizeSafeFrontmatterField(record.field, DEFAULT_SETTINGS.smartSort.field),
       separator: normalizeSeparator(record.separator, DEFAULT_SETTINGS.smartSort.separator),
       appendBasename: asBoolean(record.appendBasename, DEFAULT_SETTINGS.smartSort.appendBasename),
+      relationshipGrouping: this.normalizeRelationshipGrouping(
+        record.relationshipGrouping,
+        DEFAULT_SETTINGS.smartSort.relationshipGrouping
+      ),
       clearWhenNoMatch: asBoolean(record.clearWhenNoMatch, DEFAULT_SETTINGS.smartSort.clearWhenNoMatch),
       buckets
     };
+  }
+
+  private normalizeRelationshipGrouping(
+    value: unknown,
+    fallback: SmartSortSettings["relationshipGrouping"]
+  ): SmartSortSettings["relationshipGrouping"] {
+    return value === "children-under-parent" ? "children-under-parent" : fallback;
   }
 
   private normalizeSafeFrontmatterField(value: unknown, fallback: string): string {

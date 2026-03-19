@@ -1,5 +1,5 @@
 import { App, TFile, normalizePath } from "obsidian";
-import { getPluginById } from "../core";
+import { getPluginById } from "../../core";
 
 export interface TypeFolderOption {
   path: string;

@@ -3,7 +3,7 @@
  * Calendar views and integration
  */
 
-import { TPSPlugin } from '../../main';
+import TPSPlugin from '../../main';
 import { CalendarSettings } from '../../types';
 import * as logger from '../../logger';
 

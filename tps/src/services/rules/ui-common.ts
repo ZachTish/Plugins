@@ -7,7 +7,7 @@ import {
   RuleOperator,
   SmartRuleOperator,
   SortValueMapping
-} from "../types";
+} from "../../types";
 
 export const ICON_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "", label: "(none)" },

@@ -1,4 +1,4 @@
-import { App, Modal, TFile, normalizePath, Notice } from "obsidian";
+import { App, Modal, TFile, normalizePath, Notice, moment } from "obsidian";
 import { ExternalCalendarEvent } from "../types";
 import * as logger from "../logger";
 import { formatDateTimeForFrontmatter } from "../utils";
@@ -261,6 +261,51 @@ export async function createMeetingNoteFromExternalEvent(
       await app.vault.modify(file, bodyContent);
     }
   } else {
+    const resolvedEventIdKey = frontmatterKeys?.eventIdKey || "externalEventId";
+    if (event.id) {
+      const existingByEventId = findExistingNoteByEventId(app, event.id, resolvedEventIdKey);
+      if (existingByEventId) {
+        logger.log(`[CreateMeetingNote] Note already exists for "${event.title}" (${event.id}) — reusing ${existingByEventId.path}`);
+        return existingByEventId;
+      }
+    }
+
+    if (event.uid) {
+      const existingByUidDate = await findExistingNoteByUidAndDate(
+        app,
+        event.uid,
+        event.startDate,
+        frontmatterKeys?.uidKey || "tpsCalendarUid",
+        startProperty || "scheduled",
+        folderPath || null,
+      );
+      if (existingByUidDate) {
+        logger.log(`[CreateMeetingNote] Found existing note by uid+date for "${event.title}" (${event.uid}) — reusing ${existingByUidDate.path}`);
+        return existingByUidDate;
+      }
+    }
+
+    // Tertiary check: scan target folder for a file whose title matches and
+    // whose frontmatter date is on the same day. Catches old YYYY-MM-DD named
+    // files that predate the current event-ID format.
+    if (event.title && folderPath) {
+      const sanitizedForSearch = event.title
+        .replace(/[\\/:*?"<>|\x00-\x1F\x7F]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const existingByTitleDay = findExistingNoteByTitleAndDay(
+        app,
+        sanitizedForSearch,
+        folderPath,
+        event.startDate,
+        startProperty || "scheduled",
+      );
+      if (existingByTitleDay) {
+        logger.log(`[CreateMeetingNote] Found existing note by title+day for "${event.title}" — reusing ${existingByTitleDay.path}`);
+        return existingByTitleDay;
+      }
+    }
+
     const folder = folderPath ? normalizePath(folderPath) : "";
 
     if (folder) {
@@ -269,7 +314,13 @@ export async function createMeetingNoteFromExternalEvent(
         try {
           await app.vault.createFolder(folder);
         } catch (e) {
-          logger.error(`Failed to create folder ${folder}:`, e);
+          // tolerate races where another process created the folder concurrently
+          const nowExists = app.vault.getAbstractFileByPath(folder);
+          if (nowExists) {
+            logger.debug(`[CreateMeetingNote] Folder creation raced but folder now exists: ${folder}`);
+          } else {
+            logger.warn(`Failed to create folder ${folder}:`, e);
+          }
         }
       }
     }
@@ -279,68 +330,99 @@ export async function createMeetingNoteFromExternalEvent(
       .replace(/\s+/g, " ")
       .trim();
 
-    const dateSuffix = `${event.startDate.getFullYear()}-${String(
-      event.startDate.getMonth() + 1
-    ).padStart(2, "0")}-${String(event.startDate.getDate()).padStart(2, "0")}`;
+    const dateFormat = getDailyNoteDateFormat(app);
+    const dateSuffix = moment(event.startDate).format(dateFormat);
 
-    const maxRetries = 3;
-    const retryDelayMs = 100;
-    let lastError: Error | null = null;
+    const rawBasename = `${sanitizedTitle} ${dateSuffix}`;
+    const safeBasename = sanitizePathSegment(app, rawBasename);
+    const deterministicPath = normalizePath(`${folder}/${safeBasename}.md`);
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      let path = normalizePath(`${folder}/${sanitizedTitle} ${dateSuffix}.md`);
-      let counter = 1;
-      while (app.vault.getAbstractFileByPath(path)) {
-        path = normalizePath(`${folder}/${sanitizedTitle} ${dateSuffix} ${counter}.md`);
-        counter++;
+    const existingAtPath = app.vault.getAbstractFileByPath(deterministicPath) || findFileByPathInsensitive(app, deterministicPath);
+    if (existingAtPath instanceof TFile) {
+      file = existingAtPath;
+      const existingContent = await app.vault.read(file);
+      if (!existingContent.trim()) {
+        await app.vault.modify(file, bodyContent);
       }
+    } else {
+      const maxRetries = 3;
+      const retryDelayMs = 100;
+      let lastError: Error | null = null;
 
-      try {
-        logger.log(`[CreateMeetingNote] Attempt ${attempt + 1}/${maxRetries}: Creating file at path: ${path}`);
-        // Write template/default content first; frontmatter is applied via processFrontMatter below.
-        file = await app.vault.create(path, bodyContent);
-
-        await new Promise(resolve => setTimeout(resolve, 250));
-
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-          await app.vault.cachedRead(file);
-          logger.log(`[CreateMeetingNote] File created and verified: ${file.path}`);
-        } catch (readError) {
-          logger.warn(`[CreateMeetingNote] File created but not yet readable, waiting...`);
+          logger.log(`[CreateMeetingNote] Attempt ${attempt + 1}/${maxRetries}: Creating file at path: ${deterministicPath}`);
+          file = await app.vault.create(deterministicPath, bodyContent);
+
           await new Promise(resolve => setTimeout(resolve, 250));
+
           try {
             await app.vault.cachedRead(file);
-          } catch (finalError) {
-            logger.warn(`[CreateMeetingNote] File still not readable after wait, continuing anyway: ${path}`);
+            logger.log(`[CreateMeetingNote] File created and verified: ${file.path}`);
+          } catch (readError) {
+            logger.warn(`[CreateMeetingNote] File created but not yet readable, waiting...`);
+            await new Promise(resolve => setTimeout(resolve, 250));
+            try {
+              await app.vault.cachedRead(file);
+            } catch (finalError) {
+              logger.warn(`[CreateMeetingNote] File still not readable after wait, continuing anyway: ${deterministicPath}`);
+            }
+          }
+
+          lastError = null;
+          break;
+        } catch (error: any) {
+          lastError = error;
+          const errorMessage = error?.message || String(error);
+
+          if (errorMessage.includes("already exists") || errorMessage.includes("file already exists")) {
+            const racedFile = app.vault.getAbstractFileByPath(deterministicPath) || findFileByPathInsensitive(app, deterministicPath);
+            if (racedFile instanceof TFile) {
+              file = racedFile;
+              lastError = null;
+              break;
+            }
+
+            const byBasename = findFileByBasenameInFolder(app, folder, safeBasename);
+            if (byBasename) {
+              file = byBasename;
+              lastError = null;
+              logger.log(`[CreateMeetingNote] Recovered existing file by basename after create conflict: ${file.path}`);
+              break;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+            continue;
+          }
+
+          logger.warn(`[CreateMeetingNote] Attempt ${attempt + 1} failed: ${errorMessage}`);
+          await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        }
+      }
+
+      if (!file) {
+        // final re-check: maybe another process created the file after our last attempt
+        const racedFileFinal = app.vault.getAbstractFileByPath(deterministicPath) || findFileByPathInsensitive(app, deterministicPath);
+        if (racedFileFinal instanceof TFile) {
+          file = racedFileFinal;
+          logger.log(`[CreateMeetingNote] Recovered raced-created file: ${file.path}`);
+        } else {
+          const byBasename = findFileByBasenameInFolder(app, folder, safeBasename);
+          if (byBasename) {
+            file = byBasename;
+            logger.log(`[CreateMeetingNote] Recovered existing file by basename on final lookup: ${file.path}`);
           }
         }
 
-        lastError = null;
-        break;
-      } catch (error: any) {
-        lastError = error;
-        const errorMessage = error?.message || String(error);
-
-        if (errorMessage.includes("already exists") || errorMessage.includes("file already exists")) {
-          logger.warn(`[CreateMeetingNote] File already exists (sync race condition), retrying with new path: ${path}`);
-          await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-          continue;
+        if (!file) {
+          const errorMsg = lastError?.message || "Unknown error";
+          logger.error(`[CreateMeetingNote] Failed to create file after ${maxRetries} attempts: ${errorMsg}`);
+          throw new Error(`Failed to create meeting note after ${maxRetries} attempts: ${errorMsg}`);
         }
-
-        logger.warn(`[CreateMeetingNote] Attempt ${attempt + 1} failed: ${errorMessage}`);
-        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
       }
-    }
 
-    if (!file || lastError) {
-      const errorMsg = lastError?.message || "Unknown error";
-      logger.error(`[CreateMeetingNote] Failed to create file after ${maxRetries} attempts: ${errorMsg}`);
-      throw new Error(`Failed to create meeting note after ${maxRetries} attempts: ${errorMsg}`);
+      await runTemplaterOnFile(app, file);
     }
-
-    // Run Templater explicitly so any <% tp.* %> tags in the template are evaluated.
-    // Must run before processFrontmatterSafely so TPS fields are applied last (additive merge).
-    await runTemplaterOnFile(app, file);
   }
 
   // Apply identity/event frontmatter in one place so templates with existing
@@ -418,6 +500,206 @@ async function processTemplate(app: App, templateFile: TFile, vars: TemplateVars
 
 function normalizeKey(key: string): string {
   return String(key || "").trim().toLowerCase();
+}
+
+function getDailyNoteDateFormat(app: App): string {
+  // Try the core daily-notes internal plugin settings first
+  const dailyNotes = (app as any).internalPlugins?.getPluginById?.('daily-notes');
+  const format = dailyNotes?.instance?.options?.format;
+  if (format && typeof format === 'string' && format.trim()) {
+    return format.trim();
+  }
+  // Fallback to the standard Obsidian default daily note format
+  return 'dddd, MMMM Do YYYY';
+}
+
+function findExistingNoteByEventId(app: App, eventId: string, eventIdKey: string): TFile | null {
+  if (!eventId) return null;
+  const targetId = String(eventId).trim();
+  const keyLower = eventIdKey.toLowerCase();
+  for (const file of app.vault.getMarkdownFiles()) {
+    const fm = app.metadataCache.getFileCache(file)?.frontmatter;
+    if (!fm) continue;
+    const storedId = Object.entries(fm).find(([k]) => k.toLowerCase() === keyLower)?.[1];
+    if (storedId == null) continue;
+    if (String(storedId).trim() === targetId) return file;
+  }
+  return null;
+}
+
+async function findExistingNoteByUidAndDate(
+  app: App,
+  uid: string,
+  startDate: Date,
+  uidKey: string,
+  startKey: string,
+  folderPath: string | null,
+): Promise<TFile | null> {
+  const uidTarget = String(uid || "").trim();
+  if (!uidTarget) return null;
+
+  const dayTarget = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(startDate.getDate()).padStart(2, "0")}`;
+  const uidKeyLower = String(uidKey || "").trim().toLowerCase();
+  const startKeyLower = String(startKey || "").trim().toLowerCase();
+  const folderNorm = normalizePath(String(folderPath || "").trim()).toLowerCase();
+
+  for (const file of app.vault.getMarkdownFiles()) {
+    if (folderNorm) {
+      const fileFolder = normalizePath(file.parent?.path || "").toLowerCase();
+      if (fileFolder !== folderNorm) continue;
+    }
+
+    const cacheFm = app.metadataCache.getFileCache(file)?.frontmatter;
+    if (cacheFm) {
+      const storedUid = findFrontmatterValueCaseInsensitive(cacheFm, uidKeyLower);
+      const storedStart = findFrontmatterValueCaseInsensitive(cacheFm, startKeyLower)
+        || findFrontmatterValueCaseInsensitive(cacheFm, "scheduled");
+      if (String(storedUid || "").trim() === uidTarget && doesFrontmatterDateMatchDay(storedStart, dayTarget)) {
+        return file;
+      }
+      continue;
+    }
+
+    try {
+      const content = await app.vault.cachedRead(file);
+      const fm = extractRawFrontmatter(content);
+      if (!fm) continue;
+
+      const rawUid = findRawFrontmatterValue(fm, uidKeyLower);
+      const rawStart = findRawFrontmatterValue(fm, startKeyLower) || findRawFrontmatterValue(fm, "scheduled");
+      if (String(rawUid || "").trim() === uidTarget && doesFrontmatterDateMatchDay(rawStart, dayTarget)) {
+        return file;
+      }
+    } catch {
+      // Ignore unreadable files.
+    }
+  }
+
+  return null;
+}
+
+function findFrontmatterValueCaseInsensitive(frontmatter: Record<string, any>, keyLower: string): any {
+  for (const [key, value] of Object.entries(frontmatter || {})) {
+    if (String(key || "").trim().toLowerCase() === keyLower) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function extractRawFrontmatter(content: string): string | null {
+  const match = String(content || "").match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  return match ? match[1] : null;
+}
+
+function findRawFrontmatterValue(frontmatterBody: string, keyLower: string): string | null {
+  const lines = String(frontmatterBody || "").replace(/\r\n/g, "\n").split("\n");
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith("-")) continue;
+    const sep = line.indexOf(":");
+    if (sep <= 0) continue;
+
+    const key = line.slice(0, sep).trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+    if (key !== keyLower) continue;
+
+    return line.slice(sep + 1).trim().replace(/^['"]|['"]$/g, "");
+  }
+  return null;
+}
+
+function doesFrontmatterDateMatchDay(value: unknown, dayTarget: string): boolean {
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    return raw.slice(0, 10) === dayTarget;
+  }
+  if (/^\d{8}$/.test(raw)) {
+    const normalized = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+    return normalized === dayTarget;
+  }
+  return false;
+}
+
+/**
+ * Search the target folder for an existing note whose basename starts with the
+ * sanitized event title and whose frontmatter date (startKey / "scheduled") falls
+ * on the same calendar day as startDate.
+ *
+ * This catches old notes that were created with a YYYY-MM-DD filename suffix before
+ * the daily-note date format was adopted, or files that lack identity frontmatter.
+ */
+function findExistingNoteByTitleAndDay(
+  app: App,
+  sanitizedTitle: string,
+  folderPath: string,
+  startDate: Date,
+  startKey: string,
+): TFile | null {
+  if (!sanitizedTitle || !folderPath || !startDate) return null;
+  const titlePrefix = sanitizedTitle.toLowerCase() + " ";
+  const folderNorm = normalizePath(folderPath).toLowerCase();
+  const yr = startDate.getFullYear();
+  const mo = String(startDate.getMonth() + 1).padStart(2, "0");
+  const dy = String(startDate.getDate()).padStart(2, "0");
+  const dayTarget = `${yr}-${mo}-${dy}`;
+  const startKeyLower = String(startKey || "scheduled").toLowerCase();
+
+  for (const file of app.vault.getMarkdownFiles()) {
+    const parentPath = normalizePath(file.parent?.path || "").toLowerCase();
+    if (parentPath !== folderNorm) continue;
+    if (!file.basename.toLowerCase().startsWith(titlePrefix)) continue;
+
+    // Prefer metadata cache; fall back to nothing (we don't do async here).
+    const fm = app.metadataCache.getFileCache(file)?.frontmatter;
+    if (!fm) continue;
+
+    const storedStart =
+      findFrontmatterValueCaseInsensitive(fm, startKeyLower) ??
+      findFrontmatterValueCaseInsensitive(fm, "scheduled");
+    if (storedStart && doesFrontmatterDateMatchDay(String(storedStart), dayTarget)) {
+      return file;
+    }
+  }
+  return null;
+}
+
+function findFileByPathInsensitive(app: App, path: string): TFile | null {
+  const target = normalizePath(path).toLowerCase();
+  for (const markdownFile of app.vault.getMarkdownFiles()) {
+    if (normalizePath(markdownFile.path).toLowerCase() === target) {
+      return markdownFile;
+    }
+  }
+  return null;
+}
+
+function sanitizePathSegment(app: App, segment: string): string {
+  const raw = String(segment || "").trim();
+  if (!raw) return "Untitled";
+  // @ts-ignore Internal adapter API used by Obsidian itself
+  const fsSanitize = (app.vault.adapter as any)?.fs?.sanitize;
+  if (typeof fsSanitize === "function") {
+    const sanitized = String(fsSanitize(raw) || "").trim();
+    if (sanitized) return sanitized;
+  }
+  return raw.replace(/[\\/:*?"<>|]/g, "").trim() || "Untitled";
+}
+
+function findFileByBasenameInFolder(app: App, folderPath: string, basename: string): TFile | null {
+  const folderNorm = normalizePath(folderPath || "").toLowerCase();
+  const nameNorm = `${String(basename || "").trim().toLowerCase()}.md`;
+  if (!nameNorm) return null;
+
+  for (const markdownFile of app.vault.getMarkdownFiles()) {
+    const parentPath = normalizePath(markdownFile.parent?.path || "").toLowerCase();
+    if (folderNorm && parentPath !== folderNorm) continue;
+    if (markdownFile.name.toLowerCase() === nameNorm) {
+      return markdownFile;
+    }
+  }
+
+  return null;
 }
 
 function setFrontmatterValueCaseInsensitive(

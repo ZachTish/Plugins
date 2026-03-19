@@ -8,6 +8,7 @@ import {
     RuleEvaluationContext,
     RuleCondition,
     RuleConditionSource,
+    RelationshipLineageNode,
 } from "../types";
 
 /**
@@ -185,10 +186,25 @@ export class RuleApplicationService {
             backlinks,
         };
 
+        if (this.getSettings().smartSort.relationshipGrouping === "children-under-parent") {
+            context.relationshipLineage = this.buildRelationshipLineage(file, frontmatter);
+        }
+
         if (includeParent) {
-            const parent = this.resolveParentContext(file, frontmatter);
-            if (parent) {
-                context.parent = parent;
+            const lineageParent = context.relationshipLineage?.length && context.relationshipLineage.length > 1
+                ? context.relationshipLineage[context.relationshipLineage.length - 2]
+                : null;
+            if (lineageParent) {
+                context.parent = {
+                    file: lineageParent.file,
+                    frontmatter: lineageParent.frontmatter,
+                    tags: lineageParent.tags,
+                };
+            } else {
+                const parent = this.resolveParentContext(file, frontmatter);
+                if (parent) {
+                    context.parent = parent;
+                }
             }
         }
 
@@ -531,12 +547,7 @@ export class RuleApplicationService {
     private resolveParentFile(file: TFile, frontmatter: Record<string, unknown> | null): TFile | null {
         if (!frontmatter) return null;
 
-        const configured = this.getSettings().upstreamLinkKeys || [];
-        const keys = Array.from(new Set([
-            ...configured,
-            "childOf",
-            "parent",
-        ].map((k) => String(k || "").trim()).filter(Boolean)));
+        const keys = this.getConfiguredParentLinkKeys();
 
         for (const key of keys) {
             const raw = this.getFrontmatterValue(frontmatter, key);
@@ -550,6 +561,73 @@ export class RuleApplicationService {
         }
 
         return null;
+    }
+
+    private buildRelationshipLineage(
+        file: TFile,
+        frontmatter: Record<string, unknown> | null,
+    ): RelationshipLineageNode[] {
+        const lineage: RelationshipLineageNode[] = [];
+        const visited = new Set<string>();
+
+        let currentFile: TFile | null = file;
+        let currentFrontmatter = frontmatter;
+        let depth = 0;
+
+        while (currentFile && depth < 12) {
+            if (visited.has(currentFile.path)) {
+                break;
+            }
+            visited.add(currentFile.path);
+
+            lineage.push(this.createRelationshipLineageNode(currentFile, currentFrontmatter));
+
+            const parentFile = this.resolveParentFile(currentFile, currentFrontmatter);
+            if (!parentFile || parentFile.path === currentFile.path) {
+                break;
+            }
+
+            currentFile = parentFile;
+            currentFrontmatter = this.toFrontmatterRecord(this.app.metadataCache.getFileCache(parentFile)?.frontmatter);
+            depth += 1;
+        }
+
+        return lineage.reverse();
+    }
+
+    private createRelationshipLineageNode(
+        file: TFile,
+        frontmatter: Record<string, unknown> | null,
+    ): RelationshipLineageNode {
+        return {
+            file: {
+                path: file.path,
+                name: file.name,
+                basename: file.basename,
+                extension: file.extension,
+            },
+            frontmatter,
+            tags: this.collectTagsFromCache(file, frontmatter),
+        };
+    }
+
+    private getConfiguredParentLinkKeys(): string[] {
+        const configured = this.getSettings().upstreamLinkKeys || [];
+        const pluginsRegistry = (this.app as any)?.plugins;
+        const tpsPlugin =
+            pluginsRegistry?.getPlugin?.("tps") ||
+            pluginsRegistry?.plugins?.["tps"] ||
+            pluginsRegistry?.getPlugin?.("tps-global-context-menu") ||
+            pluginsRegistry?.plugins?.["tps-global-context-menu"] ||
+            pluginsRegistry?.plugins?.["TPS-Global-Context-Menu (Dev)"];
+        const gcmParentKey = (tpsPlugin as any)?.settings?.parentLinkFrontmatterKey;
+
+        return Array.from(new Set([
+            ...configured,
+            gcmParentKey,
+            "childOf",
+            "parent",
+        ].map((key) => String(key || "").trim()).filter(Boolean)));
     }
 
     private collectParentLinkCandidates(raw: unknown): string[] {

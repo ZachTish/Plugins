@@ -117,6 +117,42 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         }),
     );
 
+    // ── Reactive completedDate sync ──────────────────────────────────────────
+    // Watches for status changes from ANY source (direct edit, bases, notification modal,
+    // kanban, canvas, etc.) and ensures completedDate is always in sync.
+    const debouncedCompletedDateSync = debounce((file: TFile) => {
+        if (!file || file.extension !== 'md') return;
+
+        const cache = plugin.app.metadataCache.getFileCache(file);
+        const fm = (cache?.frontmatter || {}) as Record<string, any>;
+
+        const doneStatuses = new Set<string>(
+            ((plugin.settings as any).recurrenceCompletionStatuses?.length
+                ? (plugin.settings as any).recurrenceCompletionStatuses
+                : ['complete', 'wont-do']
+            ).map((s: string) => String(s || '').trim().toLowerCase()),
+        );
+
+        const currentStatus = String(fm.status ?? '').trim().toLowerCase();
+        const completedDateKey = Object.keys(fm).find((k) => k.toLowerCase() === 'completeddate');
+        const hasCompletedDate = !!completedDateKey && fm[completedDateKey] != null && fm[completedDateKey] !== '';
+
+        if (doneStatuses.has(currentStatus) && !hasCompletedDate) {
+            // Write completedDate — status is done but completedDate is missing
+            void plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+                fmw['completedDate'] = (window as any).moment
+                    ? (window as any).moment().format('YYYY-MM-DD HH:mm:ss')
+                    : new Date().toISOString().replace('T', ' ').slice(0, 19);
+            });
+        } else if (!doneStatuses.has(currentStatus) && hasCompletedDate && currentStatus) {
+            // Clear completedDate — status reverted away from done
+            void plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+                const key = Object.keys(fmw).find((k) => k.toLowerCase() === 'completeddate');
+                if (key) delete fmw[key];
+            });
+        }
+    }, 400, false);
+
     // ── Debounced frontmatter/filename sync ──────────────────────────────────
 
     const debouncedMenuRefresh = debounce((file: TFile) => {
@@ -166,6 +202,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
             debouncedFilenameSync(file);
             if (file instanceof TFile) {
                 scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true });
+                debouncedCompletedDateSync(file);
             }
         }),
     );

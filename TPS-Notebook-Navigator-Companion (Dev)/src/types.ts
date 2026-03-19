@@ -92,8 +92,15 @@ export interface SmartSortSettings {
   field: string;
   separator: string;
   appendBasename: boolean;
+  relationshipGrouping: "none" | "children-under-parent";
   clearWhenNoMatch: boolean;
   buckets: SortBucket[];
+}
+
+export interface RelationshipLineageNode {
+  file: RuleFileDescriptor;
+  frontmatter: Record<string, unknown> | null;
+  tags: string[];
 }
 
 // Legacy types for migration
@@ -157,6 +164,7 @@ export interface RuleEvaluationContext {
   tags: string[];
   body?: string;
   backlinks?: string[];
+  relationshipLineage?: RelationshipLineageNode[];
   parent?: {
     file: RuleFileDescriptor;
     frontmatter: Record<string, unknown> | null;
@@ -191,6 +199,7 @@ export const DEFAULT_SETTINGS: NotebookNavigatorCompanionSettings = {
     field: "navigator_sort",
     separator: "_",
     appendBasename: true,
+    relationshipGrouping: "none",
     clearWhenNoMatch: false,
     buckets: []
   },

@@ -38,6 +38,7 @@ import { useCalendarEvents, normalizeValue, tryGetValue } from "./hooks/useCalen
 import { useEventRenderer } from "./components/EventRenderer";
 import { CalendarNavigation } from "./components/CalendarNavigation";
 import { ContinuousScrollView } from "./components/ContinuousScrollView";
+import { parseDateFromFilename } from "../../tps/src/utils/daily-file-date";
 
 const DEFAULT_SLOT_MIN_TIME = "00:00:00";
 const DEFAULT_SLOT_MAX_TIME = "24:00:00";
@@ -318,6 +319,10 @@ interface CalendarReactViewProps {
   pastEventOpacity?: number;
   eventFontSize?: "small" | "default" | "large";
   activeEventHighlightColor?: string;
+  /** Status values that should be dimmed as "done". Defaults to ["complete","wont-do"]. */
+  doneStatuses?: string[];
+  /** Optional user daily-note date format (passed from host view) */
+  dailyNoteDateFormat?: string;
 }
 
 const normalizeDisplayTitle = (raw: string): string => {
@@ -363,14 +368,16 @@ const pathsLikelyMatch = (a: string | null | undefined, b: string | null | undef
   return stripMdExtension(left) === stripMdExtension(right);
 };
 
-const extractDailyNoteDateKey = (path: string | null | undefined): string | null => {
+const extractDailyNoteDateKey = (path: string | null | undefined, userFormat?: string): string | null => {
   const raw = String(path || "").trim();
   if (!raw) return null;
   const filename = raw.split("/").pop() || raw;
   const basename = filename.replace(/\.[^.]+$/, "");
-  const match = basename.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  return `${match[1]}-${match[2]}-${match[3]}`;
+  try {
+    const m = parseDateFromFilename(basename, userFormat);
+    if (m && m.isValid && m.isValid()) return (m as any).format('YYYY-MM-DD');
+  } catch { /* ignore */ }
+  return null;
 };
 
 const applyActiveNoteEventHighlight = (eventEl: HTMLElement, shouldHighlight: boolean): void => {
@@ -564,6 +571,8 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   pastEventOpacity = 55,
   eventFontSize = "default",
   activeEventHighlightColor = "#3b82f6",
+  doneStatuses,
+  dailyNoteDateFormat,
 }) => {
   const app = useApp() || ((window as any).app as App);
   const calendarRef = useRef<FullCalendar>(null);
@@ -591,6 +600,9 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   const [externalDropPreview, setExternalDropPreview] = useState<{ start: Date; end: Date; allDay: boolean } | null>(null);
   const [hoursToggleEdge, setHoursToggleEdge] = useState<"top" | "bottom">("bottom");
   const [hoursToggleVisible, setHoursToggleVisible] = useState(false);
+  const [navScrollHidden, setNavScrollHidden] = useState(false);
+  // Accumulator state for direction-based scroll hiding (same pattern as GCM).
+  const navScrollStateRef = useRef({ lastTop: 0, accum: 0 });
 
   const dragCounterRef = useRef(0);
   const eventContextMenuHandlersRef = useRef(new Map<HTMLElement, (event: MouseEvent) => void>());
@@ -600,6 +612,8 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   useEffect(() => { isEmbedModeRef.current = isEmbedMode; }, [isEmbedMode]);
   const activeFilePathRef = useRef<string | null>(activeFilePath);
   useEffect(() => { activeFilePathRef.current = activeFilePath; }, [activeFilePath]);
+  const dailyNoteDateFormatRef = useRef<string | undefined>(dailyNoteDateFormat);
+  useEffect(() => { dailyNoteDateFormatRef.current = dailyNoteDateFormat; }, [dailyNoteDateFormat]);
   const lastObservedScrollTopRef = useRef(0);
   const lastObservedScrollTargetRef = useRef<HTMLElement | null>(null);
   const [pendingChange, setPendingChange] = useState<{
@@ -623,6 +637,41 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   useEffect(() => {
     const interval = setInterval(() => setTick(t => t + 1), 60000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Hide the floating nav on scroll-down, reveal on scroll-up — same accumulator
+  // pattern used by the GCM persistent menu.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const HIDE_THRESHOLD = 40;
+    const SHOW_THRESHOLD = 20;
+    const state = navScrollStateRef.current;
+    state.lastTop = 0;
+    state.accum = 0;
+
+    const listener = (evt: Event) => {
+      const target = evt.target as HTMLElement | null;
+      if (!target) return;
+      const top = (target as HTMLElement).scrollTop ?? 0;
+      const delta = top - state.lastTop;
+      state.lastTop = top;
+      if ((delta > 0 && state.accum < 0) || (delta < 0 && state.accum > 0)) {
+        state.accum = 0;
+      }
+      state.accum += delta;
+      if (state.accum > HIDE_THRESHOLD) {
+        setNavScrollHidden(true);
+        state.accum = 0;
+      } else if (state.accum < -SHOW_THRESHOLD) {
+        setNavScrollHidden(false);
+        state.accum = 0;
+      }
+    };
+
+    // capture:true catches scroll on any descendant (fc-scroller, scroll-surface, etc.)
+    container.addEventListener('scroll', listener, { passive: true, capture: true });
+    return () => container.removeEventListener('scroll', listener, { capture: true } as any);
   }, []);
 
   // Detect mobile platform
@@ -650,6 +699,9 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
     pointerEvents: 'none',
     touchAction: 'pan-y',
     zIndex: 10010,
+    opacity: navScrollHidden ? 0 : 1,
+    visibility: navScrollHidden ? 'hidden' : 'visible',
+    transition: 'opacity 0.2s ease, visibility 0.2s ease',
   };
 
   useEffect(() => {
@@ -681,7 +733,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   useEffect(() => {
     const rootEl = containerRef.current;
     if (!rootEl) return;
-    const activeDateKey = extractDailyNoteDateKey(activeFilePath);
+    const activeDateKey = extractDailyNoteDateKey(activeFilePath, dailyNoteDateFormat);
     const labelEls = rootEl.querySelectorAll<HTMLElement>(
       ".fc-col-header-cell[data-date] a.fc-col-header-cell-cushion, .fc-daygrid-day[data-date] a.fc-daygrid-day-number",
     );
@@ -1112,6 +1164,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
     defaultEventDuration,
     minEventHeight,
     tick,
+    doneStatuses,
   });
 
   // Canvas BCR patch: register this container so the module-level patch
@@ -1883,7 +1936,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
       };
       dayHeaderHoverHandlersRef.current.set(linkEl, hoverHandler);
       linkEl.addEventListener("mouseenter", hoverHandler);
-      const activeDateKey = extractDailyNoteDateKey(activeFilePathRef.current);
+      const activeDateKey = extractDailyNoteDateKey(activeFilePathRef.current, dailyNoteDateFormatRef.current);
       applyActiveDayLabelHighlight(linkEl, !!activeDateKey && formatDateKey(date) === activeDateKey);
     }
 

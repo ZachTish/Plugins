@@ -3,7 +3,8 @@
  * Handles push notifications via ntfy.sh
  */
 
-import { TPSPlugin } from '../../main';
+import { Notice } from 'obsidian';
+import TPSPlugin from '../../main';
 import { NotifierSettings } from '../../types';
 import * as logger from '../../logger';
 

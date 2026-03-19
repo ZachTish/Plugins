@@ -8,7 +8,7 @@ import {
     RuleEvaluationContext,
     RuleCondition,
     RuleConditionSource,
-} from "../types";
+} from "./types";
 
 /**
  * Handles per-file rule evaluation and frontmatter mutation for icon, color,

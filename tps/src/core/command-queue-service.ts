@@ -159,8 +159,8 @@ export class CommandQueueService {
 
     const task = this.openActiveFileQueue.then(run, run);
     this.openActiveFileQueue = task.then(
-      () => undefined,
-      () => undefined,
+      (): undefined => undefined,
+      (): undefined => undefined,
     );
     return task;
   }

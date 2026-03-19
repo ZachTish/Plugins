@@ -1,7 +1,8 @@
 import { normalizePath, TFile } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
 import * as logger from "../logger";
-import { extractDateSuffix, stripDateSuffix, FULL_DATE_REGEX } from '../utils/date-suffix-utils';
+import { extractDateSuffix, stripDateSuffix } from '../utils/date-suffix-utils';
+import { parseDateFromFilename, isDailyBasename } from '../utils/daily-file-date';
 
 /**
  * Handles automatic file naming based on title and scheduled date
@@ -240,9 +241,9 @@ export class FileNamingService {
             const rawBasename = (liveFile.basename || '').trim();
             if (!rawBasename) return "skipped";
 
-            // Date-only files (daily notes: YYYY-MM-DD) are owned by the Companion
+            // Date-only files (daily notes) are owned by the Companion
             // plugin for title sync. Skip them here to avoid fighting over title values.
-            if (FULL_DATE_REGEX.test(rawBasename)) return "skipped";
+            if (isDailyBasename(rawBasename, (this.plugin as any)?.settings?.dailyNoteDateFormat)) return "skipped";
 
             // Avoid writing clearly-stale template-derived titles
             if (rawBasename.toLowerCase().includes('template')) return "skipped";
@@ -254,13 +255,14 @@ export class FileNamingService {
             // This keeps the "title" canonical and allows the filename to carry the date.
             const { base: before, dateStr } = extractDateSuffix(nextTitle);
             if (dateStr) {
-
                 if (scheduled) {
                     const scheduledDate = window.moment(scheduled);
-                    const suffixDate = window.moment(dateStr, 'YYYY-MM-DD', true);
-                    if (scheduledDate.isValid() && suffixDate.isValid()) {
+                    const parsed = parseDateFromFilename(dateStr, (this.plugin as any)?.settings?.dailyNoteDateFormat);
+                    const suffixDateValid = parsed && parsed.isValid && parsed.isValid();
+                    if (scheduledDate.isValid() && suffixDateValid) {
                         const scheduledStr = scheduledDate.format('YYYY-MM-DD');
-                        if (scheduledStr === dateStr) {
+                        const suffixStr = (parsed as any).format('YYYY-MM-DD');
+                        if (scheduledStr === suffixStr) {
                             nextTitle = before;
                         }
                     } else {

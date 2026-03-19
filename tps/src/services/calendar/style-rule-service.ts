@@ -9,11 +9,11 @@ import {
   CalendarField,
   CalendarOperator,
   CalendarStyleMatch,
-} from "../../../types";
+} from "../../types";
 import {
   DEFAULT_PRIORITY_COLOR_MAP,
   DEFAULT_STATUS_STYLE_MAP,
-} from "../utils";
+} from "./utils";
 
 // --- Constants ---
 

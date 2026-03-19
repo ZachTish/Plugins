@@ -132,7 +132,7 @@ export class AutoCreateService {
 
             // Build O(1) lookup maps from vault notes
             logger.log('[AutoCreateService] Building vault index...');
-            const { byEventId, byUidStart, allNotes } = await this.buildVaultIndex();
+            const { byEventId, byUidStart, byTitleDay, allNotes } = await this.buildVaultIndex();
 
             let created = 0, updated = 0, deleted = 0, quarantined = 0, restored = 0;
             const processedEventIds = new Set<string>();
@@ -152,6 +152,7 @@ export class AutoCreateService {
                         event,
                         byEventId,
                         byUidStart,
+                        byTitleDay,
                         calendarConfigs[event.sourceUrl || ""],
                         filterTerms,
                         forceRegenerate
@@ -316,6 +317,7 @@ export class AutoCreateService {
     private async buildVaultIndex(): Promise<{
         byEventId: Map<string, VaultNote>;
         byUidStart: Map<string, VaultNote>;
+        byTitleDay: Map<string, VaultNote>;
         allNotes: VaultNote[];
     }> {
         const byEventId = new Map<string, VaultNote>();
@@ -396,7 +398,20 @@ export class AutoCreateService {
             }
         }
 
-        return { byEventId, byUidStart, allNotes };
+        // Tertiary index: normalizedTitle|YYYY-MM-DD → note
+        // Catches old-format files whose event IDs changed (ms-timestamp → stable-string migration)
+        // or notes that lack identity frontmatter but have a matching title+date.
+        const byTitleDay = new Map<string, VaultNote>();
+        for (const note of allNotes) {
+            if (note.isArchived) continue;
+            if (!note.storedTitle || !note.startDate || !Number.isFinite(note.startDate.getTime())) continue;
+            const normTitle = note.storedTitle.trim().toLowerCase();
+            const sd = note.startDate;
+            const tdKey = `${normTitle}|${sd.getFullYear()}-${String(sd.getMonth() + 1).padStart(2, '0')}-${String(sd.getDate()).padStart(2, '0')}`;
+            if (!byTitleDay.has(tdKey)) byTitleDay.set(tdKey, note);
+        }
+
+        return { byEventId, byUidStart, byTitleDay, allNotes };
     }
 
     // ========================================================================
@@ -407,13 +422,14 @@ export class AutoCreateService {
         event: ExternalCalendarEvent,
         byEventId: Map<string, VaultNote>,
         byUidStart: Map<string, VaultNote>,
+        byTitleDay: Map<string, VaultNote>,
         calendarInfo: CalendarAutoCreateConfig | null,
         filterTerms: string[],
         forceRegenerate: boolean
     ): Promise<{ action: 'created' | 'updated' | 'deleted' | 'none', file?: TFile }> {
         const normalizedSourceUrl = this.normalizeSourceUrl(event.sourceUrl);
 
-        // 1. Find match — primary by eventId, fallback by uid+start
+        // 1. Find match — primary by eventId, fallback by uid+start, tertiary by title+day
         let match = byEventId.get(event.id) || null;
         let repairedEventId = false;
 
@@ -426,6 +442,19 @@ export class AutoCreateService {
                 // ID format changes across parser updates.
                 logger.log(`[AutoCreateService] Repairing eventId for "${event.title}": ${fallback.eventId} -> ${event.id} (matched via uid+start)`);
                 match = fallback;
+                repairedEventId = true;
+            }
+        }
+
+        // Tertiary fallback: title+day (catches files whose event IDs changed format)
+        if (!match) {
+            const normTitle = event.title.trim().toLowerCase();
+            const s = event.startDate;
+            const tdKey = `${normTitle}|${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}-${String(s.getDate()).padStart(2, '0')}`;
+            const titleFallback = byTitleDay.get(tdKey);
+            if (titleFallback && !titleFallback.isArchived) {
+                logger.log(`[AutoCreateService] Matched by title+day for "${event.title}": ${titleFallback.file.path}`);
+                match = titleFallback;
                 repairedEventId = true;
             }
         }
@@ -540,6 +569,14 @@ export class AutoCreateService {
         logger.log(`[AutoCreateService] Creating new note for: ${event.title}`);
 
         const resolvedFolder = calendarInfo?.folder || calendarInfo?.typeFolder || "";
+
+        // Hard protection: never auto-create at vault root or inside any _ folder.
+        const folderSegments = resolvedFolder.split('/').filter(Boolean);
+        if (!resolvedFolder || folderSegments.some(seg => seg.startsWith('_'))) {
+            logger.warn(`[AutoCreateService] Refusing to create in protected path "${resolvedFolder || '(vault root)'}" for: ${event.title}`);
+            return { action: 'none' };
+        }
+
         const resolvedTemplate = calendarInfo?.template || null;
 
         const file = await createMeetingNoteFromExternalEvent(
@@ -727,11 +764,60 @@ export class AutoCreateService {
             const content = await this.app.vault.cachedRead(file);
             const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
             if (match) {
-                const parsed = parseYaml(match[1]);
-                if (typeof parsed === 'object') return parsed;
+                try {
+                    const parsed = parseYaml(match[1]);
+                    if (typeof parsed === 'object') return parsed;
+                } catch {
+                    const recovered = this.extractIdentityFrontmatterFallback(match[1]);
+                    if (recovered) {
+                        logger.warn(`[AutoCreateService] Recovered minimal frontmatter for malformed YAML: ${file.path}`);
+                        return recovered;
+                    }
+                }
             }
         } catch { }
         return null;
+    }
+
+    private extractIdentityFrontmatterFallback(frontmatterBody: string): Record<string, any> | null {
+        const text = String(frontmatterBody || "").replace(/\r\n/g, "\n");
+        const wantedKeys = [
+            this.config.eventIdKey,
+            this.config.uidKey,
+            this.config.startProperty,
+            this.config.endProperty,
+            this.config.sourceUrlKey,
+            this.config.titleKey,
+            "scheduled",
+            "location",
+        ]
+            .map((key) => String(key || "").trim())
+            .filter(Boolean);
+
+        const wantedSet = new Set(wantedKeys.map((key) => key.toLowerCase()));
+        const recovered: Record<string, any> = {};
+
+        for (const rawLine of text.split("\n")) {
+            const line = rawLine.trim();
+            if (!line || line.startsWith("#") || line.startsWith("-")) continue;
+            const sep = line.indexOf(":");
+            if (sep <= 0) continue;
+
+            const rawKey = line.slice(0, sep).trim().replace(/^['"]|['"]$/g, "");
+            if (!rawKey) continue;
+
+            const keyLower = rawKey.toLowerCase();
+            if (!wantedSet.has(keyLower)) continue;
+
+            const existingKey = Object.keys(recovered).find((candidate) => candidate.toLowerCase() === keyLower);
+            if (existingKey) continue;
+
+            const rawValue = line.slice(sep + 1).trim();
+            const cleaned = rawValue.replace(/^['"]|['"]$/g, "").trim();
+            recovered[rawKey] = cleaned;
+        }
+
+        return Object.keys(recovered).length > 0 ? recovered : null;
     }
 
     private async processFrontmatterSafely(

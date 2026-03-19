@@ -47,10 +47,12 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "TPS Calendar Settings" });
 
-    const createMainCategory = (title: "Features" | "Rules" | "Interaction" | "UI Display"): HTMLElement => {
-      const category = containerEl.createDiv({ cls: "tps-settings-main-category" });
-      category.createEl("h3", { text: title });
-      return category.createDiv({ cls: "tps-settings-main-content" });
+    const createMainCategory = (title: "Features" | "Rules" | "Interaction" | "UI Display", defaultOpen = true): HTMLElement => {
+      const details = containerEl.createEl('details', { cls: 'tps-settings-main-category' });
+      if (defaultOpen) details.setAttr('open', 'true');
+      const summary = details.createEl('summary', { cls: 'tps-settings-main-summary' });
+      summary.createEl('h3', { text: title });
+      return details.createDiv({ cls: 'tps-settings-main-content' });
     };
 
     const featuresCategory = createMainCategory("Features");
@@ -313,6 +315,22 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           .setValue(this.plugin.settings.contextDateEnabled ?? false)
           .onChange(async (value) => {
             this.plugin.settings.contextDateEnabled = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(viewBehaviorSection)
+      .setName("Daily note date format")
+      .setDesc(
+        "Moment.js format string for daily note filenames (e.g. YYYYMMDD, DD-MM-YYYY). " +
+          "Leave blank to use Obsidian's built-in Daily Notes format.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("e.g. YYYYMMDD or DD-MM-YYYY")
+          .setValue(this.plugin.settings.dailyNoteDateFormat ?? "")
+          .onChange(async (value) => {
+            this.plugin.settings.dailyNoteDateFormat = value.trim();
             await this.plugin.saveSettings();
           }),
       );

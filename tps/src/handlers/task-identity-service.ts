@@ -82,11 +82,13 @@ export interface IdentitySettings {
 // Defaults
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** YYYY-MM-DD basename pattern used to detect daily note files. */
-const DAILY_NOTE_BASENAME_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+import { isDailyBasename } from '../utils/daily-file-date';
+
+/** YYYY-MM-DD basename pattern used to detect daily note files. (deprecated) */
+// const DAILY_NOTE_BASENAME_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /** YYYY-MM-DD date-only pattern used to detect all-day values. */
-const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_ONLY_PATTERN = /^\d{4}[-_/]\d{2}[-_/]\d{2}$/;
 
 const DEFAULT_COMPLETION_STATUSES = ['complete', 'done', 'finished'];
 const DEFAULT_WONT_DO_STATUSES    = ['wont-do', 'cancelled', 'canceled', 'skipped'];
@@ -272,7 +274,7 @@ function firstDefinedProperty(
 
 /** Detect whether a file is a daily note by basename pattern or configured folder. */
 function detectDailyNote(file: TFile, dailyNoteFolders: string[]): boolean {
-    if (DAILY_NOTE_BASENAME_PATTERN.test(file.basename)) return true;
+    if (isDailyBasename(String(file.basename || ''))) return true;
 
     const folderPath = file.parent?.path ?? '';
     return dailyNoteFolders.some((f) => {

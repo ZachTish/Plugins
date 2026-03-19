@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { BasesEntry, BasesPropertyId, Value } from "obsidian";
-import type { CalendarEntry } from "../CalendarReactView";
+import type { CalendarEntry } from "./all-day-events-modal";
 
 const normalizeValue = (value: unknown): string => {
   if (value === null || value === undefined) return "";
