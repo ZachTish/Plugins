@@ -326,7 +326,7 @@ export async function createMeetingNoteFromExternalEvent(
     }
 
     const sanitizedTitle = sanitizeFileName(event.title) || "Untitled Event";
-    const preferredDateFormat = getDailyNoteDateFormat(app);
+    const preferredDateFormat = await getDailyNoteDateFormat(app);
     const dateSuffix = sanitizeFileName(moment(event.startDate).format(preferredDateFormat));
     const titleAlreadyHasDate = titleContainsDateToken(event.title, event.startDate, preferredDateFormat);
     const rawBasename = titleAlreadyHasDate || !dateSuffix
@@ -500,13 +500,28 @@ function normalizeKey(key: string): string {
   return String(key || "").trim().toLowerCase();
 }
 
-function getDailyNoteDateFormat(app: App): string {
+async function getDailyNoteDateFormat(app: App): Promise<string> {
   // Try the core daily-notes internal plugin settings first
   const dailyNotes = (app as any).internalPlugins?.getPluginById?.('daily-notes');
   const format = dailyNotes?.instance?.options?.format;
   if (format && typeof format === 'string' && format.trim()) {
     return format.trim();
   }
+
+  // Fallback to persisted daily-notes core plugin config.
+  try {
+    const configDir = (app.vault as any)?.configDir || ".obsidian";
+    const configPath = normalizePath(`${configDir}/daily-notes.json`);
+    const raw = await app.vault.adapter.read(configPath);
+    const parsed = JSON.parse(raw);
+    const configFormat = parsed?.format;
+    if (typeof configFormat === "string" && configFormat.trim()) {
+      return configFormat.trim();
+    }
+  } catch {
+    // Ignore config read/parse errors and fall through to default.
+  }
+
   // Fallback to Obsidian's standard default daily note format.
   return 'YYYY-MM-DD';
 }
