@@ -20,6 +20,12 @@
 .tps-kanban-lane-title { flex: 1; }
 .tps-kanban-cards { display:flex; flex-direction:column; gap:6px }
 .tps-kanban-card { background: var(--background-primary); padding:8px; border-radius:4px; cursor:grab; box-shadow: var(--background-modifier-shadow); }
+.tps-kanban-card--open-note {
+  outline: 2px solid color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 72%, white 28%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 42%, transparent),
+    0 8px 18px color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 22%, black 78%);
+}
 .tps-kanban-drop-target { outline: 2px dashed var(--interactive-accent); }
 .tps-kanban-lane-drop-target { outline: 3px dashed var(--interactive-accent); }
 .tps-kanban-board--lane-drag .tps-kanban-lane { position: relative; }

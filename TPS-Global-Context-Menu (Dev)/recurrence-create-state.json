@@ -1,21 +1,6 @@
 {
   "version": 1,
   "ops": {
-    "medication|2026-03-06 16:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Events/Medication 2026-03-06.md",
-      "updatedAt": 1772732612779
-    },
-    "log timesheet|2026-03-13 20:36:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Reminders/Log Timesheet 2026-03-13.md",
-      "updatedAt": 1772808610210
-    },
-    "medication|2026-03-07 16:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Reminders/Medication 2026-03-07.md",
-      "updatedAt": 1772808657043
-    },
     "medication|2026-03-10 17:15:00": {
       "state": "complete",
       "targetPath": "Markdown/Action Items/Medication 2026-03-10.md",
@@ -50,6 +35,16 @@
       "state": "complete",
       "targetPath": "Markdown/Action Items/Weekly Chores 2026-03-23.md",
       "updatedAt": 1773704645539
+    },
+    "log timesheet|2026-03-27 20:36:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Log Timesheet Friday, March 27th 2026.md",
+      "updatedAt": 1774031124147
+    },
+    "medication|2026-03-21 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Medication Saturday, March 21st 2026.md",
+      "updatedAt": 1774038222958
     }
   }
 }

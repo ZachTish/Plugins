@@ -94,7 +94,7 @@ export default class ObsidianCalendarPlugin
           if (backlinkLeaves.length > 0) {
             this.app.workspace.revealLeaf(backlinkLeaves[0]);
           } else {
-            const rightLeaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getRightLeaf(true);
+            const rightLeaf = this.app.workspace.getRightLeaf(false);
             if (rightLeaf) {
               rightLeaf.setViewState({ type: "backlink", active: true }).then(() => {
                 this.app.workspace.revealLeaf(rightLeaf);
@@ -286,12 +286,9 @@ export default class ObsidianCalendarPlugin
       return;
     }
 
-    let leaf = this.app.workspace.getRightLeaf(false);
+    const leaf = this.app.workspace.getRightLeaf(false);
     if (!leaf) {
-      leaf = this.app.workspace.getRightLeaf(true);
-    }
-    if (!leaf) {
-      new Notice("Could not open right sidebar.");
+      new Notice("Open the right sidebar first, then run this command.");
       return;
     }
     await (leaf as any).openFile(file, { active: false });

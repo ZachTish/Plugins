@@ -2011,6 +2011,8 @@ export class PanelBuilder {
       if (lineIndex < 0) return;
 
       const currentLine = lines[lineIndex];
+      const stateMatch = currentLine.match(/^(\s*(?:[-*+]|\d+\.)\s*)\[( |x|X|\?|-)\](\s*.*)$/);
+      const previousState = stateMatch ? (stateMatch[2] as ChecklistTaskState) : null;
       const updatedLine = currentLine.replace(
         /^(\s*(?:[-*+]|\d+\.)\s*)\[( |x|X|\?|-)\](\s*.*)$/,
         `$1[${newState}]$3`
@@ -2022,15 +2024,17 @@ export class PanelBuilder {
       if (updatedContent === content) return;
 
       await this.app.vault.modify(rootFile, updatedContent);
+      await this.plugin.taskCheckboxHandler.handleExternalChecklistStateMutation(
+        rootFile,
+        previousState as ' ' | 'x' | 'X' | '?' | '-' | null,
+        newState as ' ' | 'x' | '?' | '-',
+        lines,
+      );
       // x / X / - are filtered out of the panel — fade and remove the row
       if (newState === 'x' || newState === 'X' || newState === '-') {
         rowEl.style.opacity = '0';
         rowEl.style.pointerEvents = 'none';
         window.setTimeout(() => rowEl.remove(), 120);
-      }
-      const pluginAny = this.plugin as any;
-      if (typeof pluginAny.scheduleChecklistReorder === 'function') {
-        pluginAny.scheduleChecklistReorder(rootFile);
       }
       window.setTimeout(() => onRefresh(), 180);
     } catch (error) {
@@ -3879,6 +3883,10 @@ export class PanelBuilder {
       if (configuredValue) return configuredValue;
     }
 
+    if (this.isCompanionWriteExcluded(file)) {
+      return '';
+    }
+
     const ruleEngine: any = companion?.ruleEngine;
     if (companion?.settings?.enabled && ruleEngine?.resolveVisualOutputs) {
       try {
@@ -3913,11 +3921,7 @@ export class PanelBuilder {
   }
 
   private resolveFrontmatterColor(frontmatter: Record<string, any>, file?: TFile): string {
-    const companionColor = file ? this.resolveCompanionRuleColor(file, frontmatter) : '';
-    if (companionColor) {
-      return companionColor;
-    }
-
+    // Prefer explicit frontmatter color values.
     const candidates = ['iconColor', 'color', 'accentColor', 'accent'];
     for (const key of candidates) {
       const raw = frontmatter?.[key];
@@ -3928,7 +3932,29 @@ export class PanelBuilder {
         return value;
       }
     }
+
+    // Fall back to companion rule-derived color only when not excluded.
+    if (file && !this.isCompanionWriteExcluded(file)) {
+      const companionColor = this.resolveCompanionRuleColor(file, frontmatter);
+      if (companionColor) {
+        return companionColor;
+      }
+    }
     return '';
+  }
+
+  private isCompanionWriteExcluded(file: TFile): boolean {
+    const pluginsApi: any = (this.app as any)?.plugins;
+    const companion: any =
+      pluginsApi?.plugins?.['tps-notebook-navigator-companion']
+      ?? pluginsApi?.plugins?.['TPS-Notebook-Navigator-Companion (Dev)'];
+    const exclusionService: any = companion?.exclusionService;
+    if (!exclusionService || typeof exclusionService.shouldIgnore !== 'function') return false;
+    try {
+      return !!exclusionService.shouldIgnore(file, { bypassCreationGrace: true });
+    } catch {
+      return false;
+    }
   }
 
   private isValidCssColor(value: string): boolean {
@@ -4250,8 +4276,8 @@ export class PanelBuilder {
     const parentFrontmatter = (parentCache?.frontmatter || {}) as Record<string, any>;
     const parentTags = seedParentTags ? parseTagInput([parentFrontmatter.tags, parentFrontmatter.tag]) : [];
     if (seedParentTags && parentTags.length > 0) {
-      const tagsYaml = parentTags.map((tag) => `#${tag}`).join(' ');
-      frontmatterLines.push(`tags: "${tagsYaml.replace(/"/g, '\\"')}"`);
+      const serializedTags = parentTags.map((tag) => `"${tag.replace(/"/g, '\\"')}"`).join(', ');
+      frontmatterLines.push(`tags: [${serializedTags}]`);
     }
 
     frontmatterLines.push('---', '');
@@ -4319,9 +4345,7 @@ export class PanelBuilder {
 
       // Only update if tags actually changed
       const currentTagsStr = JSON.stringify(currentTags.sort());
-      const mergedTagsStr = JSON.stringify(
-        mergedTags.map((t) => t.replace(/^#/, '')).sort()
-      );
+      const mergedTagsStr = JSON.stringify(mergedTags.sort());
 
       if (currentTagsStr !== mergedTagsStr) {
         await this.app.fileManager.processFrontMatter(file, (fm) => {

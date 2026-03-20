@@ -48,27 +48,33 @@ export class StyleService {
 
     /** Apply the file's color frontmatter to the active editor container via CSS variable. */
     updateActiveViewStyle(file: TFile): void {
-        const activeLeaf = this.app.workspace.getLeaf(false);
-        if (!activeLeaf || !(activeLeaf.view instanceof FileView) || activeLeaf.view.file !== file) {
-            return;
-        }
+        const activeLeaf = this.app.workspace.activeLeaf;
+        if (!activeLeaf || !(activeLeaf.view instanceof FileView)) return;
+
+        const activeFile = activeLeaf.view.file;
+        if (!(activeFile instanceof TFile) || activeFile.path !== file.path) return;
 
         const cache = this.app.metadataCache.getFileCache(file);
         const frontmatter = cache?.frontmatter;
 
-        // Resolve color: iconColor > color > null
+        // Resolve color: iconColor > configured color field > "color"
         let color = this.getFrontmatterValue(frontmatter || {}, "iconColor");
         if (!color) {
             color = this.getFrontmatterValue(frontmatter || {}, this.getSettings().frontmatterColorField);
+        }
+        if (!color) {
+            color = this.getFrontmatterValue(frontmatter || {}, "color");
         }
 
         const container = activeLeaf.view.containerEl;
         if (color && typeof color === "string") {
             const safeColor = this.normalizeCssColorValue(color);
-            container.style.setProperty("--nn-active-file-color", safeColor);
-        } else {
-            container.style.removeProperty("--nn-active-file-color");
+            if (safeColor) {
+                container.style.setProperty("--nn-active-file-color", safeColor);
+                return;
+            }
         }
+        container.style.removeProperty("--nn-active-file-color");
     }
 
     /** Remove the runtime style element on plugin unload. */

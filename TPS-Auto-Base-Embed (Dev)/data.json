@@ -35,7 +35,7 @@
     }
   ],
   "excludeFiles": "",
-  "defaultExpanded": false,
+  "defaultExpanded": true,
   "accordionMode": true,
   "manualExpansionState": {
     "Stretched 5d calendar.base": true,
@@ -50,6 +50,6 @@
     "Area Note Feed.base": false,
     "Scheduled Task list.base": false,
     "Area Task List.base": false,
-    "Relative Calendar.base": true
+    "Relative Calendar.base": false
   }
 }

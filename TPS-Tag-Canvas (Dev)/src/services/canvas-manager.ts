@@ -328,7 +328,7 @@ export class CanvasManager {
       .map(t => String(t || "").replace(/^#/, "").trim().toLowerCase())
       .filter(Boolean);
 
-    return tags.some(tag => archiveTags.some(a => tag === a || tag.startsWith(`${a}/`)));
+    return tags.some(tag => archiveTags.some(a => this.matchesTagPattern(tag, a)));
   }
 
   private isArchiveCanvas(canvasTag: string): boolean {
@@ -336,19 +336,13 @@ export class CanvasManager {
       .map(t => String(t || "").replace(/^#/, "").trim().toLowerCase())
       .filter(Boolean);
     const normalized = String(canvasTag || "").replace(/^#/, "").trim().toLowerCase();
-    return archiveTags.some(a => normalized === a || normalized.startsWith(`${a}/`));
+    return archiveTags.some(a => this.matchesTagPattern(normalized, a));
   }
 
   private isInAnyFolder(filePath: string, folders: string[]): boolean {
-    const pathLower = String(filePath || "").toLowerCase();
-    return (folders || []).some(folder => {
-      const clean = String(folder || "")
-        .replace(/\\/g, "/")
-        .replace(/^\/+|\/+$/g, "")
-        .toLowerCase();
-      if (!clean) return false;
-      return pathLower === clean || pathLower.startsWith(`${clean}/`);
-    });
+    const pathLower = normalizePath(String(filePath || "")).toLowerCase();
+    const basename = normalizePath(String(filePath || "")).split("/").pop() || "";
+    return (folders || []).some(folder => this.matchesPathPattern(pathLower, basename.toLowerCase(), folder));
   }
 
   private isProtectedNode(node: CanvasFileNode, canvas: CanvasData): boolean {
@@ -384,9 +378,7 @@ export class CanvasManager {
   }
 
   private isTagExcluded(tag: string, excluded: string[]): boolean {
-    return excluded.some(
-      ex => tag === ex || tag.startsWith(ex + "/"),
-    );
+    return excluded.some((ex) => this.matchesTagPattern(tag, ex));
   }
 
   private normalizeTagInput(tag: string): string {
@@ -402,11 +394,78 @@ export class CanvasManager {
   }
 
   private isFileExcluded(file: TFile, excludedFolders: string[]): boolean {
-    return excludedFolders.some(
-      folder =>
-        file.path === folder ||
-        file.path.startsWith(folder.replace(/\/?$/, "/")),
-    );
+    const normalizedPath = normalizePath(file.path).toLowerCase();
+    const basename = String(file.basename || "").trim().toLowerCase();
+    return excludedFolders.some((folder) => this.matchesPathPattern(normalizedPath, basename, folder));
+  }
+
+  private matchesTagPattern(tag: string, pattern: string): boolean {
+    const normalizedTag = this.normalizeTagInput(tag);
+    const raw = String(pattern || "").trim();
+    if (!normalizedTag || !raw) return false;
+    const lower = raw.toLowerCase();
+
+    if (lower.startsWith("re:")) {
+      const rxRaw = raw.slice(3).trim();
+      if (!rxRaw) return false;
+      try {
+        return new RegExp(rxRaw, "i").test(normalizedTag);
+      } catch {
+        return false;
+      }
+    }
+
+    const value = this.normalizeTagInput(raw);
+    if (!value) return false;
+    if (value.includes("*")) {
+      const rx = new RegExp(`^${this.escapeRegex(value).replace(/\\\*/g, ".*")}$`, "i");
+      return rx.test(normalizedTag);
+    }
+    return normalizedTag === value || normalizedTag.startsWith(`${value}/`);
+  }
+
+  private matchesPathPattern(filePath: string, fileBasename: string, pattern: string): boolean {
+    const raw = String(pattern || "").trim();
+    if (!raw) return false;
+    const pathLower = normalizePath(filePath).toLowerCase();
+    const baseLower = String(fileBasename || "").trim().toLowerCase();
+    const lower = raw.toLowerCase();
+
+    if (lower.startsWith("re:")) {
+      const rxRaw = raw.slice(3).trim();
+      if (!rxRaw) return false;
+      try {
+        const rx = new RegExp(rxRaw, "i");
+        return rx.test(pathLower) || rx.test(baseLower);
+      } catch {
+        return false;
+      }
+    }
+
+    if (lower.startsWith("name:")) {
+      const name = lower.slice(5).trim();
+      if (!name) return false;
+      if (name.includes("*")) {
+        const rx = new RegExp(`^${this.escapeRegex(name).replace(/\\\*/g, ".*")}$`, "i");
+        return rx.test(baseLower);
+      }
+      return baseLower === name;
+    }
+
+    const clean = normalizePath(raw.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")).toLowerCase();
+    if (!clean) return false;
+    if (clean.includes("*")) {
+      const rx = new RegExp(`^${this.escapeRegex(clean).replace(/\\\*/g, ".*")}$`, "i");
+      return rx.test(pathLower) || rx.test(baseLower);
+    }
+    if (raw.endsWith("/") || clean.includes("/")) {
+      return pathLower === clean || pathLower.startsWith(`${clean}/`);
+    }
+    return pathLower === clean || pathLower.startsWith(`${clean}/`) || baseLower === clean;
+  }
+
+  private escapeRegex(value: string): string {
+    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   private async ensureFolder(filePath: string): Promise<void> {

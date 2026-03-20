@@ -139,6 +139,9 @@ class KeyValueModal extends Modal {
 export class AutoBaseEmbedSettingTab extends PluginSettingTab {
   plugin: AutoBaseEmbedPlugin;
   private expandedRules: Set<string> = new Set();
+  private settingsViewState = new Map<string, boolean>();
+  private settingsScrollTop = 0;
+  private hasRenderedSettings = false;
 
   constructor(app: App, plugin: AutoBaseEmbedPlugin) {
     super(app, plugin);
@@ -147,6 +150,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
 
   display(): void {
     const { containerEl } = this;
+    this.captureSettingsViewState(containerEl);
     containerEl.empty();
 
     containerEl.createEl("h2", { text: "TPS Auto Base Embed" });
@@ -283,7 +287,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(rulesCategory)
       .setName("Exclude files")
       .setDesc("Comma or newline separated file paths to never embed in.")
       .addTextArea((text) =>
@@ -296,10 +300,47 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("p", {
+    rulesCategory.createEl("p", {
       text: "Note: the Base is rendered using the current note as the source path, so filters like this.file.name resolve correctly.",
       cls: "setting-item-description",
     });
+    this.restoreSettingsViewState(containerEl);
+  }
+
+  private captureSettingsViewState(containerEl: HTMLElement): void {
+    this.settingsScrollTop = containerEl.scrollTop;
+    this.settingsViewState.clear();
+    const detailsEls = Array.from(containerEl.querySelectorAll("details"));
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector("summary")?.textContent?.trim() || "";
+      this.settingsViewState.set(`${index}:${summaryText}`, details.open);
+    });
+  }
+
+  private restoreSettingsViewState(containerEl: HTMLElement): void {
+    const detailsEls = Array.from(containerEl.querySelectorAll("details"));
+    if (!this.hasRenderedSettings) {
+      detailsEls.forEach((detailsEl) => {
+        const details = detailsEl as HTMLDetailsElement;
+        if (details.classList.contains("tps-settings-main-category")) {
+          details.setAttr("open", "true");
+        } else {
+          details.removeAttribute("open");
+        }
+      });
+      this.hasRenderedSettings = true;
+      containerEl.scrollTop = 0;
+      return;
+    }
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector("summary")?.textContent?.trim() || "";
+      const isOpen = this.settingsViewState.get(`${index}:${summaryText}`);
+      if (isOpen) details.setAttr("open", "true");
+      else details.removeAttribute("open");
+    });
+    containerEl.scrollTop = this.settingsScrollTop;
   }
 
   private renderRules(container: HTMLElement): void {
@@ -414,8 +455,12 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
 
     this.renderListCondition(container, rule, "folders", "Include folders", "Only embed if note is in one of these folders", "Folder path (e.g., Projects/)");
     this.renderListCondition(container, rule, "excludeFolders", "Exclude folders", "Don't embed if note is in one of these folders", "Folder path");
+    this.renderListCondition(container, rule, "paths", "Include paths", "Only embed if note path matches one of these patterns (supports re:, name:, and * wildcard).", "Pattern (e.g., Markdown/Action Items/*)");
+    this.renderListCondition(container, rule, "excludePaths", "Exclude paths", "Skip embed when note path matches one of these patterns (supports re:, name:, and * wildcard).", "Pattern (e.g., re:^Templates/)");
     this.renderListCondition(container, rule, "tags", "Include tags", "Only embed if note has one of these tags", "Tag (e.g., project)");
     this.renderListCondition(container, rule, "excludeTags", "Exclude tags", "Don't embed if note has one of these tags", "Tag (e.g., archive)");
+    this.renderListCondition(container, rule, "requiredStatuses", "Required statuses", "Only embed when frontmatter status matches one of these values.", "Status (e.g., working)");
+    this.renderListCondition(container, rule, "ignoreStatuses", "Ignore statuses", "Skip embed when frontmatter status matches one of these values.", "Status (e.g., complete)");
     new Setting(container)
       .setName("Require tag matching note name")
       .setDesc("Only embed if the note has a tag exactly matching the note name (case-insensitive).")
@@ -479,7 +524,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
   private renderListCondition(
     container: HTMLElement,
     rule: BaseEmbedRule,
-    key: "folders" | "excludeFolders" | "tags" | "excludeTags",
+    key: "folders" | "excludeFolders" | "paths" | "excludePaths" | "tags" | "excludeTags" | "requiredStatuses" | "ignoreStatuses",
     name: string,
     desc: string,
     placeholder: string
@@ -563,11 +608,23 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
     if (conditions.excludeFolders?.length) {
       parts.push(`not in: ${conditions.excludeFolders.join(", ")}`);
     }
+    if (conditions.paths?.length) {
+      parts.push(`path: ${conditions.paths.join(", ")}`);
+    }
+    if (conditions.excludePaths?.length) {
+      parts.push(`not path: ${conditions.excludePaths.join(", ")}`);
+    }
     if (conditions.tags?.length) {
       parts.push(`tags: ${conditions.tags.join(", ")}`);
     }
     if (conditions.excludeTags?.length) {
       parts.push(`not tags: ${conditions.excludeTags.join(", ")}`);
+    }
+    if (conditions.requiredStatuses?.length) {
+      parts.push(`status: ${conditions.requiredStatuses.join(", ")}`);
+    }
+    if (conditions.ignoreStatuses?.length) {
+      parts.push(`not status: ${conditions.ignoreStatuses.join(", ")}`);
     }
     if (conditions.requireTagMatchingNoteName) {
       parts.push(`tag=note-name`);

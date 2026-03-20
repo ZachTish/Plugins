@@ -4,7 +4,6 @@ import { SYSTEM_COMMANDS } from '../../constants';
 import { TextInputModal } from '../../modals/text-input-modal';
 import { FileSuggestModal } from '../../modals/FileSuggestModal';
 import { MultiFileSelectModal } from '../../modals/MultiFileSelectModal';
-import { ConfirmDeleteModal } from '../../modals/confirm-delete-modal';
 import { mergeNormalizedTags, normalizeTagValue } from '../../utils/tag-utils';
 import * as logger from '../../logger';
 import { resolveCustomProperties } from '../../services/properties/resolve-profiles';
@@ -42,6 +41,13 @@ export class MenuBuilder {
     const lowerKey = key.toLowerCase();
     const match = Object.keys(frontmatter).find(k => k.toLowerCase() === lowerKey);
     return match ? frontmatter[match] : undefined;
+  }
+
+  private hasKeyCaseInsensitive(frontmatter: any, key: string): boolean {
+    if (!frontmatter || !key) return false;
+    if (key in frontmatter) return true;
+    const lowerKey = key.toLowerCase();
+    return Object.keys(frontmatter).some((k) => k.toLowerCase() === lowerKey);
   }
 
   private async ensureFolderPath(path: string): Promise<void> {
@@ -410,7 +416,17 @@ export class MenuBuilder {
                 async (newVal) => {
                   if (newVal !== null && newVal !== undefined) {
                     const finalVal = prop.type === 'number' ? Number(newVal) : newVal;
-                    await this.plugin.bulkEditService.updateFrontmatter(markdownEntries.map(e => e.file), { [prop.key]: finalVal });
+                    const files = markdownEntries.map(e => e.file);
+                    await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: finalVal });
+
+                    const normalizedKey = String(prop?.key || '').trim().toLowerCase();
+                    if (normalizedKey === 'title') {
+                      await Promise.all(
+                        files.map((entryFile) =>
+                          this.plugin.fileNamingService.updateFilenameIfNeeded(entryFile, { bypassCreationGrace: true })
+                        )
+                      );
+                    }
                   }
                 }
               ).open();
@@ -419,47 +435,6 @@ export class MenuBuilder {
         }
 
       });
-
-      // "Remove property" grouped submenu — lists all removable properties in one place.
-      // Excludes folder-type (moves files, not frontmatter) and the core title key.
-      const removableProps = properties.filter(
-        (p) => p.showInContextMenu !== false && p.type !== 'folder' && p.key?.toLowerCase() !== 'title'
-      );
-      if (removableProps.length > 0) {
-        const n = markdownEntries.length;
-        const fileWord = n === 1 ? '1 note' : `${n} notes`;
-        menu.addItem((item) => {
-          item
-            .setTitle('Remove property')
-            .setIcon('trash-2')
-            .setSection('tps-props')
-            .setWarning(true);
-          const subMenu = (item as any).setSubmenu();
-          removableProps.forEach((prop) => {
-            subMenu.addItem((sub: any) => {
-              sub
-                .setTitle(prop.label)
-                .setIcon(prop.icon || 'trash-2')
-                .setWarning(true)
-                .onClick(() => {
-                  new ConfirmDeleteModal(
-                    this.app,
-                    `Remove the "${prop.label}" (${prop.key}) field and its value from ${fileWord}?`,
-                    async () => {
-                      const removed = await this.plugin.bulkEditService.removeFrontmatterKey(
-                        markdownEntries.map(e => e.file),
-                        prop.key
-                      );
-                      if (removed > 0) {
-                        new Notice(`Removed "${prop.key}" from ${removed} note${removed === 1 ? '' : 's'}.`);
-                      }
-                    }
-                  ).open();
-                });
-            });
-          });
-        });
-      }
 
       // Add Note Operations (Markdown Only)
       if (markdownFiles.length > 0) {
@@ -795,7 +770,13 @@ export class MenuBuilder {
       const allValues = entries.map((e: any) => this.getValueCaseInsensitive(e.frontmatter, prop.key) || '');
       const uniqueValues = new Set(allValues);
       const current = uniqueValues.size === 1 ? allValues[0] : 'Mixed';
-      const isUndefined = !this.plugin.fieldInitializationService.isFieldDefinedForEntries(entries, prop.key);
+      const allHaveKey = entries.every((e: any) => this.hasKeyCaseInsensitive(e.frontmatter, prop.key));
+      const allWithoutKey = entries.every((e: any) => !this.hasKeyCaseInsensitive(e.frontmatter, prop.key));
+      const allEmpty = allHaveKey && entries.every((e: any) => {
+        const value = this.getValueCaseInsensitive(e.frontmatter, prop.key);
+        return value === '' || value === null || value === undefined;
+      });
+      const isUndefined = allWithoutKey;
       const title = isUndefined ? `${prop.label} (create field)` : `${prop.label}: ${current}`;
 
       item.setTitle(title)
@@ -809,26 +790,30 @@ export class MenuBuilder {
       }
 
       const subMenu = (item as any).setSubmenu();
+      const files = entries.map((e: any) => e.file);
 
-      // Add initialization option if undefined
-      if (isUndefined) {
-        subMenu.addItem((sub: any) => {
-          sub.setTitle('Create field')
-            .setIcon('plus-circle')
-            .onClick(async () => {
-              const defaultValue = (prop.options && prop.options[0]) || '';
-              await this.plugin.fieldInitializationService.checkAndInitialize(entries, prop.key, defaultValue);
-            });
-        });
-        subMenu.addSeparator();
-      }
+      subMenu.addItem((sub: any) => {
+        sub.setTitle('(none)')
+          .setChecked(allWithoutKey)
+          .onClick(async () => {
+            await this.plugin.bulkEditService.removeFrontmatterKey(files, prop.key);
+          });
+      });
+      subMenu.addItem((sub: any) => {
+        sub.setTitle('(empty)')
+          .setChecked(allEmpty)
+          .onClick(async () => {
+            await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: '' });
+          });
+      });
+      subMenu.addSeparator();
 
       (prop.options || []).forEach((opt: string) => {
         subMenu.addItem((sub: any) => {
           sub.setTitle(opt)
             .setChecked(current === opt)
             .onClick(async () => {
-              await this.plugin.bulkEditService.updateFrontmatter(entries.map((e: any) => e.file), { [prop.key]: opt });
+              await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: opt });
             });
         });
       });

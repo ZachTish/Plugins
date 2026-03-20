@@ -11,6 +11,7 @@ export class FileNamingService {
     plugin: TPSGlobalContextMenuPlugin;
     private processingFiles: Set<string> = new Set();
     private recentFolderPathWrites: Map<string, { value: string; until: number }> = new Map();
+    private inferredDailyNoteFormat: string | null = null;
 
     constructor(plugin: TPSGlobalContextMenuPlugin) {
         this.plugin = plugin;
@@ -22,6 +23,57 @@ export class FileNamingService {
         /\btp\.[a-z0-9_]+\b/i,
         /\btemplater\b/i,
     ];
+
+    private getDailyNoteDateFormat(): string {
+        const configured = String((this.plugin as any)?.settings?.dailyNoteDateFormat || '').trim();
+        if (configured) return configured;
+        const dailyNotesFormat = String((this.plugin.app as any)?.internalPlugins?.plugins?.["daily-notes"]?.instance?.options?.format || '').trim();
+        if (dailyNotesFormat) return dailyNotesFormat;
+        if (!this.inferredDailyNoteFormat) {
+            const hasPrettyDaily = this.plugin.app.vault.getFiles().some((file) =>
+                /\/Notes\/[A-Za-z]+,\s+[A-Za-z]+\s+\d{1,2}(st|nd|rd|th)\s+\d{4}\.md$/.test(file.path),
+            );
+            this.inferredDailyNoteFormat = hasPrettyDaily ? 'dddd, MMMM Do YYYY' : 'YYYY-MM-DD';
+        }
+        return this.inferredDailyNoteFormat;
+    }
+
+    private titleMatchesScheduledDate(title: string, scheduledDate: any): boolean {
+        const normalizedTitle = String(title || '').replace(/\s+/g, ' ').trim();
+        if (!normalizedTitle) return false;
+        if (!scheduledDate || !scheduledDate.isValid || !scheduledDate.isValid()) return false;
+
+        const preferredFormat = this.getDailyNoteDateFormat();
+        const expectedIso = scheduledDate.format('YYYY-MM-DD');
+        const expectedPreferred = scheduledDate.format(preferredFormat);
+
+        const lowered = normalizedTitle.toLowerCase();
+        if (lowered === expectedIso.toLowerCase() || lowered === expectedPreferred.toLowerCase()) return true;
+        if (lowered.includes(expectedIso.toLowerCase()) || lowered.includes(expectedPreferred.toLowerCase())) return true;
+
+        const parsed = parseDateFromFilename(normalizedTitle, preferredFormat);
+        return !!parsed?.isValid?.() && parsed.isValid() && parsed.format('YYYY-MM-DD') === expectedIso;
+    }
+
+    private stripKnownDateSuffix(value: string, scheduledDate: any): string {
+        let stripped = stripDateSuffix(String(value || '')).replace(/\s+/g, ' ').trim();
+        if (!scheduledDate || !scheduledDate.isValid || !scheduledDate.isValid()) return stripped;
+
+        const candidates = [
+            scheduledDate.format(this.getDailyNoteDateFormat()),
+            scheduledDate.format('YYYY-MM-DD'),
+        ].map((v) => String(v || '').trim()).filter(Boolean);
+
+        for (const suffix of candidates) {
+            const lowered = stripped.toLowerCase();
+            const target = ` ${suffix.toLowerCase()}`;
+            if (lowered.endsWith(target)) {
+                stripped = stripped.slice(0, stripped.length - target.length).trim();
+            }
+        }
+
+        return stripped;
+    }
 
     /**
      * Process a file when it's opened - update filename and folder path
@@ -356,18 +408,18 @@ export class FileNamingService {
             if (!scheduledDate.isValid()) {
                 expectedBasename = this.sanitizeFilename(title);
             } else {
-                const dateStr = scheduledDate.format('YYYY-MM-DD');
+                const dateStr = scheduledDate.format(this.getDailyNoteDateFormat());
                 const normalizedTitle = title.replace(/\s+/g, ' ').trim();
-                const titleHasScheduledDate = new RegExp(`(^|\\s)${dateStr}(?:\\s|$)`).test(normalizedTitle);
+                const titleHasScheduledDate = this.titleMatchesScheduledDate(normalizedTitle, scheduledDate);
 
                 // If the title IS the date, just use the date (prevent "2025-01-01 2025-01-01")
-                if (title.trim() === dateStr) {
-                    expectedBasename = dateStr;
+                if (this.titleMatchesScheduledDate(title.trim(), scheduledDate)) {
+                    expectedBasename = this.sanitizeFilename(normalizedTitle);
                 } else if (titleHasScheduledDate) {
                     expectedBasename = this.sanitizeFilename(normalizedTitle);
                 } else {
                     // Remove any existing date suffix from title to prevent duplication
-                    const titleWithoutDate = stripDateSuffix(title);
+                    const titleWithoutDate = this.stripKnownDateSuffix(title, scheduledDate);
                     expectedBasename = this.sanitizeFilename(`${titleWithoutDate} ${dateStr}`);
                 }
             }

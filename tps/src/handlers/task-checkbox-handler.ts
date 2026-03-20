@@ -388,6 +388,23 @@ export class TaskCheckboxHandler {
         }
     }
 
+    /**
+     * Shared post-mutation pipeline for checklist state changes performed outside
+     * the native markdown checkbox click handler (e.g. panel/reminder UI).
+     * This keeps checklist property sync, reorder, and final-status prompting
+     * consistent no matter where the edit originated.
+     */
+    async handleExternalChecklistStateMutation(
+        file: TFile,
+        previousState: ' ' | 'x' | 'X' | '?' | '-' | null,
+        nextState: ' ' | 'x' | '?' | '-',
+        updatedLines: string[],
+    ): Promise<void> {
+        await this.maybePromptToCompleteNote(file, previousState, nextState, updatedLines);
+        this.scheduleChecklistPropertyUpdate(file);
+        this.scheduleChecklistReorder(file);
+    }
+
     private hasOpenChecklistItems(lines: string[]): boolean {
         return lines.some((line) => /^\s*(?:[-*+]|\d+\.)\s*\[ \]/.test(line));
     }

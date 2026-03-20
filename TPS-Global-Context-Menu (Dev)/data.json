@@ -38,9 +38,10 @@
           "match": "all",
           "conditions": [
             {
-              "type": "path",
-              "operator": "starts-with",
-              "value": "Daily Notes"
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "dailynote",
+              "key": "tags"
             }
           ],
           "hidden": true,
@@ -52,9 +53,9 @@
           "match": "all",
           "conditions": [
             {
-              "type": "frontmatter",
-              "operator": "equals",
-              "value": "note",
+              "type": "path",
+              "operator": "contains",
+              "value": "Notes",
               "key": "status"
             }
           ],
@@ -80,47 +81,19 @@
         {
           "id": "1771631355028",
           "name": "New Profile",
-          "match": "all",
+          "match": "any",
           "conditions": [
             {
-              "type": "path",
+              "type": "frontmatter",
               "operator": "contains",
-              "value": "Daily Notes"
-            }
-          ],
-          "hidden": true
-        }
-      ]
-    },
-    {
-      "id": "1771631422918",
-      "label": "Due",
-      "key": "new_prop",
-      "type": "datetime",
-      "icon": "calendar",
-      "profiles": [
-        {
-          "id": "1771631473530",
-          "name": "New Profile",
-          "match": "all",
-          "conditions": [
+              "value": "dailynote",
+              "key": "tags"
+            },
             {
-              "type": "path",
+              "type": "frontmatter",
               "operator": "contains",
-              "value": "Templates"
-            }
-          ],
-          "hidden": true
-        },
-        {
-          "id": "1771631481196",
-          "name": "New Profile",
-          "match": "all",
-          "conditions": [
-            {
-              "type": "path",
-              "operator": "contains",
-              "value": "Notes"
+              "value": "template",
+              "key": "tags"
             }
           ],
           "hidden": true
@@ -143,9 +116,16 @@
           "match": "all",
           "conditions": [
             {
-              "type": "path",
-              "operator": "starts-with",
-              "value": "Daily Notes"
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "dailynote",
+              "key": "tags"
+            },
+            {
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "template",
+              "key": "tags"
             }
           ],
           "hidden": true
@@ -162,20 +142,6 @@
             }
           ],
           "hidden": true
-        },
-        {
-          "id": "1771631325192",
-          "name": "New Profile",
-          "match": "all",
-          "conditions": [
-            {
-              "type": "path",
-              "operator": "starts-with",
-              "value": "Templates"
-            }
-          ],
-          "options": [],
-          "hidden": true
         }
       ]
     },
@@ -184,15 +150,107 @@
       "label": "Duration",
       "key": "timeEstimate",
       "type": "number",
-      "icon": "calendar",
-      "showInCollapsed": false
+      "icon": "timer",
+      "showInCollapsed": false,
+      "profiles": [
+        {
+          "id": "1774040887933",
+          "name": "New Profile",
+          "match": "any",
+          "conditions": [
+            {
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "dailynote",
+              "key": "tags"
+            },
+            {
+              "type": "path",
+              "operator": "contains",
+              "value": "_",
+              "key": "tags"
+            },
+            {
+              "type": "path",
+              "operator": "not-contains",
+              "value": "Markdown"
+            },
+            {
+              "type": "path",
+              "operator": "contains",
+              "value": "Notes"
+            },
+            {
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "tamplate",
+              "key": "tags"
+            }
+          ],
+          "hidden": true
+        }
+      ]
+    },
+    {
+      "id": "1771631422918",
+      "label": "Due",
+      "key": "new_prop",
+      "type": "datetime",
+      "icon": "clock-alert",
+      "profiles": [
+        {
+          "id": "1771631473530",
+          "name": "New Profile",
+          "match": "all",
+          "conditions": [
+            {
+              "type": "path",
+              "operator": "contains",
+              "value": "_"
+            }
+          ],
+          "hidden": true
+        },
+        {
+          "id": "1771631481196",
+          "name": "New Profile",
+          "match": "all",
+          "conditions": [
+            {
+              "type": "path",
+              "operator": "contains",
+              "value": "Notes"
+            }
+          ],
+          "hidden": true
+        },
+        {
+          "id": "1774040968712",
+          "name": "New Profile",
+          "match": "any",
+          "conditions": [
+            {
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "dailynote",
+              "key": "tags"
+            },
+            {
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "template",
+              "key": "tags"
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "1764962088480",
       "label": "Recurrence",
       "key": "recurrenceRule",
       "type": "recurrence",
-      "icon": "calendar",
+      "icon": "calendar-sync",
       "profiles": [
         {
           "id": "1771631223174",
@@ -215,7 +273,27 @@
             {
               "type": "path",
               "operator": "contains",
-              "value": "Templates"
+              "value": "_"
+            }
+          ],
+          "hidden": true
+        },
+        {
+          "id": "1774041003930",
+          "name": "New Profile",
+          "match": "any",
+          "conditions": [
+            {
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "dailynote",
+              "key": "tags"
+            },
+            {
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "template",
+              "key": "tags"
             }
           ],
           "hidden": true
@@ -230,7 +308,29 @@
       "type": "folder",
       "pinned": false,
       "icon": "folder",
-      "label": "Type"
+      "label": "Type",
+      "profiles": [
+        {
+          "id": "1774041173948",
+          "name": "New Profile",
+          "match": "any",
+          "conditions": [
+            {
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "dailynote",
+              "key": "tags"
+            },
+            {
+              "type": "frontmatter",
+              "operator": "contains",
+              "value": "template",
+              "key": "tags"
+            }
+          ],
+          "hidden": true
+        }
+      ]
     },
     {
       "id": "tags",
@@ -240,7 +340,21 @@
       "pinned": true,
       "icon": "tag",
       "label": "tags",
-      "key": "tags"
+      "key": "tags",
+      "profiles": [
+        {
+          "id": "1774041213591",
+          "name": "New Profile",
+          "match": "all",
+          "conditions": [
+            {
+              "type": "path",
+              "operator": "contains",
+              "value": ""
+            }
+          ]
+        }
+      ]
     }
   ],
   "showCustomPropertiesInInlineUi": true,
@@ -291,14 +405,14 @@
       ]
     },
     {
-      "mode": "reading",
+      "mode": "source",
       "match": "all",
       "conditions": [
         {
           "type": "frontmatter",
-          "key": "parentOf",
-          "operator": "equals",
-          "value": "123"
+          "key": "tags",
+          "operator": "contains",
+          "value": "template"
         }
       ]
     },
@@ -329,7 +443,7 @@
   "enableArchiveTagMove": true,
   "archiveTag": "archive",
   "archiveFolderPath": "Archive",
-  "archiveUseDailyFolder": true,
+  "archiveUseDailyFolder": false,
   "lastArchiveTagSweepDate": "2026-03-20",
   "enablePomodoro": false,
   "pomodoroWorkDuration": 25,
@@ -338,8 +452,10 @@
   "pomodoroLongBreakInterval": 4,
   "pomodoroEventFolder": "Action Items/Events",
   "pomodoroDefaultTags": "pomodoro, timebox",
-  "workspaceRibbonButtons": true,
-  "workspaceRibbonIcons": {},
+  "workspaceRibbonButtons": false,
+  "workspaceRibbonIcons": {
+    "Calendar": "calendar"
+  },
   "enableCanvasBaseSplit": false,
   "enableDailyNoteNav": false,
   "enableTopParentNav": true,
@@ -406,7 +522,7 @@
   "inlinePanelMaxWidth": 1400,
   "liveMenuPosition": "center",
   "liveMenuOffsetX": 0,
-  "liveMenuOffsetY": -32,
+  "liveMenuOffsetY": 12,
   "modalWidth": 520,
   "modalMaxHeightVh": 80,
   "subitemsMarginBottom": 17,

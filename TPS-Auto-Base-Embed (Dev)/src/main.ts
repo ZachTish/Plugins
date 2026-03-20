@@ -13,8 +13,12 @@ import { AutoBaseEmbedSettingTab } from "./settings-tab";
 export interface BaseEmbedConditions {
   folders?: string[];           // Only embed if note is IN these folders
   excludeFolders?: string[];    // Don't embed if note is in these folders
+  paths?: string[];             // Only embed if note path/basename matches these patterns
+  excludePaths?: string[];      // Don't embed if note path/basename matches these patterns
   tags?: string[];              // Only embed if note has one of these tags
   excludeTags?: string[];       // Don't embed if note has one of these tags
+  requiredStatuses?: string[];  // Only embed if status matches one of these values
+  ignoreStatuses?: string[];    // Don't embed if status matches one of these values
   requireTagMatchingNoteName?: boolean; // Require tag that exactly matches note basename (case-insensitive)
   excludeTagMatchingNoteName?: boolean; // Exclude when note has a tag matching note basename (case-insensitive)
   requireProperty?: string;     // Property must exist (e.g., "scheduled")
@@ -608,40 +612,63 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     const fileCache = this.app.metadataCache.getFileCache(file);
     const fm = fileCache?.frontmatter || {};
     const noteTags = this.collectFileTags(file, fm);
+    const filePath = normalizePath(file.path);
+    const fileBase = String(file.basename || "").trim().toLowerCase();
 
     // Folder inclusion
     if (conditions.folders && conditions.folders.length > 0) {
-      const inFolder = conditions.folders.some((folder) => {
-        const normalizedFolder = normalizePath(folder.endsWith("/") ? folder : folder + "/");
-        return file.path.startsWith(normalizedFolder) || file.parent?.path === normalizePath(folder);
-      });
+      const inFolder = conditions.folders.some((folder) => this.matchesPathPattern(filePath, fileBase, folder));
       if (!inFolder) return false;
     }
 
     // Folder exclusion
     if (conditions.excludeFolders && conditions.excludeFolders.length > 0) {
-      const inExcludedFolder = conditions.excludeFolders.some((folder) => {
-        const normalizedFolder = normalizePath(folder.endsWith("/") ? folder : folder + "/");
-        return file.path.startsWith(normalizedFolder) || file.parent?.path === normalizePath(folder);
-      });
+      const inExcludedFolder = conditions.excludeFolders.some((folder) => this.matchesPathPattern(filePath, fileBase, folder));
       if (inExcludedFolder) return false;
+    }
+
+    // Path inclusion
+    if (conditions.paths && conditions.paths.length > 0) {
+      const matched = conditions.paths.some((pattern) => this.matchesPathPattern(filePath, fileBase, pattern));
+      if (!matched) return false;
+    }
+
+    // Path exclusion
+    if (conditions.excludePaths && conditions.excludePaths.length > 0) {
+      const denied = conditions.excludePaths.some((pattern) => this.matchesPathPattern(filePath, fileBase, pattern));
+      if (denied) return false;
     }
 
     // Tag inclusion (any-match)
     if (conditions.tags && conditions.tags.length > 0) {
-      const required = conditions.tags.map((tag) => this.normalizeTag(tag)).filter(Boolean);
-      if (required.length > 0) {
-        const hasAny = required.some((tag) => noteTags.has(tag));
-        if (!hasAny) return false;
-      }
+      const hasAny = conditions.tags.some((tagPattern) =>
+        Array.from(noteTags.values()).some((tag) => this.matchesTagPattern(tag, tagPattern)),
+      );
+      if (!hasAny) return false;
     }
 
     // Tag exclusion (any-match)
     if (conditions.excludeTags && conditions.excludeTags.length > 0) {
-      const denied = conditions.excludeTags.map((tag) => this.normalizeTag(tag)).filter(Boolean);
-      if (denied.length > 0) {
-        const hasDenied = denied.some((tag) => noteTags.has(tag));
-        if (hasDenied) return false;
+      const hasDenied = conditions.excludeTags.some((tagPattern) =>
+        Array.from(noteTags.values()).some((tag) => this.matchesTagPattern(tag, tagPattern)),
+      );
+      if (hasDenied) return false;
+    }
+
+    // Status inclusion/exclusion (uses frontmatter "status")
+    const noteStatus = this.normalizeStatusValue(
+      this.getFrontmatterValueCaseInsensitive(fm as Record<string, unknown>, "status"),
+    );
+    if (conditions.requiredStatuses && conditions.requiredStatuses.length > 0) {
+      const required = conditions.requiredStatuses.map((status) => this.normalizeStatusValue(status)).filter(Boolean);
+      if (required.length > 0 && (!noteStatus || !required.includes(noteStatus))) {
+        return false;
+      }
+    }
+    if (conditions.ignoreStatuses && conditions.ignoreStatuses.length > 0) {
+      const ignored = conditions.ignoreStatuses.map((status) => this.normalizeStatusValue(status)).filter(Boolean);
+      if (ignored.length > 0 && noteStatus && ignored.includes(noteStatus)) {
+        return false;
       }
     }
 
@@ -733,6 +760,80 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   private normalizeTag(raw: unknown): string {
     const value = String(raw ?? "").trim().replace(/^#+/, "").toLowerCase();
     return value || "";
+  }
+
+  private normalizeStatusValue(raw: unknown): string {
+    return String(raw ?? "").trim().toLowerCase();
+  }
+
+  private matchesTagPattern(tag: string, pattern: string): boolean {
+    const normalizedTag = this.normalizeTag(tag);
+    const normalizedPattern = String(pattern || "").trim();
+    if (!normalizedTag || !normalizedPattern) return false;
+    const lowerPattern = normalizedPattern.toLowerCase();
+    if (lowerPattern.startsWith("re:")) {
+      const raw = normalizedPattern.slice(3).trim();
+      if (!raw) return false;
+      try {
+        return new RegExp(raw, "i").test(normalizedTag);
+      } catch {
+        return false;
+      }
+    }
+    if (lowerPattern.includes("*")) {
+      const regex = new RegExp(`^${this.escapeRegex(lowerPattern).replace(/\\\*/g, ".*")}$`, "i");
+      return regex.test(normalizedTag);
+    }
+    const plain = this.normalizeTag(lowerPattern);
+    if (!plain) return false;
+    return normalizedTag === plain || normalizedTag.startsWith(`${plain}/`);
+  }
+
+  private matchesPathPattern(filePath: string, fileBasename: string, pattern: string): boolean {
+    const raw = String(pattern || "").trim();
+    if (!raw) return false;
+    const normalizedPath = normalizePath(filePath).toLowerCase();
+    const normalizedBase = String(fileBasename || "").trim().toLowerCase();
+    const lower = raw.toLowerCase();
+
+    if (lower.startsWith("re:")) {
+      const regexSrc = raw.slice(3).trim();
+      if (!regexSrc) return false;
+      try {
+        const rx = new RegExp(regexSrc, "i");
+        return rx.test(normalizedPath) || rx.test(normalizedBase);
+      } catch {
+        return false;
+      }
+    }
+
+    if (lower.startsWith("name:")) {
+      const target = lower.slice(5).trim();
+      if (!target) return false;
+      if (target.includes("*")) {
+        const rx = new RegExp(`^${this.escapeRegex(target).replace(/\\\*/g, ".*")}$`, "i");
+        return rx.test(normalizedBase);
+      }
+      return normalizedBase === target;
+    }
+
+    const value = normalizePath(raw.replace(/^\/+|\/+$/g, "")).toLowerCase();
+    if (!value) return false;
+
+    if (value.includes("*")) {
+      const rx = new RegExp(`^${this.escapeRegex(value).replace(/\\\*/g, ".*")}$`, "i");
+      return rx.test(normalizedPath) || rx.test(normalizedBase);
+    }
+
+    if (raw.endsWith("/") || value.includes("/")) {
+      return normalizedPath === value || normalizedPath.startsWith(`${value}/`);
+    }
+
+    return normalizedPath === value || normalizedPath.startsWith(`${value}/`) || normalizedBase === value;
+  }
+
+  private escapeRegex(value: string): string {
+    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   private getFrontmatterValueCaseInsensitive(
@@ -1441,6 +1542,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     `;
 
     const toggle = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
+    const bar = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar`);
     const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
     const togglePanel = () => {
       const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
@@ -1494,6 +1596,16 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     if (toggle) {
       toggle.textContent = isExpanded ? "▾" : "▸";
       toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        togglePanel();
+      });
+    }
+    if (bar) {
+      bar.addEventListener("click", (event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest(`.${EMBED_CLASS}__toggle`)) return;
+        if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
         event.preventDefault();
         event.stopPropagation();
         togglePanel();
@@ -2463,11 +2575,31 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     `;
 
     const toggle = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
+    const bar = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar`);
     const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
 
     if (toggle) {
       toggle.textContent = isExpanded ? "▾" : "▸";
       toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
+        panel.setAttribute(COLLAPSED_ATTR, collapsed ? "false" : "true");
+        if (toggle) toggle.textContent = collapsed ? "▾" : "▸";
+        if (collapsed) {
+          expandedSet.add(basePath);
+          this.setManualExpansionState(basePath, true);
+        } else {
+          expandedSet.delete(basePath);
+          this.setManualExpansionState(basePath, false);
+        }
+      });
+    }
+    if (bar) {
+      bar.addEventListener("click", (event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest(`.${EMBED_CLASS}__toggle`)) return;
+        if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
         event.preventDefault();
         event.stopPropagation();
         const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";

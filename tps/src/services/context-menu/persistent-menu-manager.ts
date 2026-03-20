@@ -916,14 +916,7 @@ export class PersistentMenuManager {
   }
 
   private resolveTitleIconColor(frontmatter: Record<string, any>, file?: TFile): string {
-    // First, check Notebook Navigator rule color if file is provided
-    if (file) {
-      const companionColor = this.resolveCompanionRuleColor(file, frontmatter);
-      if (companionColor) {
-        return companionColor;
-      }
-    }
-
+    // First, prefer explicit frontmatter color values.
     const colorKeys = ['iconColor', 'color', 'accentColor', 'accent'];
     for (const key of colorKeys) {
       const raw = this.getFrontmatterValueCaseInsensitive(frontmatter, key);
@@ -935,7 +928,30 @@ export class PersistentMenuManager {
         return value;
       }
     }
+
+    // Fall back to Notebook Navigator rule-derived color only when the file
+    // is not excluded from companion frontmatter writes.
+    if (file && !this.isCompanionWriteExcluded(file)) {
+      const companionColor = this.resolveCompanionRuleColor(file, frontmatter);
+      if (companionColor) {
+        return companionColor;
+      }
+    }
     return '';
+  }
+
+  private isCompanionWriteExcluded(file: TFile): boolean {
+    const pluginsApi: any = (this.plugin.app as any)?.plugins;
+    const companion: any =
+      pluginsApi?.plugins?.['tps-notebook-navigator-companion']
+      ?? pluginsApi?.plugins?.['TPS-Notebook-Navigator-Companion (Dev)'];
+    const exclusionService: any = companion?.exclusionService;
+    if (!exclusionService || typeof exclusionService.shouldIgnore !== 'function') return false;
+    try {
+      return !!exclusionService.shouldIgnore(file, { bypassCreationGrace: true });
+    } catch {
+      return false;
+    }
   }
 
   private resolveCompanionRuleColor(file: TFile, frontmatter: Record<string, any>): string {
@@ -986,7 +1002,13 @@ export class PersistentMenuManager {
       if (configuredValue) return configuredValue;
     }
 
-    // Finally, check Notebook Navigator rules if enabled
+    // Finally, check Notebook Navigator rules if enabled and the file is not
+    // excluded from companion writes.
+    if (this.isCompanionWriteExcluded(file)) {
+      return '';
+    }
+
+    // Notebook Navigator rule-derived icon fallback
     const ruleEngine: any = companion?.ruleEngine;
     if (companion?.settings?.enabled && ruleEngine?.resolveVisualOutputs) {
       try {

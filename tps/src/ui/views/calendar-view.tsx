@@ -62,6 +62,11 @@ import { parseAllTaskItems, ParsedTaskItem } from "./services/task-parser-servic
 
 export const CalendarViewType = "calendar";
 
+type StartDateSourceSlot = "primary" | "secondary" | "tertiary";
+interface ResolvedEntryStartDate {
+  date: Date;
+  slot: StartDateSourceSlot;
+}
 
 
 export class CalendarView extends BasesView {
@@ -76,6 +81,14 @@ export class CalendarView extends BasesView {
   private unscheduledEntries: { file: TFile; title: string }[] = [];
   private pendingUpdates = new Map<string, { start: Date; end?: Date; timestamp: number }>();
   private startDateProp: BasesPropertyId | null = null;
+  private secondaryStartDateProp: BasesPropertyId | null = null;
+  private tertiaryStartDateProp: BasesPropertyId | null = null;
+  private includePrimaryDateSource = true;
+  private includeSecondaryDateSource = false;
+  private includeTertiaryDateSource = false;
+  private primaryDurationMinutes: number | null = null;
+  private secondaryDurationMinutes: number | null = null;
+  private tertiaryDurationMinutes: number | null = null;
   private endDateProp: BasesPropertyId | null = null;
   private titleProp: BasesPropertyId | null = null;
   private weekStartDay: number = 1;
@@ -536,11 +549,37 @@ export class CalendarView extends BasesView {
       this.config.getAsPropertyId("startDate") ??
       this.config.getAsPropertyId("startProperty") ??
       this.config.getAsPropertyId("start");
+    const secondaryStartProp =
+      this.config.getAsPropertyId("secondaryStartDate") ??
+      this.config.getAsPropertyId("secondaryStartProperty") ??
+      this.config.getAsPropertyId("secondaryStart");
+    const tertiaryStartProp =
+      this.config.getAsPropertyId("tertiaryStartDate") ??
+      this.config.getAsPropertyId("tertiaryStartProperty") ??
+      this.config.getAsPropertyId("tertiaryStart");
     const endProp =
       this.config.getAsPropertyId("endDate") ??
       this.config.getAsPropertyId("endProperty") ??
       this.config.getAsPropertyId("end");
+    const configuredSecondaryStartProp = this.normalizeConfiguredPropertyId((this.plugin.settings as any)?.secondaryStartProperty);
+    const configuredTertiaryStartProp = this.normalizeConfiguredPropertyId((this.plugin.settings as any)?.tertiaryStartProperty);
+    const resolvedSecondaryStartProp = secondaryStartProp ?? configuredSecondaryStartProp;
+    const resolvedTertiaryStartProp = tertiaryStartProp ?? configuredTertiaryStartProp;
+    this.includePrimaryDateSource = this.parseBooleanLike(this.config.get("includePrimaryDateSource"), true);
+    this.includeSecondaryDateSource = this.parseBooleanLike(
+      this.config.get("includeSecondaryDateSource"),
+      Boolean(resolvedSecondaryStartProp),
+    );
+    this.includeTertiaryDateSource = this.parseBooleanLike(
+      this.config.get("includeTertiaryDateSource"),
+      Boolean(resolvedTertiaryStartProp),
+    );
     this.startDateProp = startProp ?? ("note.scheduled" as BasesPropertyId);
+    this.secondaryStartDateProp = resolvedSecondaryStartProp;
+    this.tertiaryStartDateProp = resolvedTertiaryStartProp;
+    this.primaryDurationMinutes = this.parseOptionalDurationMinutes(this.config.get("primaryDurationMinutes"));
+    this.secondaryDurationMinutes = this.parseOptionalDurationMinutes(this.config.get("secondaryDurationMinutes"));
+    this.tertiaryDurationMinutes = this.parseOptionalDurationMinutes(this.config.get("tertiaryDurationMinutes"));
     this.endDateProp = endProp ?? ("note.timeEstimate" as BasesPropertyId);
 
     this.titleProp = this.config.getAsPropertyId("titleProperty");
@@ -793,7 +832,7 @@ export class CalendarView extends BasesView {
       : null;
     const eventIdFieldName = this.plugin.settings.eventIdKey;
     const uidFieldName = this.plugin.settings.uidKey;
-    const startFieldName = this.getNoteField(this.startDateProp);
+    const startFieldNames = this.getStartDateNoteFields();
     const canceledStatusValue = (this.plugin.settings.canceledStatusValue || "").toLowerCase().trim();
     const archiveFolder = this.plugin.settings.archiveFolder
       ? normalizePath(this.plugin.settings.archiveFolder.trim())
@@ -824,9 +863,13 @@ export class CalendarView extends BasesView {
       // Check for Event ID (New or Legacy)
       const eventId = this.getFrontmatterStringCaseInsensitive(fm, eventIdFieldName) || "";
       const uid = this.getFrontmatterStringCaseInsensitive(fm, uidFieldName);
-      const startValue = startFieldName
-        ? this.getFrontmatterValueCaseInsensitive(fm, startFieldName)
-        : undefined;
+      let startValue: unknown = undefined;
+      for (const startFieldName of startFieldNames) {
+        startValue = this.getFrontmatterValueCaseInsensitive(fm, startFieldName);
+        if (startValue !== undefined && startValue !== null && String(startValue).trim().length > 0) {
+          break;
+        }
+      }
 
       if (!eventId && !uid) continue;
 
@@ -847,8 +890,9 @@ export class CalendarView extends BasesView {
 
     for (const entry of queryData.data) {
       const entryFile = entry.file;
-      let startDate = extractDate(entry, this.startDateProp, this.getDailyNoteDateFormat());
-      if (startDate) {
+      const startResolution = this.resolveEntryStartDate(entry);
+      if (startResolution) {
+        let startDate = startResolution.date;
         // Read status and priority directly from cache for freshness
         let statusValue: any = null;
         let priorityValue: any = null;
@@ -1065,6 +1109,15 @@ export class CalendarView extends BasesView {
             // End datetime mode: extract end date directly
             endDate = extractDate(entry, this.endDateProp, this.getDailyNoteDateFormat()) ?? undefined;
           }
+        }
+
+        const configuredDurationMinutes = this.getSourceDurationMinutes(startResolution.slot);
+        if (configuredDurationMinutes !== null) {
+          endDate = new Date(startDate.getTime() + configuredDurationMinutes * 60 * 1000);
+        } else if (!endDate) {
+          // If no per-source duration is set, force a minimum event span.
+          const minDurationMinutes = this.getMinimumEventDurationMinutes();
+          endDate = new Date(startDate.getTime() + minDurationMinutes * 60 * 1000);
         }
 
 
@@ -1354,9 +1407,9 @@ export class CalendarView extends BasesView {
     return entries.filter((entry) => !entry.isExternal && !entry.isGhost);
   }
 
-  private getFilterRangeBoundsFromConfig(): { start: Date | null; end: Date | null; hasDateFilter: boolean } {
+  private getCalendarFilterSources(extraSources: unknown[] = []): unknown[] {
     const controllerAny = this.controller as any;
-    const filterSources = [
+    const sources = [
       this.config.get?.("filters"),
       this.config.get?.("filter"),
       this.config.get?.("query"),
@@ -1368,7 +1421,13 @@ export class CalendarView extends BasesView {
       controllerAny?.filters,
       controllerAny?.viewFilters,
       controllerAny?.query,
-    ].filter((value, index, arr) => value != null && arr.indexOf(value) === index);
+      ...extraSources,
+    ];
+    return sources.filter((value, index, arr) => value != null && arr.indexOf(value) === index);
+  }
+
+  private getFilterRangeBoundsFromConfig(): { start: Date | null; end: Date | null; hasDateFilter: boolean } {
+    const filterSources = this.getCalendarFilterSources();
     const contextFile = this.getFilterExpressionContextFile();
 
     const propertyAliases = this.getStartDatePropertyAliases();
@@ -1412,15 +1471,15 @@ export class CalendarView extends BasesView {
 
   private getFilterExpressionContextFile(): TFile | null {
     const leafFile = this.resolveContainerLeafFile();
-    if (leafFile && leafFile.extension.toLowerCase() !== "base") {
+    if (leafFile && leafFile.extension.toLowerCase() === "md") {
       return leafFile;
     }
     const parentPath = this.findParentNotePath();
     if (parentPath) {
       const parent = this.app.vault.getFileByPath(parentPath);
-      if (parent) return parent;
+      if (parent && parent.extension.toLowerCase() === "md") return parent;
     }
-    return leafFile;
+    return leafFile && leafFile.extension.toLowerCase() === "md" ? leafFile : null;
   }
 
   private getFilterExpressionContextCandidates(primary: TFile | null): TFile[] {
@@ -1491,19 +1550,21 @@ export class CalendarView extends BasesView {
       aliases.add(normalized);
     };
 
-    const startField = this.getNoteField(this.startDateProp);
-    addAlias(startField);
-    if (startField) {
-      addAlias(`note.${startField}`);
-    }
+    for (const propId of this.getStartDatePropsInPriorityOrder()) {
+      const startField = this.getNoteField(propId);
+      addAlias(startField);
+      if (startField) {
+        addAlias(`note.${startField}`);
+      }
 
-    if (typeof this.startDateProp === "string") {
-      addAlias(this.startDateProp);
-      const parsed = parsePropertyId(this.startDateProp as BasesPropertyId);
-      const parsedName = parsed.name || (parsed as any).property;
-      addAlias(parsedName || null);
-      if (parsedName) {
-        addAlias(`note.${parsedName}`);
+      if (typeof propId === "string") {
+        addAlias(propId);
+        const parsed = parsePropertyId(propId as BasesPropertyId);
+        const parsedName = parsed.name || (parsed as any).property;
+        addAlias(parsedName || null);
+        if (parsedName) {
+          addAlias(`note.${parsedName}`);
+        }
       }
     }
 
@@ -1791,7 +1852,7 @@ export class CalendarView extends BasesView {
     const parentNote = this.findParentNotePath();
 
     if (parentNote) {
-      const detectedDate = this.extractDateFromPath(parentNote);
+      const detectedDate = this.extractContextDateFromFrontmatter(parentNote) ?? this.extractDateFromPath(parentNote);
       if (detectedDate) {
         this.contextDateDetected = detectedDate;
         const dateLogKey = `${parentNote}::${detectedDate.getFullYear()}-${detectedDate.getMonth()}-${detectedDate.getDate()}`;
@@ -1820,11 +1881,14 @@ export class CalendarView extends BasesView {
    */
   private findParentNotePath(): string | null {
     try {
+      const isMarkdownPath = (path: string | null | undefined): path is string =>
+        typeof path === "string" && path.trim().toLowerCase().endsWith(".md");
+
       // Method 1: Look for data-path on workspace leaf content (most reliable)
       const leafContent = this.containerEl.closest('.workspace-leaf-content');
       if (leafContent) {
         const dataPath = leafContent.getAttribute('data-path');
-        if (dataPath) {
+        if (isMarkdownPath(dataPath)) {
           if (this.lastLoggedContextParentPath !== dataPath) {
             logger.log(`[CalendarView] Found parent via data-path: ${dataPath}`);
             this.lastLoggedContextParentPath = dataPath;
@@ -1836,7 +1900,7 @@ export class CalendarView extends BasesView {
 
       // Method 2: Find the workspace leaf and look up the view file.
       const leafFile = this.resolveContainerLeafFile();
-      if (leafFile) {
+      if (leafFile && leafFile.extension.toLowerCase() === "md") {
         if (this.lastLoggedContextParentPath !== leafFile.path) {
           logger.log(`[CalendarView] Found parent via leaf iteration: ${leafFile.path}`);
           this.lastLoggedContextParentPath = leafFile.path;
@@ -1859,7 +1923,7 @@ export class CalendarView extends BasesView {
             const parentLeaf = parent.closest('.workspace-leaf-content');
             if (parentLeaf) {
               const dataPath = parentLeaf.getAttribute('data-path');
-              if (dataPath) {
+              if (isMarkdownPath(dataPath)) {
                 if (this.lastLoggedContextParentPath !== dataPath) {
                   logger.log(`[CalendarView] Found parent via embed ancestor: ${dataPath}`);
                   this.lastLoggedContextParentPath = dataPath;
@@ -1876,7 +1940,7 @@ export class CalendarView extends BasesView {
       // Method 4: controller API (not currently populated, kept for forward-compat)
       const ctrl = this.controller as any;
       const ctrlFilePath: string | undefined = ctrl.file?.path ?? ctrl.sourceFile?.path;
-      if (ctrlFilePath) {
+      if (isMarkdownPath(ctrlFilePath)) {
         if (this.lastLoggedContextParentPath !== ctrlFilePath) {
           logger.log(`[CalendarView] Found parent via controller: ${ctrlFilePath}`);
           this.lastLoggedContextParentPath = ctrlFilePath;
@@ -1906,7 +1970,7 @@ export class CalendarView extends BasesView {
       const hoverLink = this.containerEl.closest('[data-href]');
       if (hoverLink) {
         const href = hoverLink.getAttribute('data-href');
-        if (href) {
+        if (isMarkdownPath(href)) {
           if (this.lastLoggedContextParentPath !== href) {
             logger.log(`[CalendarView] Found parent via hover-link: ${href}`);
             this.lastLoggedContextParentPath = href;
@@ -1916,8 +1980,18 @@ export class CalendarView extends BasesView {
         }
       }
 
-      // Fallback: Don't use active file as it may be wrong for embeds
-      // Instead, log that we couldn't find the parent and use today
+      // Method 7: final fallback to active markdown file.
+      const activeFile = this.app.workspace.getActiveFile();
+      if (activeFile && activeFile.extension.toLowerCase() === "md") {
+        if (this.lastLoggedContextParentPath !== activeFile.path) {
+          logger.log(`[CalendarView] Found parent via active file fallback: ${activeFile.path}`);
+          this.lastLoggedContextParentPath = activeFile.path;
+        }
+        this.loggedMissingContextParent = false;
+        return activeFile.path;
+      }
+
+      // Final fallback: parent is unknown, use today's date.
       this.lastLoggedContextParentPath = null;
       this.lastLoggedContextDateDetectedKey = null;
       this.lastLoggedContextDateAppliedKey = null;
@@ -1930,6 +2004,104 @@ export class CalendarView extends BasesView {
       logger.warn("[CalendarView] Error finding parent note:", error);
       return null;
     }
+  }
+
+  /**
+   * Prefer parent note frontmatter date fields for context anchoring.
+   */
+  private extractContextDateFromFrontmatter(path: string): Date | null {
+    try {
+      const normalizedPath = normalizePath(path);
+      const target = this.app.vault.getAbstractFileByPath(normalizedPath);
+      if (!(target instanceof TFile)) return null;
+
+      const frontmatter = this.app.metadataCache.getFileCache(target)?.frontmatter as Record<string, any> | undefined;
+      if (!frontmatter) return null;
+
+      const candidateKeys: string[] = [];
+      const addCandidate = (raw: unknown) => {
+        if (typeof raw !== "string") return;
+        const trimmed = raw.trim();
+        if (!trimmed) return;
+        const normalized = trimmed.includes(".") ? trimmed.split(".").pop() ?? trimmed : trimmed;
+        if (!normalized) return;
+        if (!candidateKeys.includes(normalized)) candidateKeys.push(normalized);
+      };
+
+      for (const propId of this.getStartDatePropsInPriorityOrder()) {
+        addCandidate(this.getFieldFromPropertyId(propId));
+      }
+      addCandidate((this.plugin as any)?.settings?.startProperty);
+      addCandidate((this.plugin as any)?.settings?.secondaryStartProperty);
+      addCandidate((this.plugin as any)?.settings?.tertiaryStartProperty);
+      addCandidate("scheduled");
+      addCandidate("completed");
+      addCandidate("completedDate");
+      addCandidate("completedAt");
+      addCandidate("due");
+      addCandidate("start");
+      addCandidate("date");
+      addCandidate("day");
+
+      for (const key of candidateKeys) {
+        const rawValue = this.getFrontmatterValueCaseInsensitive(frontmatter, key);
+        const parsed = this.parseContextDateValue(rawValue);
+        if (parsed) {
+          return parsed;
+        }
+      }
+    } catch (error) {
+      logger.warn("[CalendarView] Failed reading context date from frontmatter:", error);
+    }
+
+    return null;
+  }
+
+  private parseContextDateValue(rawValue: unknown): Date | null {
+    if (rawValue === undefined || rawValue === null) return null;
+    const moment = (window as any).moment;
+    if (!moment) return null;
+
+    if (rawValue instanceof Date && !isNaN(rawValue.getTime())) {
+      return new Date(rawValue.getTime());
+    }
+
+    if (typeof rawValue === "number") {
+      const mNum = moment(rawValue);
+      return mNum?.isValid?.() ? mNum.toDate() : null;
+    }
+
+    const text = String(rawValue).trim();
+    if (!text) return null;
+
+    try {
+      const byFilenameParser = parseDateFromFilename(text, this.getDailyNoteDateFormat());
+      if (byFilenameParser?.isValid?.()) {
+        return byFilenameParser.toDate();
+      }
+    } catch {
+      // Continue with explicit datetime parsing below.
+    }
+
+    const strict = moment(
+      text,
+      [
+        moment.ISO_8601,
+        "YYYY-MM-DD HH:mm:ss",
+        "YYYY-MM-DD HH:mm",
+        "YYYY-MM-DD",
+        "dddd, MMMM Do YYYY",
+        "MMMM D, YYYY",
+        "MMM D, YYYY",
+      ],
+      true,
+    );
+    if (strict?.isValid?.()) {
+      return strict.toDate();
+    }
+
+    const loose = moment(text);
+    return loose?.isValid?.() ? loose.toDate() : null;
   }
 
   /**
@@ -2130,8 +2302,10 @@ export class CalendarView extends BasesView {
 
       if (file) {
         new Notice(`Created meeting note: ${file.basename}`);
-        const leaf = this.app.workspace.getLeaf('split', 'vertical');
-        await leaf.openFile(file);
+        const leaf = this.getTargetLeafForOpen(false);
+        if (leaf) {
+          await leaf.openFile(file);
+        }
 
         this.updateCalendar();
       }
@@ -2917,7 +3091,7 @@ export class CalendarView extends BasesView {
         : await this.getOrCreateDailyNote(date);
 
       if (file instanceof TFile) {
-        const leaf = this.app.workspace.getLeaf(false);
+        const leaf = this.getTargetLeafForOpen(false);
         if (leaf) {
           await leaf.openFile(file);
         }
@@ -2926,6 +3100,36 @@ export class CalendarView extends BasesView {
       logger.error(`Failed to open ${useCanvas ? "daily canvas" : "daily note"}`, e);
       new Notice(`Failed to open ${useCanvas ? "daily canvas" : "daily note"}: ${e}`);
     }
+  }
+
+  private getTargetLeafForOpen(preferNewTab: boolean): WorkspaceLeaf | null {
+    if (preferNewTab) {
+      return this.app.workspace.getLeaf("tab");
+    }
+
+    const workspaceAny = this.app.workspace as any;
+    const activeLeaf = workspaceAny?.activeLeaf as WorkspaceLeaf | null | undefined;
+    const activeViewType = activeLeaf?.view?.getViewType?.();
+    if (activeLeaf && activeViewType !== CalendarViewType) {
+      return activeLeaf;
+    }
+
+    const markdownLeaves = this.app.workspace.getLeavesOfType("markdown");
+    if (markdownLeaves.length > 0) {
+      return markdownLeaves[0];
+    }
+
+    const recentLeaf =
+      typeof workspaceAny?.getMostRecentLeaf === "function"
+        ? (workspaceAny.getMostRecentLeaf() as WorkspaceLeaf | null)
+        : null;
+    const recentViewType = recentLeaf?.view?.getViewType?.();
+    if (recentLeaf && recentViewType !== CalendarViewType) {
+      return recentLeaf;
+    }
+
+    // Never allocate a new leaf just to open a calendar event.
+    return null;
   }
 
   private async buildDailyNoteContent(date: Date, path: string): Promise<string> {
@@ -3023,9 +3227,7 @@ export class CalendarView extends BasesView {
 
               const file = calEntry.entry.file;
               if (!file) return;
-              const leaf = isModEvent
-                ? (this.app.workspace.getLeaf(true) ?? this.app.workspace.getLeaf(false))
-                : this.app.workspace.getLeaf(false);
+              const leaf = this.getTargetLeafForOpen(isModEvent);
               if (!leaf) return;
               await leaf.openFile(file);
             }}
@@ -3697,6 +3899,70 @@ export class CalendarView extends BasesView {
     return trimmed;
   }
 
+  private normalizeConfiguredPropertyId(value: unknown): BasesPropertyId | null {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    return (trimmed.includes(".") ? trimmed : `note.${trimmed}`) as BasesPropertyId;
+  }
+
+  private getStartDatePropsInPriorityOrder(): BasesPropertyId[] {
+    const props: BasesPropertyId[] = [];
+    const seen = new Set<string>();
+    const push = (enabled: boolean, propId: BasesPropertyId | null) => {
+      if (!enabled) return;
+      if (!propId || typeof propId !== "string") return;
+      const normalized = propId.trim();
+      if (!normalized) return;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      props.push(normalized as BasesPropertyId);
+    };
+
+    push(this.includePrimaryDateSource, this.startDateProp);
+    push(this.includeSecondaryDateSource, this.secondaryStartDateProp);
+    push(this.includeTertiaryDateSource, this.tertiaryStartDateProp);
+    return props;
+  }
+
+  private getStartDateNoteFields(): string[] {
+    const fields: string[] = [];
+    const seen = new Set<string>();
+    for (const propId of this.getStartDatePropsInPriorityOrder()) {
+      const field = this.getNoteField(propId);
+      if (!field) continue;
+      const normalized = field.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      fields.push(field);
+    }
+    return fields;
+  }
+
+  private resolveEntryStartDate(entry: BasesEntry): ResolvedEntryStartDate | null {
+    const dailyFormat = this.getDailyNoteDateFormat();
+    const sources: Array<{ slot: StartDateSourceSlot; propId: BasesPropertyId | null; enabled: boolean }> = [
+      { slot: "primary", propId: this.startDateProp, enabled: this.includePrimaryDateSource },
+      { slot: "secondary", propId: this.secondaryStartDateProp, enabled: this.includeSecondaryDateSource },
+      { slot: "tertiary", propId: this.tertiaryStartDateProp, enabled: this.includeTertiaryDateSource },
+    ];
+    for (const source of sources) {
+      if (!source.enabled || !source.propId) continue;
+      const resolved = extractDate(entry, source.propId, dailyFormat);
+      if (resolved) {
+        return { date: resolved, slot: source.slot };
+      }
+    }
+    return null;
+  }
+
+  private getSourceDurationMinutes(slot: StartDateSourceSlot): number | null {
+    if (slot === "primary") return this.primaryDurationMinutes;
+    if (slot === "secondary") return this.secondaryDurationMinutes;
+    return this.tertiaryDurationMinutes;
+  }
+
   private getNoteField(propId: BasesPropertyId | null): string | null {
     if (!propId) return null;
 
@@ -3975,6 +4241,29 @@ export class CalendarView extends BasesView {
     return Math.max(1, parsedValue);
   }
 
+  private parseBooleanLike(value: unknown, fallback: boolean): boolean {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+    }
+    return fallback;
+  }
+
+  private parseOptionalDurationMinutes(value: unknown): number | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "string" && value.trim().length === 0) return null;
+    const parsed = this.parseNumberConfig(value, 0);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+  }
+
+  private getMinimumEventDurationMinutes(): number {
+    const snap = this.parseNumberConfig(this.plugin.settings.snapDuration, 5);
+    return Math.max(1, snap);
+  }
+
   private normalizeCalendarViewMode(
     value: unknown,
     fallback: CalendarViewMode | undefined,
@@ -4228,6 +4517,33 @@ export class CalendarView extends BasesView {
     const ctrlFile = ctrl.file ?? ctrl.sourceFile ?? ctrl.baseFile ?? null;
     if (ctrlFile instanceof TFile) return ctrlFile;
 
+    // Embedded bases may not expose ctrl.file; try resolving from the embed DOM wrapper.
+    const embedHost = this.containerEl.closest(".internal-embed") as HTMLElement | null;
+    if (embedHost) {
+      const rawSrc =
+        embedHost.getAttribute("src") ||
+        embedHost.getAttribute("data-href") ||
+        embedHost.getAttribute("href") ||
+        "";
+      const normalizedSrc = rawSrc
+        .replace(/^!\[\[/, "")
+        .replace(/\]\]$/, "")
+        .split("|")[0]
+        .split("#")[0]
+        .trim();
+      if (normalizedSrc) {
+        const activePath = (this.app.workspace.getActiveFile() as TFile | null)?.path || "";
+        const fromController = (ctrl.currentFile as TFile | null)?.path || "";
+        const candidates = [activePath, fromController, ""];
+        for (const sourcePath of candidates) {
+          const resolved = this.app.metadataCache.getFirstLinkpathDest(normalizedSrc, sourcePath);
+          if (resolved instanceof TFile) return resolved;
+        }
+        const direct = this.app.vault.getAbstractFileByPath(normalizedSrc);
+        if (direct instanceof TFile) return direct;
+      }
+    }
+
     // Walk workspace leaves to find the one whose container wraps this view.
     const leafEl = this.containerEl.closest('.workspace-leaf');
     if (!leafEl) return null;
@@ -4276,10 +4592,22 @@ export class CalendarView extends BasesView {
     folderPath: string | null;
     frontmatter: Record<string, any>;
   } {
-    const folderPath = baseFilters
-      ? this.extractFolderFromTopLevelFilters(baseFilters)
-      : null;
-    const frontmatter = this.extractFrontmatterDefaults(baseFilters ?? null);
+    const filterSources = this.getCalendarFilterSources(baseFilters != null ? [baseFilters] : []);
+    let folderPath: string | null = null;
+    const frontmatter: Record<string, any> = {};
+
+    for (const source of filterSources) {
+      if (!folderPath) {
+        folderPath = this.extractFolderFromTopLevelFilters(source);
+      }
+      Object.assign(frontmatter, this.extractFrontmatterDefaults(source));
+    }
+
+    logger.log("[CalendarView] Creation defaults resolved", {
+      folderPath,
+      sourceCount: filterSources.length,
+      frontmatterKeys: Object.keys(frontmatter),
+    });
 
     return { folderPath, frontmatter };
   }
@@ -4347,21 +4675,58 @@ export class CalendarView extends BasesView {
       }
       if (Array.isArray((n as any).children)) (n as any).children.forEach(visit);
       // Direct condition node
-      const rawProp = (n as any).property ?? (n as any).field ?? (n as any).key ?? (n as any).column ?? null;
+      const rawProp =
+        (n as any).property ??
+        (n as any).field ??
+        (n as any).key ??
+        (n as any).column ??
+        (n as any).left ??
+        (n as any).lhs ??
+        (n as any).operand ??
+        null;
       const property =
         typeof rawProp === "string" ? rawProp.trim()
         : rawProp && typeof rawProp === "object"
-          ? String((rawProp as any).property ?? (rawProp as any).name ?? (rawProp as any).key ?? (rawProp as any).field ?? (rawProp as any).id ?? "").trim()
+          ? String(
+            (rawProp as any).property ??
+            (rawProp as any).name ??
+            (rawProp as any).key ??
+            (rawProp as any).field ??
+            (rawProp as any).id ??
+            (rawProp as any).label ??
+            (rawProp as any).column ??
+            "",
+          ).trim()
           : "";
       if (!property) return;
-      const rawOp = (n as any).op ?? (n as any).operator ?? (n as any).comparison;
+      const rawOp =
+        (n as any).op ??
+        (n as any).operator ??
+        (n as any).comparison ??
+        (n as any).type ??
+        (n as any).condition;
       const operator =
         typeof rawOp === "string" ? rawOp.trim()
         : rawOp && typeof rawOp === "object"
-          ? String((rawOp as any).operator ?? (rawOp as any).op ?? (rawOp as any).name ?? "").trim()
+          ? String(
+            (rawOp as any).operator ??
+            (rawOp as any).op ??
+            (rawOp as any).name ??
+            (rawOp as any).id ??
+            (rawOp as any).label ??
+            (rawOp as any).type ??
+            "",
+          ).trim()
           : "";
       if (!this.isPositiveEqualityOp(operator)) return;
-      let value = (n as any).value ?? (n as any).pattern ?? (n as any).match;
+      let value =
+        (n as any).value ??
+        (n as any).pattern ??
+        (n as any).match ??
+        (n as any).right ??
+        (n as any).rhs ??
+        (n as any).target ??
+        (n as any).literal;
       if (value && typeof value === "object" && "value" in value) value = (value as any).value;
       conditions.push({ property, operator, value });
     };
@@ -4558,6 +4923,9 @@ export class CalendarView extends BasesView {
         (node as any).field ??
         (node as any).key ??
         (node as any).column ??
+        (node as any).left ??
+        (node as any).lhs ??
+        (node as any).operand ??
         null;
       const property =
         typeof rawProperty === "string"
@@ -4569,15 +4937,29 @@ export class CalendarView extends BasesView {
               (rawProperty as any).key ??
               (rawProperty as any).field ??
               (rawProperty as any).id ??
+              (rawProperty as any).label ??
+              (rawProperty as any).column ??
               "",
             ).trim()
             : "";
       if (!property) return;
-      let value = (node as any).value ?? (node as any).pattern ?? (node as any).match;
+      let value =
+        (node as any).value ??
+        (node as any).pattern ??
+        (node as any).match ??
+        (node as any).right ??
+        (node as any).rhs ??
+        (node as any).target ??
+        (node as any).literal;
       if (value && typeof value === "object" && "value" in value) {
         value = (value as any).value;
       }
-      const rawOperator = (node as any).op ?? (node as any).operator ?? (node as any).comparison;
+      const rawOperator =
+        (node as any).op ??
+        (node as any).operator ??
+        (node as any).comparison ??
+        (node as any).type ??
+        (node as any).condition;
       const operator =
         typeof rawOperator === "string"
           ? rawOperator.trim()
@@ -4586,6 +4968,8 @@ export class CalendarView extends BasesView {
               (rawOperator as any).operator ??
               (rawOperator as any).op ??
               (rawOperator as any).name ??
+              (rawOperator as any).label ??
+              (rawOperator as any).type ??
               (rawOperator as any).id ??
               "",
             ).trim()
@@ -4629,6 +5013,26 @@ export class CalendarView extends BasesView {
         property: comparisonMatch[1],
         operator: comparisonMatch[2],
         value: stripOuterQuotes(comparisonMatch[3].trim()),
+      };
+    }
+
+    // Example: folder is "Markdown/Action Items"
+    const textualMatch = trimmed.match(/^([\w.]+)\s+(is|equals?)\s+(.+)$/i);
+    if (textualMatch) {
+      return {
+        property: textualMatch[1],
+        operator: textualMatch[2],
+        value: stripOuterQuotes(textualMatch[3].trim()),
+      };
+    }
+
+    // Example: folder is not "System"
+    const textualNegativeMatch = trimmed.match(/^([\w.]+)\s+(is\s+not|does\s+not\s+equal|not\s+equals?)\s+(.+)$/i);
+    if (textualNegativeMatch) {
+      return {
+        property: textualNegativeMatch[1],
+        operator: textualNegativeMatch[2],
+        value: stripOuterQuotes(textualNegativeMatch[3].trim()),
       };
     }
 
@@ -4915,6 +5319,66 @@ export class CalendarView extends BasesView {
             type: "property",
             key: "startDate",
             placeholder: "note.scheduled",
+          },
+          {
+            displayName: "Show primary date source",
+            type: "dropdown",
+            key: "includePrimaryDateSource",
+            default: "true",
+            options: {
+              true: "Yes",
+              false: "No",
+            },
+          },
+          {
+            displayName: "Primary duration (minutes, optional)",
+            type: "text",
+            key: "primaryDurationMinutes",
+            placeholder: "Blank = minimum time",
+          },
+          {
+            displayName: "Secondary date",
+            type: "property",
+            key: "secondaryStartDate",
+            placeholder: "note.due",
+          },
+          {
+            displayName: "Show secondary date source",
+            type: "dropdown",
+            key: "includeSecondaryDateSource",
+            default: "false",
+            options: {
+              true: "Yes",
+              false: "No",
+            },
+          },
+          {
+            displayName: "Secondary duration (minutes, optional)",
+            type: "text",
+            key: "secondaryDurationMinutes",
+            placeholder: "Blank = minimum time",
+          },
+          {
+            displayName: "Tertiary date",
+            type: "property",
+            key: "tertiaryStartDate",
+            placeholder: "note.completed",
+          },
+          {
+            displayName: "Show tertiary date source",
+            type: "dropdown",
+            key: "includeTertiaryDateSource",
+            default: "false",
+            options: {
+              true: "Yes",
+              false: "No",
+            },
+          },
+          {
+            displayName: "Tertiary duration (minutes, optional)",
+            type: "text",
+            key: "tertiaryDurationMinutes",
+            placeholder: "Blank = minimum time",
           },
           {
             displayName: "Use duration for end date",

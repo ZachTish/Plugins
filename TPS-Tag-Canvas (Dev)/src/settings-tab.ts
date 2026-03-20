@@ -20,6 +20,9 @@ export class TagCanvasSettingTab extends PluginSettingTab {
     };
 
     const featuresCategory = createMainCategory('Features');
+    const layoutCategory = createMainCategory('Layout');
+    const filtersCategory = createMainCategory('Filters');
+    const advancedCategory = createMainCategory('Advanced');
 
     new Setting(featuresCategory)
       .setName("Canvas output folder")
@@ -63,9 +66,7 @@ export class TagCanvasSettingTab extends PluginSettingTab {
           })
       );
 
-    featuresCategory.createEl("h3", { text: "Layout" });
-
-    new Setting(featuresCategory)
+    new Setting(layoutCategory)
       .setName("Columns")
       .setDesc("Number of columns in the grid layout when placing new nodes.")
       .addSlider(slider =>
@@ -79,7 +80,7 @@ export class TagCanvasSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(layoutCategory)
       .setName("Node width (px)")
       .setDesc("Width of each file node.")
       .addText(text =>
@@ -94,7 +95,7 @@ export class TagCanvasSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(layoutCategory)
       .setName("Node height (px)")
       .setDesc("Height of each file node.")
       .addText(text =>
@@ -109,7 +110,7 @@ export class TagCanvasSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(layoutCategory)
       .setName("Gap between nodes (px)")
       .setDesc("Spacing between file nodes.")
       .addText(text =>
@@ -124,11 +125,9 @@ export class TagCanvasSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Exclusions" });
-
-    new Setting(containerEl)
+    new Setting(filtersCategory)
       .setName("Excluded tags")
-      .setDesc("Comma-separated tags (without #) to skip. Child tags are also excluded when a parent is listed.")
+      .setDesc("Comma-separated tag filters to skip. Supports plain tags, child tag matching, wildcards (*), and re:<regex>.")
       .addTextArea(text =>
         text
           .setPlaceholder("daily, weekly, archive")
@@ -142,9 +141,9 @@ export class TagCanvasSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(filtersCategory)
       .setName("Excluded folders")
-      .setDesc("Comma-separated folder paths whose notes are ignored during tag scanning.")
+      .setDesc("Comma-separated path filters for ignored notes. Supports folder prefixes, name:<basename>, wildcards (*), and re:<regex>.")
       .addTextArea(text =>
         text
           .setPlaceholder("Templates, Archive/Old")
@@ -158,10 +157,10 @@ export class TagCanvasSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(filtersCategory)
       .setName("Archive trigger tags")
       .setDesc(
-        "Comma-separated tags (without #) that mark notes as archived/hidden. " +
+        "Comma-separated tag filters that mark notes as archived/hidden. Supports plain tags, wildcards (*), and re:<regex>. " +
         "Archived notes are removed from non-archive canvases unless their node is colored, linked, or grouped."
       )
       .addTextArea(text =>
@@ -177,11 +176,11 @@ export class TagCanvasSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(filtersCategory)
       .setName("Archive trigger folders")
       .setDesc(
-        "Comma-separated folder paths that mark notes as archived/hidden. " +
-        "Examples: Archive, Archive/Old"
+        "Comma-separated path filters that mark notes as archived/hidden. Supports folder prefixes, name:<basename>, wildcards (*), and re:<regex>. " +
+        "Examples: Archive, Archive/Old, re:^System/"
       )
       .addTextArea(text =>
         text
@@ -196,9 +195,7 @@ export class TagCanvasSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Advanced" });
-
-    new Setting(containerEl)
+    new Setting(advancedCategory)
       .setName("Debug logging")
       .setDesc("Print debug information to the developer console.")
       .addToggle(toggle =>

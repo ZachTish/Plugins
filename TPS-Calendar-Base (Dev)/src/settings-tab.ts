@@ -33,6 +33,9 @@ const createCollapsibleSection = (
 
 export class CalendarPluginSettingsTab extends PluginSettingTab {
   plugin: ObsidianCalendarPlugin;
+  private settingsViewState = new Map<string, boolean>();
+  private settingsScrollTop = 0;
+  private hasRenderedSettings = false;
 
   constructor(app: Plugin["app"], plugin: ObsidianCalendarPlugin) {
     super(app, plugin);
@@ -41,6 +44,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
 
   display(): void {
     const { containerEl } = this;
+    this.captureSettingsViewState(containerEl);
     containerEl.empty();
 
     const debouncedSave = debounce(() => this.plugin.saveSettings(), 300);
@@ -76,7 +80,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       featuresCategory,
       "Calendars & Sources",
       "Source feeds and quick import. This is the highest-priority setup area for the calendar plugin.",
-      true
+      false
     );
 
     new Setting(calendarsSection)
@@ -213,7 +217,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       interactionCategory,
       "General",
       "Primary interaction settings that most users are likely to change.",
-      true
+      false
     );
 
     new Setting(generalSection)
@@ -271,7 +275,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       interactionCategory,
       "Calendar View Defaults",
       "Default navigation and visible time-range behavior.",
-      true
+      false
     );
 
     new Setting(viewBehaviorSection)
@@ -334,6 +338,50 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
       );
+
+    new Setting(viewBehaviorSection)
+      .setName("Primary event date field")
+      .setDesc("First frontmatter field used to place notes on the calendar.")
+      .addText((text) =>
+        text
+          .setPlaceholder("scheduled")
+          .setValue(this.plugin.settings.startProperty ?? "scheduled")
+          .onChange(async (value) => {
+            this.plugin.settings.startProperty = value.trim() || "scheduled";
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(viewBehaviorSection)
+      .setName("Secondary event date field")
+      .setDesc("Fallback field when the primary field is missing. Leave blank to disable.")
+      .addText((text) =>
+        text
+          .setPlaceholder("due")
+          .setValue(this.plugin.settings.secondaryStartProperty ?? "")
+          .onChange(async (value) => {
+            this.plugin.settings.secondaryStartProperty = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(viewBehaviorSection)
+      .setName("Tertiary event date field")
+      .setDesc("Second fallback field when primary/secondary are missing. Leave blank to disable.")
+      .addText((text) =>
+        text
+          .setPlaceholder("completed")
+          .setValue(this.plugin.settings.tertiaryStartProperty ?? "")
+          .onChange(async (value) => {
+            this.plugin.settings.tertiaryStartProperty = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    viewBehaviorSection.createEl("p", {
+      text:
+        "Per-base controls: open each Calendar Base view options to toggle primary/secondary/tertiary date sources and optional per-source durations. If a source duration is left blank, events use the minimum time slot.",
+    }).addClass("setting-item-description");
 
     new Setting(viewBehaviorSection)
       .setName("Week starts on")
@@ -425,7 +473,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       rulesCategory,
       "Event Handling",
       "Linking and status behavior for calendar-created notes.",
-      true
+      false
     );
 
     let linkDetails: HTMLElement;
@@ -754,7 +802,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       advancedSection,
       "Frontmatter Keys",
       "All calendar frontmatter key names are grouped here, including the note color/icon fields used for event rendering.",
-      true
+      false
     );
 
     const keys = [
@@ -797,6 +845,43 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
       );
+    this.restoreSettingsViewState(containerEl);
+  }
+
+  private captureSettingsViewState(containerEl: HTMLElement): void {
+    this.settingsScrollTop = containerEl.scrollTop;
+    this.settingsViewState.clear();
+    const detailsEls = Array.from(containerEl.querySelectorAll("details"));
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector("summary")?.textContent?.trim() || "";
+      this.settingsViewState.set(`${index}:${summaryText}`, details.open);
+    });
+  }
+
+  private restoreSettingsViewState(containerEl: HTMLElement): void {
+    const detailsEls = Array.from(containerEl.querySelectorAll("details"));
+    if (!this.hasRenderedSettings) {
+      detailsEls.forEach((detailsEl) => {
+        const details = detailsEl as HTMLDetailsElement;
+        if (details.classList.contains("tps-settings-main-category")) {
+          details.setAttr("open", "true");
+        } else {
+          details.removeAttribute("open");
+        }
+      });
+      this.hasRenderedSettings = true;
+      containerEl.scrollTop = 0;
+      return;
+    }
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector("summary")?.textContent?.trim() || "";
+      const isOpen = this.settingsViewState.get(`${index}:${summaryText}`);
+      if (isOpen) details.setAttr("open", "true");
+      else details.removeAttribute("open");
+    });
+    containerEl.scrollTop = this.settingsScrollTop;
   }
 
   renderExternalCalendars(container: HTMLElement) {

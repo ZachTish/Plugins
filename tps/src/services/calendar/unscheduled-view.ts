@@ -132,9 +132,16 @@ export class UnscheduledView extends ItemView {
           }
           return;
         }
+        const workspaceAny = this.app.workspace as any;
+        const activeLeaf = workspaceAny?.activeLeaf ?? null;
+        const activeType = activeLeaf?.view?.getViewType?.();
+        const fallbackLeaf =
+          activeLeaf && activeType !== "calendar-bases-view" && activeType !== "calendar"
+            ? activeLeaf
+            : this.app.workspace.getLeavesOfType("markdown")[0] ?? null;
         const leaf = (e.ctrlKey || e.metaKey)
-          ? (this.app.workspace.getLeaf(true) ?? this.app.workspace.getLeaf(false))
-          : this.app.workspace.getLeaf(false);
+          ? this.app.workspace.getLeaf("tab")
+          : fallbackLeaf;
         if (!leaf) return;
         void leaf.openFile(file);
       });

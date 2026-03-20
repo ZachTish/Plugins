@@ -11,8 +11,8 @@
   ],
   "autoSync": true,
   "syncDelayMs": 2000,
-  "nodeWidth": 400,
-  "nodeHeight": 300,
+  "nodeWidth": 650,
+  "nodeHeight": 500,
   "columns": 3,
   "gap": 30,
   "debugLogging": false

@@ -34,6 +34,9 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
   plugin: TPSGlobalContextMenuPlugin;
   private static readonly SETTINGS_BUILD_STAMP = '2026-03-11 18:12';
   private readonly sectionState = new Map<string, boolean>();
+  private settingsViewState = new Map<string, boolean>();
+  private settingsScrollTop = 0;
+  private hasRenderedSettings = false;
 
   constructor(app: App, plugin: TPSGlobalContextMenuPlugin) {
     super(app, plugin);
@@ -81,6 +84,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
 
   display(): void {
     const { containerEl } = this;
+    this.captureSettingsViewState(containerEl);
 
     containerEl.empty();
 
@@ -159,18 +163,8 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       interactionCategory,
       'General Settings',
       'Common menu behavior, default paths, and archive basics.',
-      true
+      false
     );
-
-    new Setting(general)
-      .setName('Enable console logging')
-      .setDesc('Show debug logs in the developer console.')
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.enableLogging).onChange(async (value) => {
-          this.plugin.settings.enableLogging = value;
-          await this.plugin.saveSettings();
-        }),
-      );
 
     const archiveAutomation = createPopout(
       general,
@@ -468,7 +462,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       interactionCategory,
       'Inline UI',
       'Persistent inline surfaces. Graph and subitems behavior are grouped here.',
-      true
+      false
     );
 
 
@@ -1786,11 +1780,65 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }
       }));
 
+    const diagnostics = createSection(
+      interactionCategory,
+      'Diagnostics & Debug',
+      'Low-frequency troubleshooting settings.',
+      false
+    );
+
+    new Setting(diagnostics)
+      .setName('Enable console logging')
+      .setDesc('Show debug logs in the developer console.')
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.enableLogging).onChange(async (value) => {
+          this.plugin.settings.enableLogging = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
     containerEl.createEl('p', {
       text: 'Note: native context menu items are preserved; TPS actions are injected when context targets match.',
       cls: 'setting-item-description',
       attr: { style: 'margin-top: 20px; text-align: center; opacity: 0.7;' }
     });
+    this.restoreSettingsViewState(containerEl);
+  }
+
+  private captureSettingsViewState(containerEl: HTMLElement): void {
+    this.settingsScrollTop = containerEl.scrollTop;
+    this.settingsViewState.clear();
+    const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+      this.settingsViewState.set(`${index}:${summaryText}`, details.open);
+    });
+  }
+
+  private restoreSettingsViewState(containerEl: HTMLElement): void {
+    const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+    if (!this.hasRenderedSettings) {
+      detailsEls.forEach((detailsEl) => {
+        const details = detailsEl as HTMLDetailsElement;
+        if (details.classList.contains('tps-settings-main-category')) {
+          details.setAttr('open', 'true');
+        } else {
+          details.removeAttribute('open');
+        }
+      });
+      this.hasRenderedSettings = true;
+      containerEl.scrollTop = 0;
+      return;
+    }
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+      const isOpen = this.settingsViewState.get(`${index}:${summaryText}`);
+      if (isOpen) details.setAttr('open', 'true');
+      else details.removeAttribute('open');
+    });
+    containerEl.scrollTop = this.settingsScrollTop;
   }
 
   renderProperties(container: HTMLElement) {

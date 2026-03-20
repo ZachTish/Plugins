@@ -983,6 +983,17 @@ export class RuleEngine {
       }
     }
 
+    // Keep sort-date parsing aligned with reminder/rule date parsing so
+    // human-formatted daily-note dates (e.g. "Friday, March 20th 2026")
+    // don't get treated as missing values.
+    const comparable = this.parseComparableDate(unquoted);
+    if (comparable && typeof comparable.valueOf === "function") {
+      const ts = Number(comparable.valueOf());
+      if (Number.isFinite(ts)) {
+        return ts;
+      }
+    }
+
     // Treat plain date-only strings as local calendar dates to avoid UTC-day drift.
     const localDateOnlyMatch = unquoted.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/);
     if (localDateOnlyMatch) {

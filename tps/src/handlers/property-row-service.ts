@@ -30,6 +30,13 @@ export class PropertyRowService {
     return match ? frontmatter[match] : undefined;
   }
 
+  private hasKeyCaseInsensitive(frontmatter: any, key: string): boolean {
+    if (!frontmatter || !key) return false;
+    if (key in frontmatter) return true;
+    const lowerKey = key.toLowerCase();
+    return Object.keys(frontmatter).some((k) => k.toLowerCase() === lowerKey);
+  }
+
   createSelectorRow(entries: any[], prop: any): HTMLElement {
     const row = document.createElement("div");
     row.className = "tps-gcm-row";
@@ -58,28 +65,44 @@ export class PropertyRowService {
     updateDisplay();
 
     this.d.addSafeClickListener(valueEl, async (e) => {
-      // Check if field needs initialization
-      const defaultValue = (prop.options && prop.options[0]) || "";
-      if (await this.plugin.fieldInitializationService.checkAndInitialize(entries, prop.key, defaultValue)) {
-        updateDisplay();
-        return; // Skip opening menu on first click
-      }
-
       const allValues = entries.map((e: any) => this.getValueCaseInsensitive(e.frontmatter, prop.key) || "");
       const uniqueValues = new Set(allValues);
       const current = uniqueValues.size === 1 ? allValues[0] : "Mixed";
+      const allHaveKey = entries.every((entry: any) => this.hasKeyCaseInsensitive(entry.frontmatter, prop.key));
+      const allWithoutKey = entries.every((entry: any) => !this.hasKeyCaseInsensitive(entry.frontmatter, prop.key));
+      const allEmpty = allHaveKey && entries.every((entry: any) => {
+        const value = this.getValueCaseInsensitive(entry.frontmatter, prop.key);
+        return value === '' || value === null || value === undefined;
+      });
+      const files = entries.map((entry: any) => entry.file);
 
       const menu = new Menu();
+      menu.addItem((item) => {
+        item
+          .setTitle("(none)")
+          .setChecked(allWithoutKey)
+          .onClick(async () => {
+            await this.plugin.bulkEditService.removeFrontmatterKey(files, prop.key);
+            updateDisplay();
+          });
+      });
+      menu.addItem((item) => {
+        item
+          .setTitle("(empty)")
+          .setChecked(allEmpty)
+          .onClick(async () => {
+            await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: '' });
+            updateDisplay();
+          });
+      });
+      menu.addSeparator();
       (prop.options || []).forEach((opt: string) => {
         menu.addItem((item) => {
           item
             .setTitle(opt)
             .setChecked(current === opt)
             .onClick(async () => {
-              await this.plugin.bulkEditService.updateFrontmatter(
-                entries.map((entry: any) => entry.file),
-                { [prop.key]: opt }
-              );
+              await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: opt });
               updateDisplay();
             });
         });
@@ -230,10 +253,20 @@ export class PropertyRowService {
     input.value = entries[0].frontmatter[prop.key] || "";
     input.placeholder = "Empty";
     input.addEventListener("change", async () => {
+      const files = entries.map((entry: any) => entry.file);
       await this.plugin.bulkEditService.updateFrontmatter(
-        entries.map((entry: any) => entry.file),
+        files,
         { [prop.key]: input.value }
       );
+
+      const normalizedKey = String(prop?.key || '').trim().toLowerCase();
+      if (normalizedKey === 'title') {
+        await Promise.all(
+          files.map((file: any) =>
+            this.plugin.fileNamingService.updateFilenameIfNeeded(file, { bypassCreationGrace: true })
+          )
+        );
+      }
     });
     this.d.addSafeClickListener(input, (e) => e.stopPropagation());
     input.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -320,6 +353,46 @@ export class PropertyRowService {
     const menu = new Menu();
     const fm = entries[0].frontmatter;
     const currentStatus = typeof fm.status === 'string' ? fm.status.trim() : '';
+    const allWithoutKey = entries.every((entry: any) => !this.hasKeyCaseInsensitive(entry.frontmatter, 'status'));
+    const allEmpty = !allWithoutKey && entries.every((entry: any) => {
+      const value = this.getValueCaseInsensitive(entry.frontmatter, 'status');
+      return value === '' || value === null || value === undefined;
+    });
+    const files = entries.map((entry: any) => entry.file);
+
+    menu.addItem(item => {
+      item
+        .setTitle('(none)')
+        .setChecked(allWithoutKey)
+        .onClick(async () => {
+          const updatedCount = await this.plugin.bulkEditService.removeFrontmatterKey(files, 'status');
+          if (updatedCount >= 0) {
+            entries.forEach((entry: any) => {
+              if (!entry.frontmatter || typeof entry.frontmatter !== 'object') return;
+              delete entry.frontmatter.status;
+            });
+            if (onUpdate) onUpdate('');
+            if (onAfterUpdate) await onAfterUpdate(files);
+          }
+        });
+    });
+    menu.addItem(item => {
+      item
+        .setTitle('(empty)')
+        .setChecked(allEmpty)
+        .onClick(async () => {
+          const updatedCount = await this.plugin.bulkEditService.updateFrontmatter(files, { status: '' });
+          if (updatedCount > 0) {
+            entries.forEach((entry: any) => {
+              if (!entry.frontmatter || typeof entry.frontmatter !== 'object') entry.frontmatter = {};
+              entry.frontmatter.status = '';
+            });
+            if (onUpdate) onUpdate('');
+            if (onAfterUpdate) await onAfterUpdate(files);
+          }
+        });
+    });
+    menu.addSeparator();
 
     const statuses = overrideOptions && overrideOptions.length > 0 ? overrideOptions : ['open', 'working', 'blocked', 'wont-do', 'complete'];
     statuses.forEach(status => {
@@ -328,7 +401,6 @@ export class PropertyRowService {
           .setTitle(status)
           .setChecked(currentStatus === status)
           .onClick(async () => {
-            const files = entries.map((entry: any) => entry.file);
             const updatedCount = await this.plugin.bulkEditService.setStatus(files, status);
             if (updatedCount > 0) {
               entries.forEach((entry: any) => {
@@ -352,6 +424,40 @@ export class PropertyRowService {
     const menu = new Menu();
     const fm = entries[0].frontmatter;
     const currentPrio = typeof fm.priority === 'string' ? fm.priority.trim() : '';
+    const allWithoutKey = entries.every((entry: any) => !this.hasKeyCaseInsensitive(entry.frontmatter, 'priority'));
+    const allEmpty = !allWithoutKey && entries.every((entry: any) => {
+      const value = this.getValueCaseInsensitive(entry.frontmatter, 'priority');
+      return value === '' || value === null || value === undefined;
+    });
+    const files = entries.map((entry: any) => entry.file);
+
+    menu.addItem(item => {
+      item
+        .setTitle('(none)')
+        .setChecked(allWithoutKey)
+        .onClick(async () => {
+          await this.plugin.bulkEditService.removeFrontmatterKey(files, 'priority');
+          entries.forEach((entry: any) => {
+            if (!entry.frontmatter || typeof entry.frontmatter !== 'object') return;
+            delete entry.frontmatter.priority;
+          });
+          if (onUpdate) onUpdate('');
+        });
+    });
+    menu.addItem(item => {
+      item
+        .setTitle('(empty)')
+        .setChecked(allEmpty)
+        .onClick(async () => {
+          await this.plugin.bulkEditService.updateFrontmatter(files, { priority: '' });
+          entries.forEach((entry: any) => {
+            if (!entry.frontmatter || typeof entry.frontmatter !== 'object') entry.frontmatter = {};
+            entry.frontmatter.priority = '';
+          });
+          if (onUpdate) onUpdate('');
+        });
+    });
+    menu.addSeparator();
 
     const priorities = overrideOptions && overrideOptions.length > 0 ? overrideOptions : ['high', 'medium', 'normal', 'low'];
     priorities.forEach(priority => {
@@ -365,10 +471,7 @@ export class PropertyRowService {
               entry.frontmatter.priority = priority;
             });
             if (onUpdate) onUpdate(priority);
-            await this.plugin.bulkEditService.updateFrontmatter(
-              entries.map((entry: any) => entry.file),
-              { priority }
-            );
+            await this.plugin.bulkEditService.updateFrontmatter(files, { priority });
           });
       });
     });

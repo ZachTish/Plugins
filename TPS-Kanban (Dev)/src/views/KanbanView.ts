@@ -157,6 +157,7 @@ export class KanbanView extends BasesView {
   private containerEl: HTMLElement;
   private refreshDebounced: () => void;
   private selectedPaths = new Set<string>();
+  private activeNotePath: string | null = null;
   private selectionAnchorPath: string | null = null;
   private renderedFileOrder: string[] = [];
   private expandedSubtreePaths = new Set<string>();
@@ -176,6 +177,7 @@ export class KanbanView extends BasesView {
 
   onload(): void {
     this.ensureContainer();
+    this.activeNotePath = this.getActiveMarkdownPath();
 
     // Keep card icon/color in sync when frontmatter changes but query results don't.
     // Do not gate by visible-path checks; those can be stale while Bases is mid-refresh.
@@ -197,6 +199,20 @@ export class KanbanView extends BasesView {
       if (!(file instanceof TFile)) return;
       if (!this.isVisibleFile(file.path)) return;
       this.refreshDebounced();
+    }));
+
+    this.registerEvent(this.app.workspace.on('file-open', (file) => {
+      const nextPath = file instanceof TFile ? file.path : null;
+      if (nextPath === this.activeNotePath) return;
+      this.activeNotePath = nextPath;
+      this.syncSelectionClasses();
+    }));
+
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
+      const nextPath = this.getActiveMarkdownPath();
+      if (nextPath === this.activeNotePath) return;
+      this.activeNotePath = nextPath;
+      this.syncSelectionClasses();
     }));
 
     this.render();
@@ -1083,13 +1099,14 @@ export class KanbanView extends BasesView {
 
   private getParentLinkKeys(): string[] {
     const keys = new Set<string>();
-    const gcmSettings = this.getGcmSettings();
-    const configured = String(
-      gcmSettings?.parentLinkFrontmatterKey
-      ?? gcmSettings?.parentLinkKey
-      ?? '',
-    ).trim();
-    if (configured) keys.add(configured);
+    for (const settings of this.getRelationshipSettingsSources()) {
+      const configured = String(
+        settings?.parentLinkFrontmatterKey
+        ?? settings?.parentLinkKey
+        ?? '',
+      ).trim();
+      if (configured) keys.add(configured);
+    }
     keys.add('childOf');
     keys.add('parent');
     return Array.from(keys);
@@ -1097,9 +1114,11 @@ export class KanbanView extends BasesView {
 
   /** Returns the set of "done" status values from GCM settings (or defaults). */
   private getDoneStatuses(): Set<string> {
-    const gcmSettings = this.getGcmSettings();
-    const raw: string[] = gcmSettings?.recurrenceCompletionStatuses?.length
-      ? gcmSettings.recurrenceCompletionStatuses
+    const firstWithDoneStatuses = this.getRelationshipSettingsSources().find(
+      (settings) => Array.isArray(settings?.recurrenceCompletionStatuses) && settings.recurrenceCompletionStatuses.length > 0,
+    );
+    const raw: string[] = firstWithDoneStatuses?.recurrenceCompletionStatuses?.length
+      ? firstWithDoneStatuses.recurrenceCompletionStatuses
       : ['complete', 'wont-do'];
     return new Set(raw.map((s: string) => String(s || '').trim().toLowerCase()));
   }
@@ -1154,26 +1173,40 @@ export class KanbanView extends BasesView {
 
   private getChildLinkKeys(): string[] {
     const keys = new Set<string>();
-    const gcmSettings = this.getGcmSettings();
-    const configured = String(
-      gcmSettings?.childLinkFrontmatterKey
-      ?? gcmSettings?.childLinkKey
-      ?? '',
-    ).trim();
-    if (configured) keys.add(configured);
+    for (const settings of this.getRelationshipSettingsSources()) {
+      const configured = String(
+        settings?.childLinkFrontmatterKey
+        ?? settings?.childLinkKey
+        ?? '',
+      ).trim();
+      if (configured) keys.add(configured);
+    }
     keys.add('parentOf');
     keys.add('children');
+    keys.add('meetings');
     return Array.from(keys);
   }
 
-  private getGcmSettings(): Record<string, any> | null {
+  private getRelationshipSettingsSources(): Array<Record<string, any>> {
+    const out: Array<Record<string, any>> = [];
+    const pushIfObject = (candidate: unknown) => {
+      if (candidate && typeof candidate === 'object') out.push(candidate as Record<string, any>);
+    };
+
+    // Local plugin settings (if present in this build variant).
+    pushIfObject((this.plugin as any)?.settings);
+
     const plugins = (this.app as any)?.plugins?.plugins;
-    if (!plugins || typeof plugins !== 'object') return null;
-    const prod = plugins['tps-global-context-menu']?.settings;
-    if (prod && typeof prod === 'object') return prod as Record<string, any>;
-    const dev = plugins['TPS-Global-Context-Menu (Dev)']?.settings;
-    if (dev && typeof dev === 'object') return dev as Record<string, any>;
-    return null;
+    if (plugins && typeof plugins === 'object') {
+      // Dedicated GCM plugin variants.
+      pushIfObject(plugins['tps-global-context-menu']?.settings);
+      pushIfObject(plugins['TPS-Global-Context-Menu (Dev)']?.settings);
+      // Consolidated TPS plugin variants.
+      pushIfObject(plugins['tps']?.settings);
+      pushIfObject(plugins['TPS (Dev)']?.settings);
+    }
+
+    return out;
   }
 
   private findFrontmatterKeyCaseInsensitive(frontmatter: Record<string, unknown>, target: string): string | null {
@@ -1200,6 +1233,17 @@ export class KanbanView extends BasesView {
     );
   }
 
+  private isCompanionWriteExcluded(file: TFile): boolean {
+    const companion = this.getNotebookNavigatorCompanion();
+    const exclusionService: any = companion?.exclusionService;
+    if (!exclusionService || typeof exclusionService.shouldIgnore !== 'function') return false;
+    try {
+      return !!exclusionService.shouldIgnore(file, { bypassCreationGrace: true });
+    } catch {
+      return false;
+    }
+  }
+
   private collectNormalizedEntryTags(file: TFile, frontmatter?: Record<string, unknown> | null): string[] {
     const cache = this.app.metadataCache.getFileCache(file);
     const rawValues = [
@@ -1224,6 +1268,10 @@ export class KanbanView extends BasesView {
     if (configuredIconField) {
       const configuredValue = pickString(this.getFrontmatterValueCaseInsensitive(frontmatter || {}, configuredIconField));
       if (configuredValue) return configuredValue;
+    }
+
+    if (this.isCompanionWriteExcluded(file)) {
+      return '';
     }
 
     const ruleEngine = companion?.ruleEngine;
@@ -1821,7 +1869,13 @@ export class KanbanView extends BasesView {
     cards.forEach((card) => {
       const path = card.dataset.path;
       card.classList.toggle('tps-kanban-card--selected', !!path && this.selectedPaths.has(path));
+      card.classList.toggle('tps-kanban-card--open-note', !!path && !!this.activeNotePath && path === this.activeNotePath);
     });
+  }
+
+  private getActiveMarkdownPath(): string | null {
+    const active = this.app.workspace.getActiveFile();
+    return active instanceof TFile ? active.path : null;
   }
 
   private clearSelection(): void {
@@ -1892,6 +1946,9 @@ export class KanbanView extends BasesView {
     cardEl.draggable = true;
     cardEl.dataset.path = entry.file.path;
     if (this.selectedPaths.has(entry.file.path)) cardEl.classList.add('tps-kanban-card--selected');
+    if (this.activeNotePath && entry.file.path === this.activeNotePath) {
+      cardEl.classList.add('tps-kanban-card--open-note');
+    }
 
     // Read icon and color from the note's frontmatter using configured keys
     const settings = this.plugin.settings;
@@ -2146,6 +2203,7 @@ export class KanbanView extends BasesView {
   }
 
   private async renderAsync(sourceGroups: BasesEntryGroup[], propName: string | null): Promise<void> {
+    this.activeNotePath = this.getActiveMarkdownPath();
     const expandedSourceGroups = this.plugin.settings.enableKanbanTaskCards === false
       ? sourceGroups
       : await this.expandGroupEntriesWithKanbanTasks(sourceGroups);
@@ -2397,6 +2455,7 @@ export class KanbanView extends BasesView {
           await this.createFileForView(undefined, proc);
         });
     }
+    this.syncSelectionClasses();
     this.syncNativeResultsCountSoon();
   }
 }

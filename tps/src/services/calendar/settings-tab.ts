@@ -318,6 +318,66 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     new Setting(viewBehaviorSection)
+      .setName("Daily note date format")
+      .setDesc(
+        "Moment.js format string for daily note filenames (e.g. YYYYMMDD, DD-MM-YYYY). " +
+          "Leave blank to use Obsidian's built-in Daily Notes format.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("e.g. YYYYMMDD or DD-MM-YYYY")
+          .setValue(this.plugin.settings.dailyNoteDateFormat ?? "")
+          .onChange(async (value) => {
+            this.plugin.settings.dailyNoteDateFormat = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(viewBehaviorSection)
+      .setName("Primary event date field")
+      .setDesc("First frontmatter field used to place notes on the calendar.")
+      .addText((text) =>
+        text
+          .setPlaceholder("scheduled")
+          .setValue(this.plugin.settings.startProperty ?? "scheduled")
+          .onChange(async (value) => {
+            this.plugin.settings.startProperty = value.trim() || "scheduled";
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(viewBehaviorSection)
+      .setName("Secondary event date field")
+      .setDesc("Fallback field when the primary field is missing. Leave blank to disable.")
+      .addText((text) =>
+        text
+          .setPlaceholder("due")
+          .setValue(this.plugin.settings.secondaryStartProperty ?? "")
+          .onChange(async (value) => {
+            this.plugin.settings.secondaryStartProperty = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(viewBehaviorSection)
+      .setName("Tertiary event date field")
+      .setDesc("Second fallback field when primary/secondary are missing. Leave blank to disable.")
+      .addText((text) =>
+        text
+          .setPlaceholder("completed")
+          .setValue(this.plugin.settings.tertiaryStartProperty ?? "")
+          .onChange(async (value) => {
+            this.plugin.settings.tertiaryStartProperty = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    viewBehaviorSection.createEl("p", {
+      text:
+        "Per-base controls: open each Calendar Base view options to toggle primary/secondary/tertiary date sources and optional per-source durations. If a source duration is left blank, events use the minimum time slot.",
+    }).addClass("setting-item-description");
+
+    new Setting(viewBehaviorSection)
       .setName("Week starts on")
       .addDropdown((dropdown) =>
         dropdown

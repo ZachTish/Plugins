@@ -133,12 +133,40 @@ export class BadgeRenderer {
           const badge = createBadge(value, `${prop.key} tps-gcm-badge-${value}`, null, (e) => {
             e.stopPropagation();
             const menu = new Menu();
+            const files = entries.map((entry: any) => entry.file);
+            const allWithoutKey = entries.every((entry: any) => {
+              const fmEntry = entry?.frontmatter || {};
+              return !Object.prototype.hasOwnProperty.call(fmEntry, prop.key);
+            });
+            const allEmpty = !allWithoutKey && entries.every((entry: any) => {
+              const fmEntry = entry?.frontmatter || {};
+              const propValue = fmEntry[prop.key];
+              return propValue === '' || propValue === null || propValue === undefined;
+            });
+
+            menu.addItem((item: any) => {
+              item.setTitle('(none)')
+                .setChecked(allWithoutKey)
+                .onClick(async () => {
+                  await this.plugin.bulkEditService.removeFrontmatterKey(files, prop.key);
+                  (e.target as HTMLElement).remove();
+                });
+            });
+            menu.addItem((item: any) => {
+              item.setTitle('(empty)')
+                .setChecked(allEmpty)
+                .onClick(async () => {
+                  await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: '' });
+                  (e.target as HTMLElement).remove();
+                });
+            });
+            menu.addSeparator();
             (prop.options || []).forEach((opt: string) => {
               menu.addItem((item: any) => {
                 item.setTitle(opt)
                   .setChecked(this.getValueCaseInsensitive(fm, prop.key) === opt)
                   .onClick(async () => {
-                    await this.plugin.bulkEditService.updateFrontmatter(entries.map((entry: any) => entry.file), { [prop.key]: opt });
+                    await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: opt });
                     (e.target as HTMLElement).textContent = opt;
                     (e.target as HTMLElement).className = `tps-gcm-badge tps-gcm-badge-${prop.key} tps-gcm-badge-${opt}`;
                   });

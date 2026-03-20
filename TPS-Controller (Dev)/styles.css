@@ -168,6 +168,7 @@ body.tps-controller-mode {
   border-radius: 6px;
   padding: 8px 10px;
   margin-bottom: 8px;
+  background: color-mix(in srgb, var(--background-secondary) 28%, transparent);
 }
 
 .tps-controller-reminder-rule > summary {
@@ -175,6 +176,21 @@ body.tps-controller-mode {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
+  list-style: none;
+}
+
+.tps-controller-reminder-rule > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tps-rule-summary-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1;
 }
 
 .tps-rule-label {
@@ -184,10 +200,52 @@ body.tps-controller-mode {
 .tps-rule-desc {
   color: var(--text-muted);
   font-size: 0.85em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.tps-rule-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tps-rule-summary-btn {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  padding: 2px 6px;
+  cursor: pointer;
+  line-height: 1.1;
+}
+
+.tps-rule-summary-btn:hover {
+  color: var(--text-normal);
+  border-color: var(--interactive-accent);
 }
 
 .tps-rule-content {
   margin-top: 10px;
+}
+
+.tps-reminder-rules-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.tps-reminder-rules-filter {
+  flex: 1;
+  min-width: 220px;
+}
+
+.tps-reminder-rules-toolbar-actions {
+  display: flex;
+  gap: 6px;
 }
 
 /* Sub-group details inside a reminder rule */

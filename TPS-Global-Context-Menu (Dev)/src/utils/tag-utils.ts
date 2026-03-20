@@ -131,17 +131,17 @@ export function parseTagInput(raw: any): string[] {
 
 /**
  * Normalize a raw tag value (string, array, or other) into a deduplicated
- * list of "#tag" strings.
+ * list of plain tag tokens (without #) for frontmatter storage.
  */
 export function normalizeTagList(raw: any): string[] {
-    return parseTagInput(raw).map((t) => `#${t}`);
+    return parseTagInput(raw);
 }
 
 /**
- * Merge tag collections and return deduplicated "#tag" values.
+ * Merge tag collections and return deduplicated plain tag tokens (without #).
  */
 export function mergeNormalizedTags(existing: any, incoming: any): string[] {
-    return normalizeTagList([...parseTagInput(existing), ...parseTagInput(incoming)]);
+    return parseTagInput([...parseTagInput(existing), ...parseTagInput(incoming)]);
 }
 
 /**
@@ -149,5 +149,5 @@ export function mergeNormalizedTags(existing: any, incoming: any): string[] {
  * Returns space-separated "#tag" string.
  */
 export function normalizeTagsWithHash(tags: any): string {
-    return normalizeTagList(tags).join(" ");
+    return normalizeTagList(tags).map((tag) => `#${tag}`).join(" ");
 }

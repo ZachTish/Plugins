@@ -213,6 +213,55 @@ export class MenuController {
     const currentStatus = typeof entries[0]?.frontmatter?.status === 'string'
       ? String(entries[0].frontmatter.status).trim()
       : '';
+    const files = entries.map((e: any) => e.file);
+    const allWithoutKey = entries.every((entry: any) => !Object.prototype.hasOwnProperty.call(entry?.frontmatter || {}, 'status'));
+    const allEmpty = !allWithoutKey && entries.every((entry: any) => {
+      const value = entry?.frontmatter?.status;
+      return value === '' || value === null || value === undefined;
+    });
+
+    menu.addItem(item => {
+      item.setTitle('(none)')
+        .setChecked(allWithoutKey)
+        .onClick(async () => {
+          await this.plugin.bulkEditService.removeFrontmatterKey(files, 'status');
+          entries.forEach((entry: any) => {
+            if (!entry.frontmatter || typeof entry.frontmatter !== 'object') return;
+            delete entry.frontmatter.status;
+          });
+          if (onUpdate) onUpdate('');
+          for (const entry of entries) {
+            await this.applyCompanionRulesToFile(entry.file);
+          }
+          entries.forEach((e: any) => {
+            if (e.file instanceof TFile) {
+              this.plugin.persistentMenuManager?.refreshMenusForFile(e.file, true);
+            }
+          });
+        });
+    });
+    menu.addItem(item => {
+      item.setTitle('(empty)')
+        .setChecked(allEmpty)
+        .onClick(async () => {
+          await this.plugin.bulkEditService.updateFrontmatter(files, { status: '' });
+          entries.forEach((entry: any) => {
+            if (!entry.frontmatter || typeof entry.frontmatter !== 'object') entry.frontmatter = {};
+            entry.frontmatter.status = '';
+          });
+          if (onUpdate) onUpdate('');
+          for (const entry of entries) {
+            await this.applyCompanionRulesToFile(entry.file);
+          }
+          entries.forEach((e: any) => {
+            if (e.file instanceof TFile) {
+              this.plugin.persistentMenuManager?.refreshMenusForFile(e.file, true);
+            }
+          });
+        });
+    });
+    menu.addSeparator();
+
     STATUSES.forEach(status => {
       menu.addItem(item => {
         item.setTitle(status)
@@ -223,7 +272,7 @@ export class MenuController {
               entry.frontmatter.status = status;
             });
             if (onUpdate) onUpdate(status);
-            await this.plugin.bulkEditService.setStatus(entries.map(e => e.file), status);
+            await this.plugin.bulkEditService.setStatus(files, status);
             // Apply companion rules to update icon
             for (const entry of entries) {
               await this.applyCompanionRulesToFile(entry.file);
@@ -245,6 +294,49 @@ export class MenuController {
     const currentPriority = typeof entries[0]?.frontmatter?.priority === 'string'
       ? String(entries[0].frontmatter.priority).trim()
       : '';
+    const files = entries.map((e: any) => e.file);
+    const allWithoutKey = entries.every((entry: any) => !Object.prototype.hasOwnProperty.call(entry?.frontmatter || {}, 'priority'));
+    const allEmpty = !allWithoutKey && entries.every((entry: any) => {
+      const value = entry?.frontmatter?.priority;
+      return value === '' || value === null || value === undefined;
+    });
+
+    menu.addItem(item => {
+      item.setTitle('(none)')
+        .setChecked(allWithoutKey)
+        .onClick(async () => {
+          await this.plugin.bulkEditService.removeFrontmatterKey(files, 'priority');
+          entries.forEach((entry: any) => {
+            if (!entry.frontmatter || typeof entry.frontmatter !== 'object') return;
+            delete entry.frontmatter.priority;
+          });
+          if (onUpdate) onUpdate('');
+          entries.forEach((e: any) => {
+            if (e.file instanceof TFile) {
+              this.plugin.persistentMenuManager?.refreshMenusForFile(e.file, true);
+            }
+          });
+        });
+    });
+    menu.addItem(item => {
+      item.setTitle('(empty)')
+        .setChecked(allEmpty)
+        .onClick(async () => {
+          await this.plugin.bulkEditService.updateFrontmatter(files, { priority: '' });
+          entries.forEach((entry: any) => {
+            if (!entry.frontmatter || typeof entry.frontmatter !== 'object') entry.frontmatter = {};
+            entry.frontmatter.priority = '';
+          });
+          if (onUpdate) onUpdate('');
+          entries.forEach((e: any) => {
+            if (e.file instanceof TFile) {
+              this.plugin.persistentMenuManager?.refreshMenusForFile(e.file, true);
+            }
+          });
+        });
+    });
+    menu.addSeparator();
+
     PRIORITIES.forEach(prio => {
       menu.addItem(item => {
         item.setTitle(prio)
@@ -255,7 +347,7 @@ export class MenuController {
               entry.frontmatter.priority = prio;
             });
             if (onUpdate) onUpdate(prio);
-            await this.plugin.bulkEditService.setPriority(entries.map(e => e.file), prio);
+            await this.plugin.bulkEditService.setPriority(files, prio);
             // Refresh menus immediately
             entries.forEach((e: any) => {
               if (e.file instanceof TFile) {

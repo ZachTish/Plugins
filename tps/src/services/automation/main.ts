@@ -1117,6 +1117,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     }
 
     const toggle = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
+    const bar = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar`);
     const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
     const togglePanel = () => {
       const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
@@ -1172,6 +1173,16 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     if (toggle) {
       toggle.textContent = isExpanded ? "▾" : "▸";
       toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        togglePanel();
+      });
+    }
+    if (bar) {
+      bar.addEventListener("click", (event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest(`.${EMBED_CLASS}__toggle`)) return;
+        if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
         event.preventDefault();
         event.stopPropagation();
         togglePanel();

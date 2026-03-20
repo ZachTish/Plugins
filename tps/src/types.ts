@@ -877,6 +877,8 @@ export interface CalendarPluginSettings {
     uidKey: string;
     titleKey: string;
     statusKey: string;
+    startProperty: string;
+    secondaryStartProperty: string;
+    tertiaryStartProperty: string;
     [key: string]: any;
 }
-

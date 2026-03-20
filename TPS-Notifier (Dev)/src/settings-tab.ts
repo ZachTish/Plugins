@@ -27,6 +27,9 @@ const createCollapsibleSection = (
 
 export class TPSMessagerSettingTab extends PluginSettingTab {
     plugin: TPSMessager;
+    private settingsViewState = new Map<string, boolean>();
+    private settingsScrollTop = 0;
+    private hasRenderedSettings = false;
 
     constructor(app: App, plugin: TPSMessager) {
         super(app, plugin);
@@ -35,6 +38,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
 
     display(): void {
         const { containerEl } = this;
+        this.captureSettingsViewState(containerEl);
         containerEl.empty();
 
         const debouncedSave = debounce(() => this.plugin.saveSettings(), 300);
@@ -62,7 +66,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
             featuresCategory,
             'Core Features',
             'High-level toggles. Disable features here to hide lower-level configuration.',
-            true
+            false
         );
 
         new Setting(features)
@@ -91,7 +95,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
             rulesCategory,
             'Connection',
             'Server, topic, and delivery priority. These are the settings you are most likely to change.',
-            true
+            false
         );
 
         if (this.plugin.settings.enabled ?? true) {
@@ -136,8 +140,8 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
         }
 
         const diagnostics = createCollapsibleSection(
-            uiDisplayCategory,
-            'Diagnostics',
+            interactionCategory,
+            'Diagnostics & Debug',
             'Optional tools for verifying delivery and troubleshooting.',
             false
         );
@@ -178,5 +182,42 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
                         button.setDisabled(false);
                     }));
         }
+        this.restoreSettingsViewState(containerEl);
+    }
+
+    private captureSettingsViewState(containerEl: HTMLElement): void {
+        this.settingsScrollTop = containerEl.scrollTop;
+        this.settingsViewState.clear();
+        const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+        detailsEls.forEach((detailsEl, index) => {
+            const details = detailsEl as HTMLDetailsElement;
+            const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+            this.settingsViewState.set(`${index}:${summaryText}`, details.open);
+        });
+    }
+
+    private restoreSettingsViewState(containerEl: HTMLElement): void {
+        const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+        if (!this.hasRenderedSettings) {
+            detailsEls.forEach((detailsEl) => {
+                const details = detailsEl as HTMLDetailsElement;
+                if (details.classList.contains('tps-settings-main-category')) {
+                    details.setAttr('open', 'true');
+                } else {
+                    details.removeAttribute('open');
+                }
+            });
+            this.hasRenderedSettings = true;
+            containerEl.scrollTop = 0;
+            return;
+        }
+        detailsEls.forEach((detailsEl, index) => {
+            const details = detailsEl as HTMLDetailsElement;
+            const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+            const isOpen = this.settingsViewState.get(`${index}:${summaryText}`);
+            if (isOpen) details.setAttr('open', 'true');
+            else details.removeAttribute('open');
+        });
+        containerEl.scrollTop = this.settingsScrollTop;
     }
 }

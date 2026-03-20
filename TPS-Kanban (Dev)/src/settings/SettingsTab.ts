@@ -27,6 +27,9 @@ const createCollapsibleSection = (
 
 export class KanbanSettingTab extends PluginSettingTab {
   plugin: TPSKanbanPlugin;
+  private settingsViewState = new Map<string, boolean>();
+  private settingsScrollTop = 0;
+  private hasRenderedSettings = false;
   constructor(app: App, plugin: TPSKanbanPlugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -34,6 +37,7 @@ export class KanbanSettingTab extends PluginSettingTab {
 
   display(): void {
     const { containerEl } = this;
+    this.captureSettingsViewState(containerEl);
     containerEl.empty();
     containerEl.createEl('h2', { text: 'TPS Kanban settings' });
     containerEl.createEl('p', {
@@ -45,7 +49,7 @@ export class KanbanSettingTab extends PluginSettingTab {
       containerEl,
       'Card Frontmatter Keys',
       'Keys used to pull visual metadata from each card note.',
-      true,
+      false,
     );
 
     new Setting(cardFields)
@@ -162,5 +166,38 @@ export class KanbanSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
       });
+
+    this.restoreSettingsViewState(containerEl);
+  }
+
+  private captureSettingsViewState(containerEl: HTMLElement): void {
+    this.settingsScrollTop = containerEl.scrollTop;
+    this.settingsViewState.clear();
+    const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+      this.settingsViewState.set(`${index}:${summaryText}`, details.open);
+    });
+  }
+
+  private restoreSettingsViewState(containerEl: HTMLElement): void {
+    const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+    if (!this.hasRenderedSettings) {
+      detailsEls.forEach((detailsEl) => {
+        (detailsEl as HTMLDetailsElement).removeAttribute('open');
+      });
+      this.hasRenderedSettings = true;
+      containerEl.scrollTop = 0;
+      return;
+    }
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+      const isOpen = this.settingsViewState.get(`${index}:${summaryText}`);
+      if (isOpen) details.setAttr('open', 'true');
+      else details.removeAttribute('open');
+    });
+    containerEl.scrollTop = this.settingsScrollTop;
   }
 }

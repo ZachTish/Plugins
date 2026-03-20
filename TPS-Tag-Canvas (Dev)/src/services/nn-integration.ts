@@ -172,6 +172,19 @@ export class NNIntegrationService {
   private ensureCaptureListener(nameSpan: HTMLElement, tag: string): void {
     if (this.captureListeners.has(nameSpan)) return;
 
+    const navigateNotebookNavigatorToTag = async (rawTag: string) => {
+      const cleanTag = String(rawTag || "").replace(/^#/, "").trim().toLowerCase();
+      if (!cleanTag) return;
+      const pluginManager = (this.app as any)?.plugins;
+      const notebookNavigator =
+        pluginManager?.getPlugin?.("notebook-navigator") ??
+        pluginManager?.plugins?.["notebook-navigator"];
+      const navigateToTag = notebookNavigator?.api?.navigation?.navigateToTag;
+      if (typeof navigateToTag === "function") {
+        await Promise.resolve(navigateToTag.call(notebookNavigator.api.navigation, cleanTag));
+      }
+    };
+
     const handler = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       // If click was on the icon badge itself, let the icon's listener handle it
@@ -179,7 +192,10 @@ export class NNIntegrationService {
       // Otherwise open the canvas and prevent NN from selecting the tag
       e.stopPropagation();
       e.preventDefault();
-      this.openTagCanvas(tag);
+      void (async () => {
+        await this.openTagCanvas(tag);
+        await navigateNotebookNavigatorToTag(tag);
+      })();
     };
 
     nameSpan.addEventListener("click", handler, { capture: true });

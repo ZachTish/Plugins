@@ -36,6 +36,9 @@ const createCollapsibleSection = (
 export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
   plugin: NotebookNavigatorCompanionPlugin;
   private readonly textDebouncer = new DebounceMap();
+  private settingsViewState = new Map<string, boolean>();
+  private settingsScrollTop = 0;
+  private hasRenderedSettings = false;
 
   constructor(app: App, plugin: NotebookNavigatorCompanionPlugin) {
     super(app, plugin);
@@ -52,6 +55,7 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
 
   private render(): void {
     const { containerEl } = this;
+    this.captureSettingsViewState(containerEl);
     containerEl.empty();
     this.ensureSettingsStyles();
 
@@ -61,10 +65,12 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
       text: "Data steward for Notebook Navigator. Applies frontmatter icon/color plus optional computed sort key for consistent sorting/grouping."
     });
 
-    const createMainCategory = (title: "Features" | "Rules" | "Interaction" | "UI Display"): HTMLElement => {
-      const category = containerEl.createDiv({ cls: "tps-settings-main-category" });
-      category.createEl("h3", { text: title });
-      return category.createDiv({ cls: "tps-settings-main-content" });
+    const createMainCategory = (title: "Features" | "Rules" | "Interaction" | "UI Display", defaultOpen = true): HTMLElement => {
+      const details = containerEl.createEl("details", { cls: "tps-settings-main-category" });
+      if (defaultOpen) details.setAttr("open", "true");
+      const summary = details.createEl("summary", { cls: "tps-settings-main-summary" });
+      summary.createEl("h3", { text: title });
+      return details.createDiv({ cls: "tps-settings-main-content" });
     };
 
     const featuresCategory = createMainCategory("Features");
@@ -79,6 +85,7 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
         cls: "setting-item-description",
         text: "Automation is disabled. Enable Companion automation to configure rules, buckets, and hide logic.",
       });
+      this.restoreSettingsViewState(containerEl);
       return;
     }
 
@@ -92,6 +99,43 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
     new BucketSectionRenderer(sectionContext).render(rulesCategory);
     new HideSectionRenderer(sectionContext).render(rulesCategory);
     new RulesSectionRenderer(sectionContext).render(rulesCategory);
+    this.restoreSettingsViewState(containerEl);
+  }
+
+  private captureSettingsViewState(containerEl: HTMLElement): void {
+    this.settingsScrollTop = containerEl.scrollTop;
+    this.settingsViewState.clear();
+    const detailsEls = Array.from(containerEl.querySelectorAll("details"));
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector("summary")?.textContent?.trim() || "";
+      this.settingsViewState.set(`${index}:${summaryText}`, details.open);
+    });
+  }
+
+  private restoreSettingsViewState(containerEl: HTMLElement): void {
+    const detailsEls = Array.from(containerEl.querySelectorAll("details"));
+    if (!this.hasRenderedSettings) {
+      detailsEls.forEach((detailsEl) => {
+        const details = detailsEl as HTMLDetailsElement;
+        if (details.classList.contains("tps-settings-main-category")) {
+          details.setAttr("open", "true");
+        } else {
+          details.removeAttribute("open");
+        }
+      });
+      this.hasRenderedSettings = true;
+      containerEl.scrollTop = 0;
+      return;
+    }
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector("summary")?.textContent?.trim() || "";
+      const isOpen = this.settingsViewState.get(`${index}:${summaryText}`);
+      if (isOpen) details.setAttr("open", "true");
+      else details.removeAttribute("open");
+    });
+    containerEl.scrollTop = this.settingsScrollTop;
   }
 
   private renderGeneralSettings(featuresContainer: HTMLElement, interactionContainer: HTMLElement, uiDisplayContainer: HTMLElement): void {
@@ -181,7 +225,7 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
       uiDisplayContainer,
       "Frontmatter Keys",
       "Group the written metadata keys together so the field names are easy to find and change.",
-      true
+      false
     );
 
     new Setting(frontmatterSection)

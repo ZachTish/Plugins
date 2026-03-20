@@ -35,6 +35,11 @@ const createCollapsibleSection = (
 
 export class TPSControllerSettingTab extends PluginSettingTab {
     plugin: TPSControllerPlugin;
+    private settingsViewState = new Map<string, boolean>();
+    private reminderRuleViewState = new Map<string, boolean>();
+    private reminderRuleFilterQuery = '';
+    private settingsScrollTop = 0;
+    private hasRenderedSettings = false;
 
     constructor(app: App, plugin: TPSControllerPlugin) {
         super(app, plugin);
@@ -43,6 +48,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
     display(): void {
         const { containerEl } = this;
+        this.captureSettingsViewState(containerEl);
         containerEl.empty();
 
         const debouncedSave = debounce(() => this.plugin.saveSettings(), 300);
@@ -68,10 +74,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
         // ── Device Role ─────────────────────────────────────────────
         const roleSection = createCollapsibleSection(
-            interactionCategory,
+            featuresCategory,
             'Device Role',
             'Choose whether this device runs suite-level automation or stays in normal user mode.',
-            true
+            false
         );
 
         const roleDesc = roleSection.createDiv({ cls: 'tps-controller-role-desc' });
@@ -107,7 +113,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             featuresCategory,
             'External Calendars',
             'Calendar sources and auto-create destinations. These are the controller settings most users will change first.',
-            true
+            false
         );
         const calendarsContainer = extCalSection.createDiv();
         this.renderExternalCalendars(calendarsContainer);
@@ -140,7 +146,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             rulesCategory,
             'Calendar Sync Rules',
             'Global sync behavior for external calendars.',
-            true
+            false
         );
 
         new Setting(calSection)
@@ -215,7 +221,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             calSection,
             'Frontmatter Keys',
             'All shared calendar field names are grouped together here.',
-            true
+            false
         );
 
         const fmKeys: { key: keyof typeof this.plugin.settings; label: string; placeholder: string }[] = [
@@ -264,7 +270,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             rulesCategory,
             'Reminder Rules',
             'Polling, ignore lists, and per-rule reminders.',
-            true
+            false
         );
 
         const reminderConfigContent = remSection.createDiv({ cls: 'tps-reminder-config-content' });
@@ -542,7 +548,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             snoozeSection,
             'Snooze Presets',
             'Quick snooze durations shown in the reminder UI.',
-            true
+            false
         );
         this.renderSnoozeOptions(snoozePresetsEl);
         new Setting(snoozePresetsEl)
@@ -609,7 +615,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
         // ── Debug ───────────────────────────────────────────────────
         const debugSection = createCollapsibleSection(
-            uiDisplayCategory,
+            interactionCategory,
             'Debug',
             'Low-frequency troubleshooting controls.',
             false
@@ -636,11 +642,50 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     new Notice('Alert state cleared.');
                 }));
+
+        this.restoreSettingsViewState(containerEl);
     }
 
     // ========================================================================
     // Helpers
     // ========================================================================
+    private captureSettingsViewState(containerEl: HTMLElement): void {
+        this.settingsScrollTop = containerEl.scrollTop;
+        this.settingsViewState.clear();
+        const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+        detailsEls.forEach((detailsEl, index) => {
+            const details = detailsEl as HTMLDetailsElement;
+            const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+            const key = `${index}:${summaryText}`;
+            this.settingsViewState.set(key, details.open);
+        });
+    }
+
+    private restoreSettingsViewState(containerEl: HTMLElement): void {
+        const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+        if (!this.hasRenderedSettings) {
+            detailsEls.forEach((detailsEl) => {
+                const details = detailsEl as HTMLDetailsElement;
+                if (details.classList.contains('tps-settings-main-category')) {
+                    details.setAttr('open', 'true');
+                } else {
+                    details.removeAttribute('open');
+                }
+            });
+            this.hasRenderedSettings = true;
+            containerEl.scrollTop = 0;
+            return;
+        }
+        detailsEls.forEach((detailsEl, index) => {
+            const details = detailsEl as HTMLDetailsElement;
+            const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+            const key = `${index}:${summaryText}`;
+            const isOpen = this.settingsViewState.get(key);
+            if (isOpen) details.setAttr('open', 'true');
+            else details.removeAttribute('open');
+        });
+        containerEl.scrollTop = this.settingsScrollTop;
+    }
 
 
     private createDefaultReminder(): PropertyReminder {
@@ -664,6 +709,16 @@ export class TPSControllerSettingTab extends PluginSettingTab {
     }
 
     private renderReminderRules(container: HTMLElement): void {
+        const existingRuleDetails = Array.from(
+            container.querySelectorAll('details.tps-controller-reminder-rule')
+        ) as HTMLDetailsElement[];
+        existingRuleDetails.forEach((detailsEl) => {
+            const ruleId = detailsEl.dataset.ruleId;
+            if (ruleId) {
+                this.reminderRuleViewState.set(ruleId, detailsEl.open);
+            }
+        });
+
         container.empty();
         const reminders = this.plugin.settings.reminders || [];
 
@@ -673,13 +728,132 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             return;
         }
 
-        reminders.forEach((rem, index) => {
-            const ruleEl = container.createDiv({ cls: 'tps-controller-reminder-rule' });
-            const ruleHeader = ruleEl.createDiv({ cls: 'tps-rule-summary-row' });
-            const labelSpan = ruleHeader.createSpan({ cls: 'tps-rule-label' });
+        const reminderToolbar = container.createDiv({ cls: 'tps-reminder-rules-toolbar' });
+        const filterInput = reminderToolbar.createEl('input', {
+            cls: 'tps-reminder-rules-filter',
+            type: 'text',
+            placeholder: 'Filter rules by label, property, folder, or status'
+        });
+        filterInput.value = this.reminderRuleFilterQuery;
+        filterInput.addEventListener('input', () => {
+            this.reminderRuleFilterQuery = filterInput.value;
+            this.renderReminderRules(container);
+        });
+
+        const toolbarActions = reminderToolbar.createDiv({ cls: 'tps-reminder-rules-toolbar-actions' });
+        const expandAllBtn = toolbarActions.createEl('button', { text: 'Expand All' });
+        expandAllBtn.addEventListener('click', () => {
+            reminders.forEach((rem, index) => {
+                const ruleId = rem.id || `rule-${index}`;
+                this.reminderRuleViewState.set(ruleId, true);
+            });
+            this.renderReminderRules(container);
+        });
+
+        const collapseAllBtn = toolbarActions.createEl('button', { text: 'Collapse All' });
+        collapseAllBtn.addEventListener('click', () => {
+            reminders.forEach((rem, index) => {
+                const ruleId = rem.id || `rule-${index}`;
+                this.reminderRuleViewState.set(ruleId, false);
+            });
+            this.renderReminderRules(container);
+        });
+
+        const normalizedQuery = this.reminderRuleFilterQuery.trim().toLowerCase();
+        const visibleRules = reminders
+            .map((rem, index) => ({ rem, index }))
+            .filter(({ rem, index }) => {
+                if (!normalizedQuery) return true;
+                const searchBlob = [
+                    rem.label,
+                    rem.property,
+                    (rem.requiredStatuses || []).join(' '),
+                    (rem.requiredPaths || []).join(' '),
+                    (rem.ignoreStatuses || []).join(' '),
+                    (rem.ignoreTags || []).join(' '),
+                    (rem.stopConditions || []).join(' '),
+                    `rule ${index + 1}`
+                ]
+                    .join(' ')
+                    .toLowerCase();
+                return searchBlob.includes(normalizedQuery);
+            });
+
+        if (visibleRules.length === 0) {
+            const emptyFiltered = container.createDiv({ cls: 'tps-empty-state' });
+            emptyFiltered.textContent = 'No reminder rules match the current filter.';
+            return;
+        }
+
+        visibleRules.forEach(({ rem, index }) => {
+            const ruleId = rem.id || `rule-${index}`;
+            const ruleEl = container.createEl('details', { cls: 'tps-controller-reminder-rule' });
+            ruleEl.dataset.ruleId = ruleId;
+
+            if (this.reminderRuleViewState.get(ruleId)) {
+                ruleEl.setAttr('open', 'true');
+            }
+            ruleEl.addEventListener('toggle', () => {
+                this.reminderRuleViewState.set(ruleId, ruleEl.open);
+            });
+
+            const ruleHeader = ruleEl.createEl('summary', { cls: 'tps-rule-summary-row' });
+            const ruleSummaryMain = ruleHeader.createDiv({ cls: 'tps-rule-summary-main' });
+            const labelSpan = ruleSummaryMain.createSpan({ cls: 'tps-rule-label' });
             labelSpan.textContent = `${rem.enabled ? '🟢' : '⚫'} ${rem.label || `Rule ${index + 1}`}`;
-            const descSpan = ruleHeader.createSpan({ cls: 'tps-rule-desc' });
+            const descSpan = ruleSummaryMain.createSpan({ cls: 'tps-rule-desc' });
             descSpan.textContent = this.buildRuleDesc(rem);
+
+            const summaryActions = ruleHeader.createDiv({ cls: 'tps-rule-summary-actions' });
+            const createHeaderAction = (label: string, tooltip: string, action: () => Promise<void>) => {
+                const btn = summaryActions.createEl('button', { cls: 'tps-rule-summary-btn', text: label });
+                btn.setAttr('aria-label', tooltip);
+                btn.setAttr('title', tooltip);
+                btn.addEventListener('click', async (evt) => {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                    await action();
+                });
+            };
+
+            createHeaderAction('↑', 'Move rule up', async () => {
+                if (index === 0) return;
+                [this.plugin.settings.reminders[index - 1], this.plugin.settings.reminders[index]] = [this.plugin.settings.reminders[index], this.plugin.settings.reminders[index - 1]];
+                await this.plugin.saveSettings();
+                this.renderReminderRules(container);
+            });
+
+            createHeaderAction('↓', 'Move rule down', async () => {
+                if (index >= this.plugin.settings.reminders.length - 1) return;
+                [this.plugin.settings.reminders[index + 1], this.plugin.settings.reminders[index]] = [this.plugin.settings.reminders[index], this.plugin.settings.reminders[index + 1]];
+                await this.plugin.saveSettings();
+                this.renderReminderRules(container);
+            });
+
+            createHeaderAction('⧉', 'Duplicate rule', async () => {
+                const duplicated: PropertyReminder = {
+                    ...rem,
+                    id: `reminder-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+                    label: rem.label ? `${rem.label} Copy` : `Rule ${index + 1} Copy`,
+                    stopConditions: [...(rem.stopConditions || [])],
+                    ignorePaths: [...(rem.ignorePaths || [])],
+                    ignoreTags: [...(rem.ignoreTags || [])],
+                    ignoreStatuses: [...(rem.ignoreStatuses || [])],
+                    requiredStatuses: [...(rem.requiredStatuses || [])],
+                    requiredPaths: [...(rem.requiredPaths || [])],
+                };
+                this.plugin.settings.reminders.splice(index + 1, 0, duplicated);
+                this.reminderRuleViewState.set(duplicated.id, true);
+                await this.plugin.saveSettings();
+                this.renderReminderRules(container);
+            });
+
+            createHeaderAction('×', 'Delete rule', async () => {
+                this.plugin.settings.reminders.splice(index, 1);
+                this.reminderRuleViewState.delete(ruleId);
+                await this.plugin.saveSettings();
+                this.renderReminderRules(container);
+            });
 
             const ruleContent = ruleEl.createDiv({ cls: 'tps-rule-content' });
 

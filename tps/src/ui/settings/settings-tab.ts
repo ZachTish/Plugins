@@ -33,6 +33,9 @@ const createCollapsibleSection = (
 export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
   plugin: TPSGlobalContextMenuPlugin;
   private static readonly SETTINGS_BUILD_STAMP = '2026-03-11 18:12';
+  private settingsViewState = new Map<string, boolean>();
+  private settingsScrollTop = 0;
+  private hasRenderedSettings = false;
 
   constructor(app: App, plugin: TPSGlobalContextMenuPlugin) {
     super(app, plugin);
@@ -52,6 +55,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
 
   display(): void {
     const { containerEl } = this;
+    this.captureSettingsViewState(containerEl);
 
     containerEl.empty();
 
@@ -70,10 +74,12 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     const getAppearanceModeText = (_key: AppearanceSettingKey): string => 'Sync handled by TPS-Controller.';
     const attachAppearanceSyncToggle = (_setting: Setting, _key: AppearanceSettingKey) => { };
 
-    const createMainCategory = (title: 'Features' | 'Rules' | 'Interaction' | 'UI Display'): HTMLElement => {
-      const category = containerEl.createDiv({ cls: 'tps-settings-main-category' });
-      category.createEl('h3', { text: title });
-      return category.createDiv({ cls: 'tps-settings-main-content' });
+    const createMainCategory = (title: 'Features' | 'Rules' | 'Interaction' | 'UI Display', defaultOpen = false): HTMLElement => {
+      const details = containerEl.createEl('details', { cls: 'tps-settings-main-category' });
+      if (defaultOpen) details.setAttr('open', 'true');
+      const summary = details.createEl('summary', { cls: 'tps-settings-main-summary' });
+      summary.createEl('h3', { text: title });
+      return details.createDiv({ cls: 'tps-settings-main-content' });
     };
 
     let featuresCategory: HTMLElement;
@@ -1760,6 +1766,38 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       cls: 'setting-item-description',
       attr: { style: 'margin-top: 20px; text-align: center; opacity: 0.7;' }
     });
+    this.restoreSettingsViewState(containerEl);
+  }
+
+  private captureSettingsViewState(containerEl: HTMLElement): void {
+    this.settingsScrollTop = containerEl.scrollTop;
+    this.settingsViewState.clear();
+    const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+      this.settingsViewState.set(`${index}:${summaryText}`, details.open);
+    });
+  }
+
+  private restoreSettingsViewState(containerEl: HTMLElement): void {
+    const detailsEls = Array.from(containerEl.querySelectorAll('details'));
+    if (!this.hasRenderedSettings) {
+      detailsEls.forEach((detailsEl) => {
+        (detailsEl as HTMLDetailsElement).removeAttribute('open');
+      });
+      this.hasRenderedSettings = true;
+      containerEl.scrollTop = 0;
+      return;
+    }
+    detailsEls.forEach((detailsEl, index) => {
+      const details = detailsEl as HTMLDetailsElement;
+      const summaryText = details.querySelector('summary')?.textContent?.trim() || '';
+      const isOpen = this.settingsViewState.get(`${index}:${summaryText}`);
+      if (isOpen) details.setAttr('open', 'true');
+      else details.removeAttribute('open');
+    });
+    containerEl.scrollTop = this.settingsScrollTop;
   }
 
   renderProperties(container: HTMLElement) {

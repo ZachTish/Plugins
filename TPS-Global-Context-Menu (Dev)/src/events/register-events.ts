@@ -201,6 +201,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
             debouncedMenuRefresh(file);
             debouncedFilenameSync(file);
             if (file instanceof TFile) {
+                plugin.taskCheckboxHandler.scheduleChecklistPropertyUpdate(file);
                 scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true });
                 debouncedCompletedDateSync(file);
             }
@@ -210,6 +211,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
     plugin.registerEvent(
         plugin.app.vault.on('modify', (file) => {
             if (!(file instanceof TFile) || file.extension !== 'md') return;
+            plugin.taskCheckboxHandler.scheduleChecklistPropertyUpdate(file);
             scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 160, lateDelayMs: 700 });
             debouncedActiveFileNormalization(file);
         }),

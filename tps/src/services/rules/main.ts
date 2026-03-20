@@ -232,12 +232,11 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
 
         const delay = Math.max(0, this.settings.metadataDebounceMs || 0);
         this.metadataManager.scheduleDebounced(file.path, delay, async () => {
-          const activeFile = this.getActiveMarkdownFile();
-          if (!activeFile || activeFile.path !== file.path) return;
           if (this.settings.autoApplyOnMetadataChange) {
             await this.applyRulesToFileInternal(file, "metadata-change", false);
           }
-          if (this.settings.syncFilenameFromTitle) {
+          const activeFile = this.getActiveMarkdownFile();
+          if (this.settings.syncFilenameFromTitle && activeFile && activeFile.path === file.path) {
             await this.titleSyncService.handleTitleSync(file);
           }
         });
@@ -248,12 +247,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       this.app.vault.on("modify", (file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
 
-        const activeFile = this.getActiveMarkdownFile();
-        if (!activeFile || activeFile.path !== file.path) return;
-
         this.metadataManager.scheduleDebounced(`${file.path}::modify-save`, 250, async () => {
-          const liveActive = this.getActiveMarkdownFile();
-          if (!liveActive || liveActive.path !== file.path) return;
           await this.applyRulesToFileInternal(file, "modify-save", false);
         });
       }),

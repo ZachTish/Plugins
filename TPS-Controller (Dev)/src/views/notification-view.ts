@@ -294,6 +294,10 @@ export class NotificationView extends ItemView {
                     await writeStatus(null);
                     await this.refresh();
                 }));
+                menu.addItem((i) => i.setTitle('(empty)').setChecked(currentStatus === '').onClick(async () => {
+                    await writeStatus('');
+                    await this.refresh();
+                }));
                 statusOptions.forEach((opt) => {
                     menu.addItem((i) => i.setTitle(opt).setChecked(currentStatus === opt).onClick(async () => {
                         await writeStatus(opt);
