@@ -7,6 +7,7 @@ type DuplicateCandidate = {
     file: TFile;
     body: string;
     hasProtectedBodyContent: boolean;
+    isOrphanCandidate: boolean;
 };
 
 export type ExternalCalendarDuplicateCleanupResult = {
@@ -74,8 +75,11 @@ export class ExternalCalendarDuplicateCleanupService {
 
             const groupKey = eventId
                 ? `event:${eventId}`
-                : (uid && roundedStart ? `uidstart:${uid}|${roundedStart}` : "");
-            if (!groupKey) continue;
+                : "";
+            const normalizedGroupKey = (uid && roundedStart)
+                ? `uidstart:${uid}|${roundedStart}`
+                : groupKey;
+            if (!normalizedGroupKey) continue;
 
             const content = await this.app.vault.cachedRead(file);
             const body = this.stripFrontmatter(content);
@@ -83,11 +87,12 @@ export class ExternalCalendarDuplicateCleanupService {
                 file,
                 body,
                 hasProtectedBodyContent: this.hasProtectedBodyContent(body),
+                isOrphanCandidate: this.isOrphanCandidate(frontmatter),
             };
 
-            const existing = grouped.get(groupKey) ?? [];
+            const existing = grouped.get(normalizedGroupKey) ?? [];
             existing.push(candidate);
-            grouped.set(groupKey, existing);
+            grouped.set(normalizedGroupKey, existing);
         }
 
         return Array.from(grouped.values())
@@ -95,6 +100,9 @@ export class ExternalCalendarDuplicateCleanupService {
             .map((group) => group.sort((left, right) => {
                 if (left.hasProtectedBodyContent !== right.hasProtectedBodyContent) {
                     return left.hasProtectedBodyContent ? -1 : 1;
+                }
+                if (left.isOrphanCandidate !== right.isOrphanCandidate) {
+                    return left.isOrphanCandidate ? 1 : -1;
                 }
                 return left.file.path.localeCompare(right.file.path);
             }));
@@ -130,6 +138,12 @@ export class ExternalCalendarDuplicateCleanupService {
 
     private hasProtectedBodyContent(body: string): boolean {
         return String(body || "").replace(/\r\n/g, "\n").trim().length > 0;
+    }
+
+    private isOrphanCandidate(frontmatter: Record<string, any>): boolean {
+        return Object.keys(frontmatter || {}).some(
+            (key) => String(key).trim().toLowerCase() === "tpscalendarorphancandidateat",
+        );
     }
 
     private getDuplicateArchiveFolder(archiveFolder: string): string {
