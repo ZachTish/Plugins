@@ -78,6 +78,9 @@ export default class TPSControllerPlugin extends Plugin {
     private parentChildBootstrapIntervalId: number | null = null;
     private parentChildStartupResolvedHandled = false;
     private parentChildMaintenanceActivated = false;
+    private metadataIndexResolved = false;
+    private calendarSyncSettledAt = Date.now() + 20_000;
+    private readonly calendarSyncSettleWindowMs = 20_000;
 
     async onload() {
         logger.log(" TPS-Controller loading...");
@@ -112,7 +115,8 @@ export default class TPSControllerPlugin extends Plugin {
             this.externalCalendarService,
             () => this.settings,
             () => this.getCalendarPlugin(),
-            () => this.runRecurrenceMaintenanceTick()
+            () => this.runRecurrenceMaintenanceTick(),
+            () => this.getCalendarSyncReadiness()
         );
         this.companionAutomation = new CompanionAutomationService(
             () => this.settings,
@@ -180,12 +184,19 @@ export default class TPSControllerPlugin extends Plugin {
         // Ensure parent/child reconciliation runs once after initial metadata indexing on vault load.
         this.registerEvent(
             this.app.metadataCache.on("resolved", () => {
+                this.metadataIndexResolved = true;
+                this.deferCalendarSyncSettlement("metadata cache resolved");
                 if (!this.deviceRoleManager.isController()) return;
                 if (this.parentChildStartupResolvedHandled) return;
                 this.parentChildStartupResolvedHandled = true;
                 void this.runParentChildMaintenanceTick();
             })
         );
+
+        this.registerEvent(this.app.vault.on("create", () => this.deferCalendarSyncSettlement("file create")));
+        this.registerEvent(this.app.vault.on("modify", () => this.deferCalendarSyncSettlement("file modify")));
+        this.registerEvent(this.app.vault.on("delete", () => this.deferCalendarSyncSettlement("file delete")));
+        this.registerEvent(this.app.vault.on("rename", () => this.deferCalendarSyncSettlement("file rename")));
 
         logger.log(" TPS-Controller loaded");
     }
@@ -354,6 +365,26 @@ export default class TPSControllerPlugin extends Plugin {
         this.stopParentChildMaintenanceLoop();
         this.companionAutomation.stop();
         this.syncConflictWatcher.stop();
+    }
+
+    private deferCalendarSyncSettlement(reason: string): void {
+        const nextReadyAt = Date.now() + this.calendarSyncSettleWindowMs;
+        if (nextReadyAt > this.calendarSyncSettledAt) {
+            this.calendarSyncSettledAt = nextReadyAt;
+        }
+        logger.log(`Calendar sync settlement deferred (${reason}).`);
+    }
+
+    private getCalendarSyncReadiness(): { ready: boolean; reason: string } {
+        if (!this.metadataIndexResolved) {
+            return { ready: false, reason: "metadata cache/index not resolved yet" };
+        }
+        const remainingMs = this.calendarSyncSettledAt - Date.now();
+        if (remainingMs > 0) {
+            const remainingSec = Math.ceil(remainingMs / 1000);
+            return { ready: false, reason: `vault sync not settled yet (${remainingSec}s remaining)` };
+        }
+        return { ready: true, reason: "ready" };
     }
 
     // ========================================================================

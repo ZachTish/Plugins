@@ -1,4 +1,4 @@
-import { App, TFile, normalizePath, Notice, parseYaml } from "obsidian";
+import { App, TFile, normalizePath, Notice } from "obsidian";
 import * as logger from "../logger";
 import { ExternalCalendarService } from "./external-calendar-service";
 import { ExternalCalendarEvent } from "../types";
@@ -35,6 +35,7 @@ export interface AutoCreateServiceConfig {
     orphanMissCountKey: string;
     orphanReasonKey: string;
     cancelledAtKey: string;
+    scanRootFolders: string[];
 }
 
 /** Vault note with stored frontmatter values for string-based comparison. */
@@ -92,6 +93,7 @@ export class AutoCreateService {
             orphanMissCountKey: "tpsCalendarOrphanMissCount",
             orphanReasonKey: "tpsCalendarOrphanReason",
             cancelledAtKey: "tpsCalendarCancelledAt",
+            scanRootFolders: [],
         };
     }
 
@@ -110,6 +112,10 @@ export class AutoCreateService {
 
         const hasAutoCreate = Object.values(calendarConfigs).some(config => (config?.autoCreateEnabled ?? true) !== false);
         if (!hasAutoCreate) return;
+        if (!this.getConfiguredScanRoots().length) {
+            logger.warn("[AutoCreateService] Skipping sync: no scoped scan roots configured (vault-wide scan disabled).");
+            return;
+        }
 
         this.isSyncing = true;
         logger.log('[AutoCreateService] Starting change-aware sync...');
@@ -324,7 +330,7 @@ export class AutoCreateService {
         const byUidStart = new Map<string, VaultNote>();
         const allNotes: VaultNote[] = [];
 
-        const files = this.app.vault.getMarkdownFiles();
+        const files = await this.getScopedMarkdownFiles();
         for (const file of files) {
             const isTrash = normalizePath(file.path).toLowerCase().startsWith(".trash");
             if (isTrash) continue;
@@ -412,6 +418,69 @@ export class AutoCreateService {
         }
 
         return { byEventId, byUidStart, byTitleDay, allNotes };
+    }
+
+    private getConfiguredScanRoots(): string[] {
+        const roots = new Set<string>();
+        for (const rawRoot of this.config.scanRootFolders || []) {
+            if (typeof rawRoot !== "string") continue;
+            const normalized = normalizePath(rawRoot).replace(/^\/+|\/+$/g, "").trim();
+            if (!normalized || normalized === "." || normalized === "/") continue;
+            roots.add(normalized);
+        }
+        return Array.from(roots);
+    }
+
+    private async getScopedMarkdownFiles(): Promise<TFile[]> {
+        const roots = this.getConfiguredScanRoots();
+        if (!roots.length) return [];
+
+        const filesByPath = new Map<string, TFile>();
+        for (const root of roots) {
+            await this.collectMarkdownFilesUnder(root, filesByPath);
+        }
+        return Array.from(filesByPath.values());
+    }
+
+    private async collectMarkdownFilesUnder(
+        root: string,
+        target: Map<string, TFile>
+    ): Promise<void> {
+        const stack: string[] = [root];
+        const visitedFolders = new Set<string>();
+
+        while (stack.length > 0) {
+            const current = stack.pop();
+            if (!current) continue;
+
+            const normalizedCurrent = normalizePath(current);
+            if (visitedFolders.has(normalizedCurrent)) continue;
+            visitedFolders.add(normalizedCurrent);
+
+            let listing: { files: string[]; folders: string[] } | null = null;
+            try {
+                listing = await this.app.vault.adapter.list(normalizedCurrent);
+            } catch {
+                continue;
+            }
+            if (!listing) continue;
+
+            for (const folderPath of listing.folders || []) {
+                const normalizedFolder = normalizePath(folderPath).replace(/^\/+|\/+$/g, "").trim();
+                if (!normalizedFolder) continue;
+                stack.push(normalizedFolder);
+            }
+
+            for (const filePath of listing.files || []) {
+                const normalizedFilePath = normalizePath(filePath);
+                if (!normalizedFilePath.toLowerCase().endsWith(".md")) continue;
+
+                const file = this.app.vault.getAbstractFileByPath(normalizedFilePath);
+                if (file instanceof TFile) {
+                    target.set(file.path, file);
+                }
+            }
+        }
     }
 
     // ========================================================================
@@ -700,7 +769,8 @@ export class AutoCreateService {
 
     public async getOrphanCandidateFiles(): Promise<TFile[]> {
         const candidates: TFile[] = [];
-        for (const file of this.app.vault.getMarkdownFiles()) {
+        const files = await this.getScopedMarkdownFiles();
+        for (const file of files) {
             const fm = await this.getFrontmatterForFile(file);
             if (!fm) continue;
             const candidateAt = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.orphanCandidateAtKey));
@@ -759,65 +829,7 @@ export class AutoCreateService {
 
     private async getFrontmatterForFile(file: TFile): Promise<Record<string, any> | null> {
         const cache = this.app.metadataCache.getFileCache(file);
-        if (cache?.frontmatter) return cache.frontmatter;
-        try {
-            const content = await this.app.vault.cachedRead(file);
-            const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-            if (match) {
-                try {
-                    const parsed = parseYaml(match[1]);
-                    if (typeof parsed === 'object') return parsed;
-                } catch {
-                    const recovered = this.extractIdentityFrontmatterFallback(match[1]);
-                    if (recovered) {
-                        logger.warn(`[AutoCreateService] Recovered minimal frontmatter for malformed YAML: ${file.path}`);
-                        return recovered;
-                    }
-                }
-            }
-        } catch { }
-        return null;
-    }
-
-    private extractIdentityFrontmatterFallback(frontmatterBody: string): Record<string, any> | null {
-        const text = String(frontmatterBody || "").replace(/\r\n/g, "\n");
-        const wantedKeys = [
-            this.config.eventIdKey,
-            this.config.uidKey,
-            this.config.startProperty,
-            this.config.endProperty,
-            this.config.sourceUrlKey,
-            this.config.titleKey,
-            "scheduled",
-            "location",
-        ]
-            .map((key) => String(key || "").trim())
-            .filter(Boolean);
-
-        const wantedSet = new Set(wantedKeys.map((key) => key.toLowerCase()));
-        const recovered: Record<string, any> = {};
-
-        for (const rawLine of text.split("\n")) {
-            const line = rawLine.trim();
-            if (!line || line.startsWith("#") || line.startsWith("-")) continue;
-            const sep = line.indexOf(":");
-            if (sep <= 0) continue;
-
-            const rawKey = line.slice(0, sep).trim().replace(/^['"]|['"]$/g, "");
-            if (!rawKey) continue;
-
-            const keyLower = rawKey.toLowerCase();
-            if (!wantedSet.has(keyLower)) continue;
-
-            const existingKey = Object.keys(recovered).find((candidate) => candidate.toLowerCase() === keyLower);
-            if (existingKey) continue;
-
-            const rawValue = line.slice(sep + 1).trim();
-            const cleaned = rawValue.replace(/^['"]|['"]$/g, "").trim();
-            recovered[rawKey] = cleaned;
-        }
-
-        return Object.keys(recovered).length > 0 ? recovered : null;
+        return cache?.frontmatter || null;
     }
 
     private async processFrontmatterSafely(

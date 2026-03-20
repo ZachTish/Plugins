@@ -72,23 +72,6 @@ export class CompanionAutomationService {
             logger.log("🤝 Skipping companion scan (not controller)");
             return;
         }
-
-        const companion = this.getCompanionPlugin();
-        if (!companion) {
-            logger.log("🤝 Companion plugin not found, skipping vault scan.");
-            return;
-        }
-
-        if (!companion.applyRulesToAllFiles) {
-            logger.warn("⚠️ Companion plugin API missing applyRulesToAllFiles");
-            return;
-        }
-
-        try {
-            const changedCount = await companion.applyRulesToAllFiles(true); // silent=true
-            logger.log(`✅ COMPANION SCAN COMPLETED: ${changedCount} files updated`);
-        } catch (error) {
-            logger.error("❌ Companion scan failed", error);
-        }
+        logger.warn("🤝 Companion vault-wide scans are disabled by controller safety policy.");
     }
 }

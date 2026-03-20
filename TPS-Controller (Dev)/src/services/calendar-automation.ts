@@ -1,4 +1,4 @@
-import { App, Notice } from "obsidian";
+import { App, Notice, normalizePath } from "obsidian";
 import { AutoCreateService } from "./auto-create-service";
 import { ExternalCalendarService } from "./external-calendar-service";
 import type { TPSControllerSettings, ExternalCalendarConfig } from "../types";
@@ -22,13 +22,15 @@ export class CalendarAutomationService {
         private externalCalendarService: ExternalCalendarService,
         private getSettings: () => TPSControllerSettings,
         private getCalendarPlugin: () => CalendarPluginAPI | null,
-        private onSyncComplete: () => Promise<void>
+        private onSyncComplete: () => Promise<void>,
+        private getSyncReadiness: () => { ready: boolean; reason: string }
     ) {}
 
     start(): void {
         this.stop();
 
         const settings = this.getSettings();
+        const initialScanRoots = this.buildScanRoots(settings.externalCalendars || [], settings.archiveFolder);
         this.autoCreateService.updateConfig({
             allowAutoCreate: true,
             noLossSyncMode: settings.noLossSyncMode ?? true,
@@ -43,6 +45,7 @@ export class CalendarAutomationService {
             archiveFolder: settings.archiveFolder,
             globalIgnorePaths: settings.globalIgnorePaths || [],
             canceledStatusValue: settings.canceledStatusValue,
+            scanRootFolders: initialScanRoots,
         });
 
         // Defer the first sync until after the workspace and metadata cache are
@@ -71,6 +74,12 @@ export class CalendarAutomationService {
 
     async runSync(force = false): Promise<void> {
         logger.log(`📅 RUN CALENDAR SYNC (force=${force})...`);
+        const readiness = this.getSyncReadiness();
+        if (!readiness.ready) {
+            logger.warn(`📅 Skipping calendar sync: ${readiness.reason}`);
+            return;
+        }
+
         const settings = this.getSettings();
 
         let calendars: ExternalCalendarConfig[] = settings.externalCalendars || [];
@@ -95,6 +104,12 @@ export class CalendarAutomationService {
 
         if (!urls.length) {
             logger.log("⚠️ No calendar URLs configured, skipping sync.");
+            return;
+        }
+
+        const scanRoots = this.buildScanRoots(calendars, settings.archiveFolder);
+        if (!scanRoots.length) {
+            logger.warn("📅 Skipping calendar sync: no scoped calendar folders configured (vault-wide scan is disabled).");
             return;
         }
 
@@ -127,6 +142,7 @@ export class CalendarAutomationService {
             archiveFolder: settings.archiveFolder,
             globalIgnorePaths: settings.globalIgnorePaths || [],
             canceledStatusValue: settings.canceledStatusValue,
+            scanRootFolders: scanRoots,
         });
 
         await this.autoCreateService.checkAndCreateMeetingNotes(
@@ -139,6 +155,30 @@ export class CalendarAutomationService {
 
         await this.onSyncComplete();
         logger.log("✅ CALENDAR SYNC COMPLETED");
+    }
+
+    private buildScanRoots(calendars: ExternalCalendarConfig[], archiveFolder: string): string[] {
+        const roots = new Set<string>();
+        const addRoot = (value: string | null | undefined) => {
+            const normalized = this.normalizeScanRoot(value);
+            if (normalized) roots.add(normalized);
+        };
+
+        addRoot(archiveFolder);
+        for (const calendar of calendars || []) {
+            addRoot(calendar?.autoCreateFolder);
+            addRoot(calendar?.autoCreateTypeFolder);
+        }
+
+        return Array.from(roots);
+    }
+
+    private normalizeScanRoot(value: string | null | undefined): string | null {
+        if (typeof value !== "string") return null;
+        const normalized = normalizePath(value).replace(/^\/+|\/+$/g, "").trim();
+        if (!normalized) return null;
+        if (normalized === "." || normalized === "/") return null;
+        return normalized;
     }
 
     async reviewQuarantine(): Promise<void> {

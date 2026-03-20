@@ -325,17 +325,13 @@ export async function createMeetingNoteFromExternalEvent(
       }
     }
 
-    const sanitizedTitle = event.title
-      .replace(/[\\/:*?"<>|\x00-\x1F\x7F]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    // Always use a human-readable date for event file names (e.g. "Thursday, March 19th 2026").
-    // Do NOT use getDailyNoteDateFormat here — the daily-notes naming format (e.g. YYYY-MM-DD)
-    // is unrelated to how calendar event files should be named.
-    const dateSuffix = moment(event.startDate).format('dddd, MMMM Do YYYY');
-
-    const rawBasename = `${sanitizedTitle} ${dateSuffix}`;
+    const sanitizedTitle = sanitizeFileName(event.title) || "Untitled Event";
+    const preferredDateFormat = getDailyNoteDateFormat(app);
+    const dateSuffix = sanitizeFileName(moment(event.startDate).format(preferredDateFormat));
+    const titleAlreadyHasDate = titleContainsDateToken(event.title, event.startDate, preferredDateFormat);
+    const rawBasename = titleAlreadyHasDate || !dateSuffix
+      ? sanitizedTitle
+      : `${sanitizedTitle} ${dateSuffix}`;
     const safeBasename = sanitizePathSegment(app, rawBasename);
     const deterministicPath = normalizePath(`${folder}/${safeBasename}.md`);
 
@@ -511,8 +507,35 @@ function getDailyNoteDateFormat(app: App): string {
   if (format && typeof format === 'string' && format.trim()) {
     return format.trim();
   }
-  // Fallback to the standard Obsidian default daily note format
-  return 'dddd, MMMM Do YYYY';
+  // Fallback to Obsidian's standard default daily note format.
+  return 'YYYY-MM-DD';
+}
+
+function sanitizeFileName(value: string): string {
+  return String(value || "")
+    .replace(/[\\/:*?"<>|\x00-\x1F\x7F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function titleContainsDateToken(title: string, date: Date, preferredFormat: string): boolean {
+  const normalizedTitle = String(title || "").trim();
+  if (!normalizedTitle) return false;
+
+  const ymd = moment(date).format("YYYY-MM-DD");
+  const preferred = moment(date).format(preferredFormat);
+  const titleLower = normalizedTitle.toLowerCase();
+  if (titleLower.includes(ymd.toLowerCase()) || titleLower.includes(preferred.toLowerCase())) {
+    return true;
+  }
+
+  const parsed = moment(
+    normalizedTitle,
+    [preferredFormat, "YYYY-MM-DD", "dddd, MMMM Do YYYY", "MMMM D, YYYY", "MMM D, YYYY"],
+    true,
+  );
+  if (!parsed.isValid()) return false;
+  return parsed.format("YYYY-MM-DD") === ymd;
 }
 
 function findExistingNoteByEventId(app: App, eventId: string, eventIdKey: string): TFile | null {
