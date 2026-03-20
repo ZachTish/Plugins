@@ -63,7 +63,8 @@ export class CalendarEmbedRenderChild extends MarkdownRenderChild {
 
     onunload() {
         if (this.view) {
-            // this.view.onunload(); // logic to unload view
+            this.view.onunload();
+            this.view = null;
         }
         super.onunload();
     }

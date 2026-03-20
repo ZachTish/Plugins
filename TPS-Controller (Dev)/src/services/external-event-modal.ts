@@ -330,8 +330,10 @@ export async function createMeetingNoteFromExternalEvent(
       .replace(/\s+/g, " ")
       .trim();
 
-    const dateFormat = getDailyNoteDateFormat(app);
-    const dateSuffix = moment(event.startDate).format(dateFormat);
+    // Always use a human-readable date for event file names (e.g. "Thursday, March 19th 2026").
+    // Do NOT use getDailyNoteDateFormat here — the daily-notes naming format (e.g. YYYY-MM-DD)
+    // is unrelated to how calendar event files should be named.
+    const dateSuffix = moment(event.startDate).format('dddd, MMMM Do YYYY');
 
     const rawBasename = `${sanitizedTitle} ${dateSuffix}`;
     const safeBasename = sanitizePathSegment(app, rawBasename);
