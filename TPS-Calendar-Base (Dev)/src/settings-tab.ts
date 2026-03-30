@@ -235,6 +235,35 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     new Setting(generalSection)
+      .setName("Default calendar creation type")
+      .setDesc("Choose whether drag/create actions make a full note or append a task.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("note", "Full note")
+          .addOption("task", "Task line")
+          .setValue(this.plugin.settings.defaultCreateMode || "note")
+          .onChange(async (value) => {
+            this.plugin.settings.defaultCreateMode = value as "note" | "task";
+            await this.plugin.saveSettings();
+            taskTargetSetting.settingEl.style.display = value === "task" ? "" : "none";
+          }),
+      );
+
+    const taskTargetSetting = new Setting(generalSection)
+      .setName("Task creation target file")
+      .setDesc("File to append new calendar-created tasks into. Leave blank to use that day's daily note.")
+      .addText((text) =>
+        text
+          .setPlaceholder("Markdown/Action Items/Hca-Outlook.md")
+          .setValue(this.plugin.settings.defaultTaskTargetFile || "")
+          .onChange(async (value) => {
+            this.plugin.settings.defaultTaskTargetFile = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+    taskTargetSetting.settingEl.style.display = (this.plugin.settings.defaultCreateMode || "note") === "task" ? "" : "none";
+
+    new Setting(generalSection)
       .setName("Sidebar calendar base path")
       .setDesc("File to open in the sidebar (Command/Ribbon action).")
       .addText((text) =>

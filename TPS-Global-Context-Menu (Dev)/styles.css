@@ -135,3 +135,121 @@
   flex-direction: column;
   gap: 10px;
 }
+
+/* ============================================================================
+   Linked Subitem Row Styles
+   ============================================================================ */
+
+/* Row content container - shared by reading mode and Live Preview */
+.tps-gcm-linked-subitem-row-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.tps-gcm-linked-subitem-row-content.is-cm-widget {
+  /* CodeMirror widget in LP mode */
+}
+.tps-gcm-linked-subitem-row-content.is-reading-mode {
+  /* Reading mode: inline flex */
+}
+.tps-gcm-linked-subitem-row-content.is-live-preview {
+  /* Live Preview: inline flex */
+}
+
+/* Checkbox button */
+.tps-gcm-linked-subitem-checkbox {
+  flex-shrink: 0;
+}
+
+.tps-gcm-linked-subitem-checkbox:hover {
+  cursor: pointer;
+}
+.tps-gcm-linked-subitem-checkbox:checked {
+  cursor: pointer;
+}
+.tps-gcm-linked-subitem-checkbox:active {
+  cursor: pointer;
+}
+.tps-gcm-linked-subitem-checkbox:disabled {
+  cursor: default;
+}
+.tps-gcm-linked-subitem-checkbox:focus-within {
+  outline: none;
+}
+.tps-gcm-linked-subitem-checkbox svg {
+  width: 16px;
+  height: 16px;
+  vertical-align: middle;
+}
+.tps-gcm-linked-subitem-checkbox svg path {
+  fill: var(--icon-color);
+}
+.tps-gcm-linked-subitem-checkbox:focus-within:focus-visible {
+  outline: 2px solid var(--background-secondary);
+}
+
+/* Hide native checkbox only when explicitly marked hidden */
+.tps-gcm-linked-subitem-checkbox-hidden {
+  display: none !important;
+}
+
+/* Hide native link in linked subitem rows */
+.tps-gcm-hidden-native-link {
+  display: none !important;
+}
+
+/* Link text */
+.tps-gcm-linked-subitem-link {
+  cursor: pointer;
+  color: var(--text-normal);
+  text-decoration: none;
+}
+.tps-gcm-linked-subitem-link:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
+}
+
+/* Pills container */
+.tps-gcm-linked-subitem-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+/* Individual pill */
+.tps-gcm-linked-subitem-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--background-secondary);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.tps-gcm-linked-subitem-pill:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* Task list item styling */
+.tps-gcm-linked-subitem-task {
+  position: relative;
+  min-width: 0;
+}
+.tps-gcm-linked-subitem-task.is-complete {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.tps-gcm-linked-subitem-task.is-canceled {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* Replaced marker - indicates the item has had content replaced */
+.tps-gcm-linked-subitem-replaced {
+  /* Visual indicator that content has been replaced */
+}

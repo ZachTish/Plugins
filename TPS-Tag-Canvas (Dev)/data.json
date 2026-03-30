@@ -10,10 +10,11 @@
     "Archive"
   ],
   "autoSync": true,
+  "autoEmbedTaggedFiles": false,
   "syncDelayMs": 2000,
-  "nodeWidth": 650,
+  "nodeWidth": 350,
   "nodeHeight": 500,
-  "columns": 3,
+  "columns": 6,
   "gap": 30,
   "debugLogging": false
 }

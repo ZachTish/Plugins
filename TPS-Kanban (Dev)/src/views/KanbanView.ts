@@ -903,6 +903,74 @@ export class KanbanView extends BasesView {
     return true;
   }
 
+  private parseVirtualTaskStateLabel(rawLine: string): string {
+    const state = rawLine.match(/^[\t ]*-\s+\[([^\]]*)\]/)?.[1]?.trim() ?? '';
+    if (/^[xX]$/.test(state)) return 'complete';
+    if (state === '-') return 'canceled';
+    if (state === '?') return 'question';
+    return 'open';
+  }
+
+  private async revealVirtualTaskLine(meta: VirtualKanbanTaskMeta): Promise<void> {
+    const parentFile = this.app.vault.getFileByPath(meta.parentPath);
+    if (!parentFile) return;
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(parentFile);
+    const view: any = leaf.view;
+    const editor = view?.editor;
+    if (!editor) return;
+    const safeLine = Math.max(0, meta.lineNumber);
+    editor.setCursor({ line: safeLine, ch: 0 });
+    editor.scrollIntoView({ from: { line: safeLine, ch: 0 }, to: { line: safeLine + 1, ch: 0 } }, true);
+  }
+
+  private async showVirtualTaskContextMenu(
+    e: MouseEvent,
+    meta: VirtualKanbanTaskMeta,
+    text: string,
+  ): Promise<void> {
+    const parentFile = this.app.vault.getFileByPath(meta.parentPath);
+    if (!parentFile) return;
+    const content = await this.app.vault.cachedRead(parentFile);
+    const lines = content.split('\n');
+    const rawLine = lines[meta.lineNumber] || '';
+    const stateLabel = this.parseVirtualTaskStateLabel(rawLine);
+
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle(text || 'Task').setIcon('square').setDisabled(true));
+    menu.addItem((item) => item.setTitle(`State: ${stateLabel}`).setDisabled(true));
+    menu.addItem((item) => item.setTitle(`Line: ${meta.lineNumber + 1}`).setDisabled(true));
+    if (meta.tags.length > 0) {
+      menu.addItem((item) => item.setTitle(`Tags: ${meta.tags.join(', ')}`).setDisabled(true));
+    }
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle('Open task line')
+        .setIcon('list')
+        .onClick(async () => {
+          await this.revealVirtualTaskLine(meta);
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('Open board note')
+        .setIcon('file-text')
+        .onClick(async () => {
+          await this.app.workspace.getLeaf(false).openFile(parentFile);
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('Copy task text')
+        .setIcon('copy')
+        .onClick(async () => {
+          await navigator.clipboard.writeText(text || rawLine.trim());
+        }),
+    );
+    menu.showAtPosition({ x: e.clientX, y: e.clientY });
+  }
+
   private simplifyTaskText(raw: string): string {
     const text = this.stripKanbanDateTokens(raw);
     const mdLink = text.match(/^\[([^\]]+)\]\([^)]+\)$/);
@@ -2060,12 +2128,7 @@ export class KanbanView extends BasesView {
       e.stopPropagation();
 
       if (isVirtualTask && virtualMeta) {
-        const menu = new Menu();
-        menu.addItem((it) => it.setTitle('Open board note').onClick(async () => {
-          const parent = this.app.vault.getFileByPath(virtualMeta.parentPath);
-          if (parent) await this.app.workspace.getLeaf(false).openFile(parent);
-        }));
-        menu.showAtPosition({ x: e.clientX, y: e.clientY });
+        void this.showVirtualTaskContextMenu(e, virtualMeta, entry.file.basename);
         return;
       }
 

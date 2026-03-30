@@ -103,7 +103,7 @@ export default class TPSControllerPlugin extends Plugin {
         // Core services
         this.autoCreateService = new AutoCreateService(this.app);
         this.externalCalendarService = new ExternalCalendarService();
-        this.reminderEngine = new ReminderEngine(this.app);
+        this.reminderEngine = new ReminderEngine(this.app, this.externalCalendarService);
         this.syncRequestService = new SyncRequestService(this.app, this.manifest.dir);
         this.syncConflictWatcher = new SyncConflictWatcher(this.app);
 

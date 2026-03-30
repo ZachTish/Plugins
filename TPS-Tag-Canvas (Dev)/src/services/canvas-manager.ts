@@ -87,7 +87,8 @@ export class CanvasManager {
    * new files are appended in a grid below existing nodes.
    */
   async syncTag(tag: string): Promise<void> {
-    const files = this.getFilesForTag(tag);
+    const settings = this.getSettings();
+    const files = settings.autoEmbedTaggedFiles ? this.getFilesForTag(tag) : [];
     const canvasPath = this.getCanvasPath(tag);
 
     // Load existing canvas (if present)
@@ -102,6 +103,9 @@ export class CanvasManager {
     }
 
     if (files.length === 0 && !(existingFile instanceof TFile)) {
+      if (!settings.autoEmbedTaggedFiles) {
+        return;
+      }
       return; // don't create new empty canvases
     }
 
@@ -146,8 +150,13 @@ export class CanvasManager {
    */
   async openTagCanvas(tag: string): Promise<void> {
     await this.syncTag(tag);
+    const settings = this.getSettings();
     const canvasPath = this.getCanvasPath(tag);
-    const file = this.app.vault.getAbstractFileByPath(canvasPath);
+    let file = this.app.vault.getAbstractFileByPath(canvasPath);
+    if (!(file instanceof TFile) && !settings.autoEmbedTaggedFiles) {
+      await this.ensureFolder(canvasPath);
+      file = await this.app.vault.create(canvasPath, JSON.stringify({ nodes: [], edges: [] }, null, 2));
+    }
     if (file instanceof TFile) {
       const leaf = this.app.workspace.getLeaf("tab");
       await leaf.openFile(file, { active: true });

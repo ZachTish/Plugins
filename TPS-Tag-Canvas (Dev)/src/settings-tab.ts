@@ -53,6 +53,18 @@ export class TagCanvasSettingTab extends PluginSettingTab {
       );
 
     new Setting(featuresCategory)
+      .setName("Auto-embed tagged files")
+      .setDesc("Automatically add or remove tagged markdown notes as file nodes inside tag canvases.")
+      .addToggle(toggle =>
+        toggle
+          .setValue(this.plugin.settings.autoEmbedTaggedFiles)
+          .onChange(async v => {
+            this.plugin.settings.autoEmbedTaggedFiles = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(featuresCategory)
       .setName("Sync delay (ms)")
       .setDesc("Debounce duration — how long to wait after a change before syncing.")
       .addSlider(slider =>

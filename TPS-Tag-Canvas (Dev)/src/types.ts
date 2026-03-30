@@ -11,6 +11,8 @@ export interface TagCanvasSettings {
   archiveTriggerFolders: string[];
   /** Automatically re-sync canvases when notes change */
   autoSync: boolean;
+  /** Automatically add/remove tagged markdown files as canvas file nodes */
+  autoEmbedTaggedFiles: boolean;
   /** Debounce delay (ms) before flushing pending syncs */
   syncDelayMs: number;
   /** Width of each file node (px) */
@@ -32,6 +34,7 @@ export const DEFAULT_SETTINGS: TagCanvasSettings = {
   archiveTriggerTags: ["hide", "archive"],
   archiveTriggerFolders: ["Archive"],
   autoSync: true,
+  autoEmbedTaggedFiles: true,
   syncDelayMs: 2000,
   nodeWidth: 400,
   nodeHeight: 300,

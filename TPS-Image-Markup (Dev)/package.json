@@ -1,0 +1,22 @@
+{
+  "name": "tps-image-markup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Add a markup/open-in-app button to embedded images in Obsidian notes.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": ["obsidian", "plugin", "image", "markup", "ios"],
+  "author": "Codex",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^20.11.2",
+    "builtin-modules": "3.3.0",
+    "esbuild": "^0.19.3",
+    "obsidian": "latest",
+    "typescript": "^5.3.3"
+  }
+}

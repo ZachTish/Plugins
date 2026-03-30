@@ -1509,257 +1509,50 @@ export class BulkEditService {
     }
 
     async linkToParent(files: TFile[], parentFile: TFile): Promise<number> {
-        const parentKey = this.parentLinkHandler.normalizeParentKey();
-        const childKey = this.parentLinkHandler.normalizeChildKey();
-        const format = this.parentLinkHandler.normalizeParentLinkFormat();
-        const previousParentsByChild = new Map<string, TFile[]>();
+        let count = 0;
+        const changedFiles = new Map<string, TFile>();
         for (const file of files) {
-            const raw = this.plugin.app.metadataCache.getFileCache(file)?.frontmatter;
-            const key = raw ? this.findFrontmatterKeyCaseInsensitive(raw as Record<string, any>, parentKey) : null;
-            const parentValue = key && raw ? (raw as Record<string, any>)[key] : undefined;
-            previousParentsByChild.set(file.path, this.resolveLinkedFilesFromFrontmatterValue(parentValue, file.path));
-        }
-
-        const count = await this.applyToFiles(files, (fm, file) => {
-            const parentLink = buildParentLinkValue(this.plugin.app, parentFile, file.path, format);
-            this.setFrontmatterValueCaseInsensitive(fm, parentKey, parentLink);
-            if (this.plugin.settings.autoSaveFolderPath) {
-                this.setFrontmatterValueCaseInsensitive(fm, 'folderPath', file.parent?.path || '/');
+            const changed = await this.plugin.subitemRelationshipSyncService.linkExistingChildToParent(file, parentFile, {
+                insertBodyLink: parentFile.extension?.toLowerCase() === 'md',
+            });
+            if (changed) {
+                count += 1;
+                changedFiles.set(file.path, file);
             }
-        });
-        if (count > 0) {
-            // Write reverse childKey into parentFile listing child links
-            if (await this.canMutateFrontmatterSafely(parentFile)) {
-                await this.runSerializedFrontmatterWrite(parentFile, async () => {
-                    await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
-                        const existingKey = this.findFrontmatterKeyCaseInsensitive(fm, childKey);
-                        const existingRaw = existingKey ? fm[existingKey] : undefined;
-                        let children: string[] = [];
-                        if (Array.isArray(existingRaw)) {
-                            children = existingRaw.map(String);
-                        } else if (typeof existingRaw === 'string' && existingRaw.trim()) {
-                            children = [existingRaw];
-                        }
-                        for (const file of files) {
-                            const childLink = buildParentLinkValue(this.plugin.app, file, parentFile.path, format);
-                            const linkLower = childLink.toLowerCase();
-                            if (!children.some((l) => l.toLowerCase() === linkLower)) {
-                                children.push(childLink);
-                            }
-                        }
-                        this.setFrontmatterValueCaseInsensitive(fm, childKey, children);
-                    });
+            if (this.plugin.settings.autoSaveFolderPath) {
+                await this.plugin.app.fileManager.processFrontMatter(file, (fm) => {
+                    this.setFrontmatterValueCaseInsensitive(fm as Record<string, any>, 'folderPath', file.parent?.path || '/');
                 });
             }
-            await this.ensureParentSelfLink(parentFile, parentKey, format);
-            const updatedOldParents: TFile[] = [];
-            for (const file of files) {
-                const previousParents = previousParentsByChild.get(file.path) || [];
-                for (const previousParent of previousParents) {
-                    if (previousParent.path === parentFile.path) continue;
-                    const changed = await this.removeChildFromParentReverseList(previousParent, file, childKey);
-                    if (changed) updatedOldParents.push(previousParent);
-                }
-            }
-            await this.tagParentsForLinkedChildren([parentFile]);
-            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(files, [parentKey]);
-            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange([parentFile], [childKey, parentKey]);
-            if (updatedOldParents.length > 0) {
-                const unique = Array.from(new Map(updatedOldParents.map((f) => [f.path, f])).values());
-                setTimeout(() => unique.forEach((file) => this.plugin.persistentMenuManager?.refreshMenusForFile(file)), 200);
-                this.notifyFilesChanged(unique);
-                void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(unique, [childKey]);
+        }
+        if (changedFiles.size > 0) {
+            const parentKey = this.parentLinkHandler.normalizeParentKey();
+            const affected = Array.from(changedFiles.values());
+            affected.push(parentFile);
+            setTimeout(() => affected.forEach((file) => this.plugin.persistentMenuManager?.refreshMenusForFile(file)), 200);
+            this.notifyFilesChanged(affected);
+            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(affected, [parentKey]);
+            if (parentFile.extension?.toLowerCase() === 'md') {
+                await this.plugin.subitemRelationshipSyncService.reconcileMarkdownParent(parentFile);
             }
         }
         return count;
     }
 
     async linkChildren(currentFile: TFile, childFiles: TFile[]): Promise<number> {
-        const parentKey = this.parentLinkHandler.normalizeParentKey();
-        const childKey = this.parentLinkHandler.normalizeChildKey();
-        const format = this.parentLinkHandler.normalizeParentLinkFormat();
-        const previousParentsByChild = new Map<string, TFile[]>();
-        for (const file of childFiles) {
-            const raw = this.plugin.app.metadataCache.getFileCache(file)?.frontmatter;
-            const key = raw ? this.findFrontmatterKeyCaseInsensitive(raw as Record<string, any>, parentKey) : null;
-            const parentValue = key && raw ? (raw as Record<string, any>)[key] : undefined;
-            previousParentsByChild.set(file.path, this.resolveLinkedFilesFromFrontmatterValue(parentValue, file.path));
-        }
-
-        const count = await this.applyToFiles(childFiles, (fm, file) => {
-            const parentLink = buildParentLinkValue(this.plugin.app, currentFile, file.path, format);
-            this.setFrontmatterValueCaseInsensitive(fm, parentKey, parentLink);
-            if (this.plugin.settings.autoSaveFolderPath) {
-                this.setFrontmatterValueCaseInsensitive(fm, 'folderPath', file.parent?.path || '/');
-            }
-        });
-        if (count > 0) {
-            // Write reverse childKey into currentFile listing child links
-            if (await this.canMutateFrontmatterSafely(currentFile)) {
-                await this.runSerializedFrontmatterWrite(currentFile, async () => {
-                    await this.plugin.app.fileManager.processFrontMatter(currentFile, (fm) => {
-                        const existingKey = this.findFrontmatterKeyCaseInsensitive(fm, childKey);
-                        const existingRaw = existingKey ? fm[existingKey] : undefined;
-                        let children: string[] = [];
-                        if (Array.isArray(existingRaw)) {
-                            children = existingRaw.map(String);
-                        } else if (typeof existingRaw === 'string' && existingRaw.trim()) {
-                            children = [existingRaw];
-                        }
-                        for (const file of childFiles) {
-                            const childLink = buildParentLinkValue(this.plugin.app, file, currentFile.path, format);
-                            const linkLower = childLink.toLowerCase();
-                            if (!children.some((l) => l.toLowerCase() === linkLower)) {
-                                children.push(childLink);
-                            }
-                        }
-                        this.setFrontmatterValueCaseInsensitive(fm, childKey, children);
-                    });
-                });
-            }
-            await this.ensureParentSelfLink(currentFile, parentKey, format);
-            const updatedOldParents: TFile[] = [];
-            for (const file of childFiles) {
-                const previousParents = previousParentsByChild.get(file.path) || [];
-                for (const previousParent of previousParents) {
-                    if (previousParent.path === currentFile.path) continue;
-                    const changed = await this.removeChildFromParentReverseList(previousParent, file, childKey);
-                    if (changed) updatedOldParents.push(previousParent);
-                }
-            }
-            await this.tagParentsForLinkedChildren([currentFile]);
-            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(childFiles, [parentKey]);
-            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange([currentFile], [childKey, parentKey]);
-            if (updatedOldParents.length > 0) {
-                const unique = Array.from(new Map(updatedOldParents.map((f) => [f.path, f])).values());
-                setTimeout(() => unique.forEach((file) => this.plugin.persistentMenuManager?.refreshMenusForFile(file)), 200);
-                this.notifyFilesChanged(unique);
-                void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(unique, [childKey]);
-            }
-        }
-        return count;
+        return this.linkToParent(childFiles, currentFile);
     }
 
     async reconcileParentChildLinksForParent(parentFile: TFile): Promise<number> {
-        if (!(parentFile instanceof TFile)) return 0;
-        if (parentFile.extension?.toLowerCase() !== 'md') return 0;
-
-        const parentKey = this.parentLinkHandler.normalizeParentKey();
-        const childKey = this.parentLinkHandler.normalizeChildKey();
-        const format = this.parentLinkHandler.normalizeParentLinkFormat();
-
-        const allMarkdownFiles = this.plugin.app.vault.getMarkdownFiles();
-        const parentListedChildren: TFile[] = (() => {
-            const parentFm = (this.plugin.app.metadataCache.getFileCache(parentFile)?.frontmatter || {}) as Record<string, any>;
-            const raw = this.findFrontmatterKeyCaseInsensitive(parentFm, childKey)
-                ? parentFm[this.findFrontmatterKeyCaseInsensitive(parentFm, childKey)!]
-                : undefined;
-            return this.resolveLinkedFilesFromFrontmatterValue(raw, parentFile.path);
-        })();
-
-        const childrenNeedingParentLink: TFile[] = [];
-        const validatedParentChildren = new Map<string, TFile>();
-
-        for (const child of parentListedChildren) {
-            if (child.path === parentFile.path) continue;
-            const childFm = (this.plugin.app.metadataCache.getFileCache(child)?.frontmatter || {}) as Record<string, any>;
-            const parentValueKey = this.findFrontmatterKeyCaseInsensitive(childFm, parentKey);
-            const parentRaw = parentValueKey ? childFm[parentValueKey] : undefined;
-            const childParents = this.resolveLinkedFilesFromFrontmatterValue(parentRaw, child.path);
-            const hasParent = childParents.some((candidate) => candidate.path === parentFile.path);
-
-            if (hasParent) {
-                validatedParentChildren.set(child.path, child);
-                continue;
-            }
-
-            // If a child is listed in parentOf but has no explicit parent, restore the missing childOf link.
-            if (childParents.length === 0) {
-                childrenNeedingParentLink.push(child);
-                validatedParentChildren.set(child.path, child);
-            }
+        const result = await this.plugin.subitemRelationshipSyncService.reconcileMarkdownParent(parentFile);
+        const touched = [parentFile, ...result.touchedChildren];
+        if (touched.length > 0) {
+            const parentKey = this.parentLinkHandler.normalizeParentKey();
+            setTimeout(() => touched.forEach((file) => this.plugin.persistentMenuManager?.refreshMenusForFile(file)), 200);
+            this.notifyFilesChanged(touched);
+            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(touched, [parentKey]);
         }
-
-        let changes = 0;
-        if (childrenNeedingParentLink.length > 0) {
-            const updated = await this.applyToFiles(childrenNeedingParentLink, (fm, file) => {
-                const parentLink = buildParentLinkValue(this.plugin.app, parentFile, file.path, format);
-                this.setFrontmatterValueCaseInsensitive(fm, parentKey, parentLink);
-                if (this.plugin.settings.autoSaveFolderPath) {
-                    this.setFrontmatterValueCaseInsensitive(fm, 'folderPath', file.parent?.path || '/');
-                }
-            });
-            changes += updated;
-        }
-
-        // Ensure reverse list includes all children that explicitly link to this parent.
-        for (const candidate of allMarkdownFiles) {
-            if (candidate.path === parentFile.path) continue;
-            const fm = (this.plugin.app.metadataCache.getFileCache(candidate)?.frontmatter || {}) as Record<string, any>;
-            const parentValueKey = this.findFrontmatterKeyCaseInsensitive(fm, parentKey);
-            const parentRaw = parentValueKey ? fm[parentValueKey] : undefined;
-            const parents = this.resolveLinkedFilesFromFrontmatterValue(parentRaw, candidate.path);
-            if (parents.some((entry) => entry.path === parentFile.path)) {
-                validatedParentChildren.set(candidate.path, candidate);
-            }
-        }
-
-        const finalChildren = Array.from(validatedParentChildren.values());
-        if (await this.canMutateFrontmatterSafely(parentFile)) {
-            let parentChanged = false;
-            await this.runSerializedFrontmatterWrite(parentFile, async () => {
-                await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
-                    const existingKey = this.findFrontmatterKeyCaseInsensitive(fm, childKey);
-                    const existingRaw = existingKey ? fm[existingKey] : undefined;
-                    const existingChildren = this.resolveLinkedFilesFromFrontmatterValue(existingRaw, parentFile.path);
-                    const existingSet = new Set(existingChildren.map((child) => child.path));
-                    const finalSet = new Set(finalChildren.map((child) => child.path));
-
-                    let equivalent = existingSet.size === finalSet.size;
-                    if (equivalent) {
-                        for (const path of existingSet.values()) {
-                            if (!finalSet.has(path)) {
-                                equivalent = false;
-                                break;
-                            }
-                        }
-                    }
-                    if (equivalent) return;
-
-                    const childLinks = finalChildren.map((child) =>
-                        buildParentLinkValue(this.plugin.app, child, parentFile.path, format),
-                    );
-                    if (childLinks.length > 0) {
-                        this.setFrontmatterValueCaseInsensitive(fm, childKey, childLinks);
-                    } else {
-                        this.deleteFrontmatterValueCaseInsensitive(fm, childKey);
-                    }
-                    parentChanged = true;
-                });
-            });
-
-            if (parentChanged) {
-                changes += 1;
-                setTimeout(() => this.plugin.persistentMenuManager?.refreshMenusForFile(parentFile), 200);
-                this.notifyFilesChanged([parentFile]);
-                void this.plugin.viewModeManager?.handlePotentialFrontmatterChange([parentFile], [childKey]);
-            }
-        }
-
-        const selfLinkChanged = await this.ensureParentSelfLink(parentFile, parentKey, format);
-        if (selfLinkChanged) {
-            changes += 1;
-            setTimeout(() => this.plugin.persistentMenuManager?.refreshMenusForFile(parentFile), 200);
-            this.notifyFilesChanged([parentFile]);
-            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange([parentFile], [parentKey]);
-        }
-
-        if (changes > 0) {
-            const uniqueParents = Array.from(new Map([[parentFile.path, parentFile]]).values());
-            await this.tagParentsForLinkedChildren(uniqueParents);
-        }
-
-        return changes;
+        return result.addedParents + result.removedParents;
     }
 
     async ensureParentSelfLinkForParent(parentFile: TFile): Promise<boolean> {
@@ -1938,76 +1731,18 @@ export class BulkEditService {
      * - Removes childFile from the `parentOf` array in parentFile's frontmatter
      */
     async unlinkFromParent(childFile: TFile, parentFile: TFile): Promise<void> {
-        const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
-        const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
-        const changedFiles: TFile[] = [];
-
-        if (await this.canMutateFrontmatterSafely(childFile)) {
-            let childChanged = false;
-            await this.runSerializedFrontmatterWrite(childFile, async () => {
-                await this.plugin.app.fileManager.processFrontMatter(childFile, (fm) => {
-                    const key = Object.keys(fm).find((k) => k.toLowerCase() === parentKey.toLowerCase());
-                    if (!key) return;
-                    const raw = fm[key];
-                    const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
-                    const filtered = arr.filter((v: any) => !linkValueMatchesFile(this.plugin.app, v, childFile.path, parentFile));
-                    if (filtered.length === arr.length) return;
-                    childChanged = true;
-                    if (filtered.length === 0) {
-                        delete fm[key];
-                    } else if (filtered.length === 1) {
-                        fm[key] = filtered[0];
-                    } else {
-                        fm[key] = filtered;
-                    }
-                });
-            });
-            if (childChanged) {
-                changedFiles.push(childFile);
-            }
-        }
-
-        if (await this.canMutateFrontmatterSafely(parentFile)) {
-            let parentChanged = false;
-            await this.runSerializedFrontmatterWrite(parentFile, async () => {
-                await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
-                    const key = Object.keys(fm).find((k) => k.toLowerCase() === childKey.toLowerCase());
-                    if (!key) return;
-                    const raw = fm[key];
-                    const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
-                    const filtered = arr.filter((v: any) => !linkValueMatchesFile(this.plugin.app, v, parentFile.path, childFile));
-                    if (filtered.length === arr.length) return;
-                    parentChanged = true;
-                    if (filtered.length === 0) {
-                        delete fm[key];
-                    } else if (filtered.length === 1) {
-                        fm[key] = filtered[0];
-                    } else {
-                        fm[key] = filtered;
-                    }
-                });
-            });
-            if (parentChanged) {
-                changedFiles.push(parentFile);
-            }
-        }
-
-        if (changedFiles.length > 0) {
-            const unique = Array.from(new Map(changedFiles.map((file) => [file.path, file])).values());
-            setTimeout(() => unique.forEach((file) => this.plugin.persistentMenuManager?.refreshMenusForFile(file)), 200);
-            this.notifyFilesChanged(unique);
-            void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(unique, [parentKey, childKey]);
-        }
+        const result = await this.plugin.subitemRelationshipSyncService.unlinkChildFromParent(childFile, parentFile);
+        const changedFiles = [result.childChanged ? childFile : null, result.parentChanged ? parentFile : null].filter((file): file is TFile => file instanceof TFile);
+        if (changedFiles.length === 0) return;
+        const parentKey = this.parentLinkHandler.normalizeParentKey();
+        setTimeout(() => changedFiles.forEach((file) => this.plugin.persistentMenuManager?.refreshMenusForFile(file)), 200);
+        this.notifyFilesChanged(changedFiles);
+        void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(changedFiles, [parentKey]);
     }
 
     async unlinkFromAllParents(childFile: TFile): Promise<number> {
         const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
-        const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
-        const cache = this.plugin.app.metadataCache.getFileCache(childFile);
-        const fm = (cache?.frontmatter || {}) as Record<string, any>;
-        const parentKeyMatch = this.findFrontmatterKeyCaseInsensitive(fm, parentKey);
-        const parentRaw = parentKeyMatch ? fm[parentKeyMatch] : undefined;
-        const parents = this.resolveLinkedFilesFromFrontmatterValue(parentRaw, childFile.path);
+        const parents = this.plugin.parentLinkResolutionService.getParentsForChild(childFile).map((entry) => entry.file);
         if (!parents.length) {
             return 0;
         }
@@ -2015,7 +1750,7 @@ export class BulkEditService {
         for (const parent of parents) {
             await this.unlinkFromParent(childFile, parent);
         }
-        void this.plugin.viewModeManager?.handlePotentialFrontmatterChange([childFile], [parentKey, childKey]);
+        void this.plugin.viewModeManager?.handlePotentialFrontmatterChange([childFile], [parentKey]);
         return parents.length;
     }
 
@@ -2044,7 +1779,6 @@ export class BulkEditService {
      */
     async cleanupLinksForDeletedFile(deletedPath: string, deletedBasename: string): Promise<void> {
         const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
-        const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
         const attachmentsKey = 'attachments';
 
         const isMatch = (linkValue: any): boolean => {
@@ -2058,51 +1792,67 @@ export class BulkEditService {
         };
 
         const files = this.plugin.app.vault.getMarkdownFiles();
+        const touchedFiles: TFile[] = [];
         for (const file of files) {
             const cache = this.plugin.app.metadataCache.getFileCache(file);
             const fm = cache?.frontmatter;
-            if (!fm) continue;
+            const hasPk = !!fm && Object.keys(fm).some(k => k.toLowerCase() === parentKey.toLowerCase());
+            const hasAk = !!fm && Object.keys(fm).some(k => k.toLowerCase() === attachmentsKey.toLowerCase());
+            let frontmatterChanged = false;
 
-            const hasPk = Object.keys(fm).some(k => k.toLowerCase() === parentKey.toLowerCase());
-            const hasCk = Object.keys(fm).some(k => k.toLowerCase() === childKey.toLowerCase());
-            const hasAk = Object.keys(fm).some(k => k.toLowerCase() === attachmentsKey.toLowerCase());
-            if (!hasPk && !hasCk && !hasAk) continue;
-
-            try {
-                await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
-                    // Clean childOf (single parent ref)
-                    const pk = Object.keys(frontmatter).find(k => k.toLowerCase() === parentKey.toLowerCase());
-                    if (pk && isMatch(frontmatter[pk])) {
-                        delete frontmatter[pk];
-                    }
-
-                    // Clean parentOf array
-                    const ck = Object.keys(frontmatter).find(k => k.toLowerCase() === childKey.toLowerCase());
-                    if (ck) {
-                        const raw = frontmatter[ck];
-                        const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
-                        const filtered = arr.filter(v => !isMatch(v));
-                        if (filtered.length !== arr.length) {
-                            if (filtered.length === 0) delete frontmatter[ck];
-                            else frontmatter[ck] = filtered;
+            if (hasPk || hasAk) {
+                try {
+                    await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
+                        // Clean childOf (single parent ref)
+                        const pk = Object.keys(frontmatter).find(k => k.toLowerCase() === parentKey.toLowerCase());
+                        if (pk && isMatch(frontmatter[pk])) {
+                            delete frontmatter[pk];
+                            frontmatterChanged = true;
                         }
-                    }
 
-                    // Clean attachments array
-                    const ak = Object.keys(frontmatter).find(k => k.toLowerCase() === attachmentsKey.toLowerCase());
-                    if (ak) {
-                        const raw = frontmatter[ak];
-                        const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
-                        const filtered = arr.filter(v => !isMatch(v));
-                        if (filtered.length !== arr.length) {
-                            if (filtered.length === 0) delete frontmatter[ak];
-                            else frontmatter[ak] = filtered;
+                        // Clean attachments array
+                        const ak = Object.keys(frontmatter).find(k => k.toLowerCase() === attachmentsKey.toLowerCase());
+                        if (ak) {
+                            const raw = frontmatter[ak];
+                            const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
+                            const filtered = arr.filter(v => !isMatch(v));
+                            if (filtered.length !== arr.length) {
+                                frontmatterChanged = true;
+                                if (filtered.length === 0) delete frontmatter[ak];
+                                else frontmatter[ak] = filtered;
+                            }
                         }
-                    }
-                });
-            } catch (err) {
-                logger.warn(`[TPS GCM] cleanupLinksForDeletedFile: failed to clean ${file.path}:`, err);
+                    });
+                } catch (err) {
+                    logger.warn(`[TPS GCM] cleanupLinksForDeletedFile: failed to clean frontmatter for ${file.path}:`, err);
+                }
             }
+
+            let bodyChanged = false;
+            try {
+                const raw = await this.plugin.app.vault.cachedRead(file);
+                const lines = raw.split('\n');
+                const filtered = lines.filter((line) => {
+                    const parsed = this.plugin.bodySubitemLinkService.parseLine(line);
+                    if (!parsed) return true;
+                    return !isMatch(parsed.linkTarget) && !isMatch(parsed.wikilink);
+                });
+                if (filtered.length !== lines.length) {
+                    bodyChanged = true;
+                    await this.plugin.app.vault.modify(file, filtered.join('\n'));
+                }
+            } catch (err) {
+                logger.warn(`[TPS GCM] cleanupLinksForDeletedFile: failed to clean body links for ${file.path}:`, err);
+            }
+
+            if (frontmatterChanged || bodyChanged) {
+                touchedFiles.push(file);
+            }
+        }
+
+        if (touchedFiles.length > 0) {
+            setTimeout(() => touchedFiles.forEach((file) => this.plugin.persistentMenuManager?.refreshMenusForFile(file)), 200);
+            this.notifyFilesChanged(touchedFiles);
         }
     }
 }

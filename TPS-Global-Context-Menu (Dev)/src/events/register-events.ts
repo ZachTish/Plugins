@@ -1,6 +1,10 @@
-import { TFile, Platform, debounce } from 'obsidian';
+import { TFile, Platform, debounce, MarkdownView, WorkspaceLeaf } from 'obsidian';
 import { resolveLinkValueToFile } from '../handlers/parent-link-format';
 import type TPSGlobalContextMenuPlugin from '../main';
+import { ViewModeService } from '../services/view-mode-service';
+import { RemoveHiddenSubitemsModal } from '../modals/remove-hidden-subitems-modal';
+import { checkAndPromptForUnresolvedSubitems } from '../services/unresolved-subitem-modal';
+import type { BodySubitemLink } from '../services/subitem-types';
 
 /**
  * Registers all workspace and vault event listeners on the given plugin instance.
@@ -45,6 +49,37 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
 
     const ensureMenus = plugin.persistentMenuManager.ensureMenus.bind(plugin.persistentMenuManager);
     const throttledEnsureMenus = debounce(ensureMenus, 500, false);
+    const pendingSubitemTimers = new Map<string, number>();
+
+    // Unified subitem refresh function to consolidate multiple triggers
+    const scheduleSubitemRefresh = (file: TFile | null, opts: { delay?: number } = {}) => {
+        if (!(file instanceof TFile) || file.extension !== 'md') return;
+        const path = file.path;
+        const delay = typeof opts.delay === 'number' ? opts.delay : 200;
+
+        // Clear existing timer for this file
+        const existing = pendingSubitemTimers.get(path);
+        if (existing !== undefined) window.clearTimeout(existing);
+
+        // Schedule unified refresh
+        const timer = window.setTimeout(() => {
+            pendingSubitemTimers.delete(path);
+            plugin.inlineTaskSubtaskService?.ensureForAllMarkdownViews();
+            plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
+            plugin.linkedSubitemCheckboxService?.refreshLivePreviewEditors();
+        }, Math.max(0, delay));
+        pendingSubitemTimers.set(path, timer);
+    };
+
+    const throttledEnsureInlineTaskControls = debounce(() => {
+        plugin.inlineTaskSubtaskService?.ensureForAllMarkdownViews();
+    }, 120, false);
+    const throttledEnsureLinkedSubitemCheckboxes = debounce(() => {
+        plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
+    }, 120, false);
+    const debouncedLiveMarkdownParentReconcile = debounce((file: TFile, raw: string) => {
+        void plugin.subitemRelationshipSyncService?.reconcileMarkdownParentText(file, raw);
+    }, 250, false);
     const pendingRefreshTimers = new Map<string, number>();
     const pendingLateRefreshTimers = new Map<string, number>();
 
@@ -54,33 +89,46 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
     ) => {
         if (!(file instanceof TFile) || file.extension !== 'md') return;
         const path = file.path;
-        const delayMs = typeof opts.delayMs === 'number' ? opts.delayMs : 120;
-        const lateDelayMs = typeof opts.lateDelayMs === 'number' ? opts.lateDelayMs : 520;
+        const delayMs = typeof opts.delayMs === 'number' ? opts.delayMs : 200;
         const rebuild = opts.rebuildInlineSubitems === true;
 
+        // Consolidate to a single refresh - clear both early and late timers
         const existing = pendingRefreshTimers.get(path);
         if (existing !== undefined) window.clearTimeout(existing);
+        const lateExisting = pendingLateRefreshTimers.get(path);
+        if (lateExisting !== undefined) window.clearTimeout(lateExisting);
+
         const timer = window.setTimeout(() => {
             pendingRefreshTimers.delete(path);
+            pendingLateRefreshTimers.delete(path);
             plugin.persistentMenuManager.refreshMenusForFile(file, true, { rebuildInlineSubitems: rebuild });
             throttledEnsureMenus();
         }, Math.max(0, delayMs));
         pendingRefreshTimers.set(path, timer);
-
-        const lateExisting = pendingLateRefreshTimers.get(path);
-        if (lateExisting !== undefined) window.clearTimeout(lateExisting);
-        const lateTimer = window.setTimeout(() => {
-            pendingLateRefreshTimers.delete(path);
-            plugin.persistentMenuManager.refreshMenusForFile(file, true, { rebuildInlineSubitems: rebuild });
-        }, Math.max(delayMs + 80, lateDelayMs));
-        pendingLateRefreshTimers.set(path, lateTimer);
     };
 
-    plugin.registerEvent(plugin.app.workspace.on('layout-change', throttledEnsureMenus));
+    plugin.registerEvent(plugin.app.workspace.on('layout-change', () => {
+        throttledEnsureMenus();
+        throttledEnsureInlineTaskControls();
+    }));
+
+    plugin.registerEvent(
+        plugin.app.workspace.on('editor-change', (editor, info) => {
+            const file = (info as any)?.file;
+            if (!(file instanceof TFile) || file.extension !== 'md') return;
+            const active = plugin.app.workspace.getActiveFile();
+            if (!(active instanceof TFile) || active.path !== file.path) return;
+            const raw = typeof (editor as any)?.getValue === 'function' ? (editor as any).getValue() : null;
+            if (typeof raw !== 'string') return;
+            debouncedLiveMarkdownParentReconcile(file, raw);
+        }),
+    );
 
     plugin.registerEvent(
         plugin.app.workspace.on('active-leaf-change', () => {
             throttledEnsureMenus();
+            throttledEnsureInlineTaskControls();
+            throttledEnsureLinkedSubitemCheckboxes();
             const activePath = plugin.app.workspace.getActiveFile()?.path || null;
             for (const path of Array.from((plugin as any).viewModeSuppressedPaths as Set<string>)) {
                 if (path !== activePath) {
@@ -95,12 +143,112 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         }),
     );
 
+    // Helper to check if a leaf is in live preview mode
+    const isLivePreviewMode = (leaf: WorkspaceLeaf | null): boolean => {
+        if (!leaf) return false;
+        const view = leaf.view;
+        if (!(view instanceof MarkdownView)) return false;
+        const state = view.getState();
+        // Live preview is mode: "source" with source: false (or undefined)
+        return state.mode === 'source' && state.source !== true;
+    };
+
+    // Helper to check for subitems matching hide rules and prompt user
+    const checkForHiddenSubitems = async (file: TFile) => {
+        if (!plugin.settings.subitems_IgnoreRules || plugin.settings.subitems_IgnoreRules.length === 0) return;
+        if (file.extension?.toLowerCase() !== 'md') return;
+
+        const bodyLinks = await plugin.bodySubitemLinkService.scanFile(file);
+        if (bodyLinks.length === 0) return;
+
+        const viewModeService = new ViewModeService();
+        const matchingLinks: BodySubitemLink[] = [];
+
+        for (const link of bodyLinks) {
+            if (!link.childFile) continue;
+            
+            const cache = plugin.app.metadataCache.getFileCache(link.childFile);
+            const fm = (cache?.frontmatter || {}) as Record<string, unknown>;
+            
+            // Build data object for condition evaluation
+            const data: Record<string, unknown> = {
+                ...fm,
+                path: link.childFile.path,
+                filePath: link.childFile.path,
+            };
+
+            // Check each rule
+            for (const rule of plugin.settings.subitems_IgnoreRules) {
+                const conditions = viewModeService.getRuleConditions(rule);
+                const matchType = viewModeService.normalizeMatch(rule.match);
+                
+                if (viewModeService.evaluateConditions(matchType, conditions, data)) {
+                    matchingLinks.push(link);
+                    break; // Don't add the same link multiple times
+                }
+            }
+        }
+
+        if (matchingLinks.length === 0) return;
+
+        // Show modal asking user if they want to remove the links
+        new RemoveHiddenSubitemsModal(
+            plugin.app,
+            matchingLinks,
+            async (linksToRemove: BodySubitemLink[]) => {
+                // Remove each matching link from the parent file
+                for (const link of linksToRemove) {
+                    if (link.childFile) {
+                        await plugin.subitemRelationshipSyncService.unlinkChildFromParent(link.childFile, file);
+                    }
+                }
+            }
+        ).open();
+    };
+
+    // Helper to insert blank line at beginning of file and position cursor
+    const insertBlankLineAtBeginning = async (file: TFile) => {
+        if (!plugin.settings.enableAutoInsertBlankLineOnOpen) return;
+        if (file.extension !== 'md') return;
+
+        // Get the active leaf
+        const leaf = plugin.app.workspace.activeLeaf;
+        if (!isLivePreviewMode(leaf)) return;
+
+        const view = leaf?.view as MarkdownView | undefined;
+        if (!view || !view.editor) return;
+
+        // Read the file content
+        const content = await plugin.app.vault.read(file);
+        const lines = content.split('\n');
+        
+        // Check if first line is not empty
+        if (lines.length > 0 && lines[0].trim() !== '') {
+            // Insert blank line at beginning
+            const newContent = '\n' + content;
+            await plugin.app.vault.modify(file, newContent);
+            
+            // Position cursor at line 0 (the new blank line)
+            // Use setTimeout to ensure the editor has updated
+            setTimeout(() => {
+                if (view.editor) {
+                    view.editor.setCursor({ line: 0, ch: 0 });
+                }
+            }, 50);
+        }
+    };
+
     plugin.registerEvent(
         plugin.app.workspace.on('file-open', (file) => {
             ensureMenus();
+
+            // Single unified subitem refresh call
+            scheduleSubitemRefresh(file, { delay: 150 });
+
             if (file && Platform.isMobile) {
                 setTimeout(() => {
                     plugin.persistentMenuManager.refreshMenusForFile(file);
+                    scheduleSubitemRefresh(file, { delay: 0 });
                 }, 500);
             }
             if (file && plugin.fileNamingService.shouldProcess(file, { bypassCreationGrace: true })) {
@@ -112,7 +260,22 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
             if (file instanceof TFile) {
                 plugin.taskCheckboxHandler.scheduleChecklistPropertyUpdate(file);
                 previousActiveFile = file;
-                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 40, lateDelayMs: 380 });
+                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 300 });
+
+                // ── Note-open reconciliation hooks ─────────────────────────────────
+                // 0. Repair broken parent body links from childOf backlinks before any
+                // other subitem reconciliation runs. This prevents transient broken
+                // lines like `- [ ] [[` from stripping childOf links on open.
+                void plugin.subitemRelationshipSyncService?.repairBrokenBodyLinksForParent(file);
+
+                // 1. Ensure missing subitem body links are inserted after frontmatter
+                void plugin.subitemRelationshipSyncService?.ensureBodyLinksForChild(file);
+
+                // 2. Check for unresolved/deleted subitem links and prompt user
+                // Run after a short delay to let the file fully load
+                setTimeout(() => {
+                    void checkAndPromptForUnresolvedSubitems(plugin, file);
+                }, 800);
             }
         }),
     );
@@ -189,20 +352,17 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         }
     }, 1500, false);
 
-    const debouncedActiveFileNormalization = debounce((file: TFile) => {
-        if (!(file instanceof TFile) || file.extension !== 'md') return;
-        const active = plugin.app.workspace.getActiveFile();
-        if (!active || active.path !== file.path) return;
-        void plugin.fileNamingService.processFileOnOpen(file, { bypassCreationGrace: true });
-    }, 700, false);
-
     plugin.registerEvent(
         plugin.app.metadataCache.on('changed', (file) => {
+            // Clear the title cache when metadata changes to prevent stale titles
+            if (file instanceof TFile) {
+                plugin.menuController.panelBuilder?.clearFileTitleCache(file.path);
+            }
             debouncedMenuRefresh(file);
             debouncedFilenameSync(file);
             if (file instanceof TFile) {
                 plugin.taskCheckboxHandler.scheduleChecklistPropertyUpdate(file);
-                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true });
+                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 300 });
                 debouncedCompletedDateSync(file);
             }
         }),
@@ -212,8 +372,12 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         plugin.app.vault.on('modify', (file) => {
             if (!(file instanceof TFile) || file.extension !== 'md') return;
             plugin.taskCheckboxHandler.scheduleChecklistPropertyUpdate(file);
-            scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 160, lateDelayMs: 700 });
-            debouncedActiveFileNormalization(file);
+            void plugin.subitemRelationshipSyncService?.repairBrokenBodyLinksForParent(file);
+            void plugin.subitemRelationshipSyncService?.reconcileMarkdownParent(file);
+            if (plugin.parentLinkResolutionService.getParentsForChild(file).length > 0) {
+                void plugin.linkedSubitemCheckboxService?.refreshReferencesForChild(file);
+            }
+            scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 400 });
         }),
     );
 
@@ -246,8 +410,10 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
     plugin.register(() => {
         for (const timer of pendingRefreshTimers.values()) window.clearTimeout(timer);
         for (const timer of pendingLateRefreshTimers.values()) window.clearTimeout(timer);
+        for (const timer of pendingSubitemTimers.values()) window.clearTimeout(timer);
         pendingRefreshTimers.clear();
         pendingLateRefreshTimers.clear();
+        pendingSubitemTimers.clear();
     });
 
     plugin.registerEvent(
@@ -271,4 +437,6 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
 
     // Initial menu setup
     ensureMenus();
+    plugin.inlineTaskSubtaskService?.ensureForAllMarkdownViews();
+    plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
 }

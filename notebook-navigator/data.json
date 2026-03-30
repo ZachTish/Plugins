@@ -18,7 +18,7 @@
       ],
       "hiddenFileProperties": [],
       "navigationBanner": null,
-      "periodicNotesFolder": "Markdown/Notes",
+      "periodicNotesFolder": "",
       "shortcuts": [
         {
           "type": "note",
@@ -252,6 +252,7 @@
   "showTagIcons": true,
   "showAllTagsFolder": true,
   "showUntagged": true,
+  "scopeTagsToCurrentContext": false,
   "tagSortOrder": "frequency-desc",
   "inheritTagColors": true,
   "keepEmptyTagsProperty": true,
@@ -260,6 +261,7 @@
   "inheritPropertyColors": true,
   "propertySortOrder": "frequency-desc",
   "showAllPropertiesFolder": true,
+  "scopePropertiesToCurrentContext": false,
   "defaultListMode": "compact",
   "includeDescendantNotes": true,
   "defaultFolderSort": "property-asc",
@@ -336,6 +338,7 @@
   "calendarConfirmBeforeCreate": true,
   "calendarLocale": "system-default",
   "calendarWeekendDays": "sat-sun",
+  "calendarMonthHeadingFormat": "full",
   "calendarHighlightToday": true,
   "calendarShowFeatureImage": false,
   "calendarMonthHighlights": {},
@@ -344,13 +347,13 @@
   "calendarShowYearCalendar": true,
   "calendarLeftPlacement": "navigation",
   "calendarWeeksToShow": 1,
-  "calendarIntegrationMode": "notebook-navigator",
-  "calendarCustomFilePattern": "dddd, MMMM Do YYYY",
-  "calendarCustomWeekPattern": "gggg/MMM/[W]ww",
+  "calendarIntegrationMode": "daily-notes",
+  "calendarCustomFilePattern": "YYYY-MM-DD",
+  "calendarCustomWeekPattern": "gggg/[W]ww",
   "calendarCustomMonthPattern": "YYYY/YYYYMM",
   "calendarCustomQuarterPattern": "YYYY/[Q]Q",
   "calendarCustomYearPattern": "YYYY",
-  "calendarCustomFileTemplate": "Daily Note Template.md",
+  "calendarCustomFileTemplate": null,
   "calendarCustomWeekTemplate": null,
   "calendarCustomMonthTemplate": null,
   "calendarCustomQuarterTemplate": null,
@@ -513,6 +516,146 @@
       "folder": true,
       "tag": false,
       "property": false
+    },
+    "Markdown/Action Items/Grocery List.base": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "Daily Note Template.md": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "Action Item Template.md": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "Note template.md": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "Area Task List.base": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "Project Task List.base": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "family.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "investment.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "Tags.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "financial.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "hide.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "hca.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "health.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "dailynote.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "exercise.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "home.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "template.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "tech.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "system.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "shopping.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "secondbrain.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "music.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "social.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "archive.canvas": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "Relative Calendar.base": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "CLAUDE.md": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "System Rules and definitions.md": {
+      "folder": true,
+      "tag": false,
+      "property": false
+    },
+    "Markdown/Notes/Notes.base": {
+      "folder": true,
+      "tag": false,
+      "property": false
     }
   },
   "fileIcons": {},
@@ -521,9 +664,10 @@
   "folderIcons": {
     "Archive": "archive",
     "Markdown": "folder-tree",
-    "Markdown/Notes": "folder-tree",
-    "Markdown/Action Items": "list-checks",
-    "Markdown/Other": "image"
+    "Markdown/Notes": "sticky-note",
+    "Markdown/Action Items": "check",
+    "lists": "list",
+    "Markdown/99 - Other": "image"
   },
   "folderColors": {},
   "folderBackgroundColors": {},
@@ -604,7 +748,7 @@
     "#404040",
     "#404040"
   ],
-  "lastShownVersion": "2.5.1",
+  "lastShownVersion": "2.5.4",
   "rootFolderOrder": [],
   "rootTagOrder": [],
   "rootPropertyOrder": []

@@ -9,24 +9,28 @@
     {
       "id": "calendar-3uvd24",
       "url": "https://outlook.office365.com/owa/calendar/2e15e2161947441a8fb3f105ed178d24@hcahealthcare.com/ac8d78540d254f618850bd4be65167126077521966535915206/calendar.ics",
-      "color": "#dd3927",
+      "color": "#a24439",
       "enabled": true,
       "autoCreateEnabled": true,
       "autoCreateTypeFolder": "Action Items",
       "autoCreateFolder": "Markdown/Action Items",
       "autoCreateTag": "hca",
-      "autoCreateTemplate": "Markdown/Action Items/_templates/Action Item Template.md"
+      "autoCreateTemplate": "Markdown/Action Items/_templates/Action Item Template.md",
+      "autoCreateMode": "note",
+      "autoCreateTaskListPath": "Markdown/Action Items/Hca-Outlook.md"
     },
     {
       "id": "calendar-1770138596600-4208",
       "url": "https://p127-caldav.icloud.com/published/2/MzQzMjU1NTQ1MzQzMjU1NVyiXzVmKCNeFyCHE3FxsECEnh2ZTVdam-CYq-eW271G81gzdLKTXcQa_7yv3k8KFBWzKHNj4gqZyoDA1DgeXeU",
-      "color": "#42c26f",
+      "color": "#477657",
       "enabled": true,
       "autoCreateEnabled": true,
       "autoCreateTypeFolder": "Action Items",
       "autoCreateFolder": "Markdown/Action Items",
       "autoCreateTag": "exercise",
-      "autoCreateTemplate": "Markdown/Action Items/_templates/Action Item Template.md"
+      "autoCreateTemplate": "Markdown/Action Items/_templates/Action Item Template.md",
+      "autoCreateMode": "note",
+      "autoCreateTaskListPath": "Markdown/Action Items/Workouts.md"
     }
   ],
   "eventIdKey": "externalEventId",
@@ -313,7 +317,7 @@
       "minutes": 240
     }
   ],
-  "companionStartupScanEnabled": true,
+  "companionStartupScanEnabled": false,
   "companionStartupDelayMs": 800,
   "companionUpstreamPropagation": true,
   "enableLogging": false,

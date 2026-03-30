@@ -1,4 +1,4 @@
-﻿/**
+/**
  * CSS styles for the plugin
  */
 export const PLUGIN_STYLES = `
@@ -16,6 +16,7 @@ export const PLUGIN_STYLES = `
         --tps-gcm-subitems-margin-bottom: 0px;
         --tps-gcm-daily-nav-scale: 1;
         --tps-gcm-daily-nav-rest-opacity: 0;
+        --tps-gcm-mobile-toolbar-offset: 0px;
       }
 
       .tps-daily-note-nav {
@@ -324,7 +325,7 @@ export const PLUGIN_STYLES = `
         
         position: fixed;
         /* Move up to clear Obsidian mobile toolbar (approx 50px) + status bar */
-        bottom: calc(var(--tps-auto-base-embed-bottom, var(--tps-gcm-live-bottom, 16px)) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) + 8px);
+        bottom: calc(max(var(--tps-auto-base-embed-bottom, var(--tps-gcm-live-bottom, 16px)), var(--tps-gcm-mobile-toolbar-offset, 0px)) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) + 8px);
         left: var(--tps-gcm-live-left);
         right: var(--tps-gcm-live-right);
         /* Respect Obsidian UI text scaling */
@@ -521,6 +522,515 @@ export const PLUGIN_STYLES = `
       
       .tps-gcm-tag-remove:hover {
         opacity: 1;
+      }
+
+      .tps-gcm-inline-subtask-btn {
+        border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+        background: color-mix(in srgb, var(--background-primary) 78%, var(--interactive-accent) 22%);
+        color: color-mix(in srgb, var(--text-normal) 75%, var(--interactive-accent));
+        cursor: pointer;
+        padding: 0;
+        width: 22px;
+        height: 22px;
+        min-width: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        border-radius: 999px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+        z-index: 9999;
+        position: fixed;
+        pointer-events: none;
+        backdrop-filter: blur(10px);
+        transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+        transform: translateY(0) scale(0.96);
+      }
+
+      .tps-gcm-inline-subtask-btn.is-visible {
+        opacity: 0.95;
+        pointer-events: auto;
+        transform: translateY(0) scale(1);
+      }
+
+      .tps-gcm-inline-subtask-btn:hover {
+        color: var(--interactive-accent);
+        opacity: 1;
+        border-color: color-mix(in srgb, var(--interactive-accent) 78%, transparent);
+        background: color-mix(in srgb, var(--background-primary) 62%, var(--interactive-accent) 38%);
+      }
+
+      .tps-gcm-linked-subitem-task .tps-gcm-linked-subitem-link,
+      .tps-gcm-linked-subitem-task .internal-link,
+      .tps-gcm-linked-subitem-task .cm-hmd-internal-link {
+        text-decoration: none;
+      }
+
+      li.tps-gcm-linked-subitem-task,
+      .task-list-item.tps-gcm-linked-subitem-task,
+      p.tps-gcm-linked-subitem-task,
+      .cm-line.tps-gcm-linked-subitem-task {
+        position: relative;
+        min-width: 0;
+        --tps-gcm-linked-subitem-gap: 6px;
+        --tps-gcm-linked-subitem-checkbox-gap: 8px;
+      }
+
+      .cm-line.tps-gcm-linked-subitem-task {
+        display: block !important;
+        border-radius: 0;
+        padding-left: var(--list-indent, 1.5em) !important;
+        border-left: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        outline: none !important;
+      }
+
+      .cm-line.tps-gcm-linked-subitem-task,
+      .cm-line.tps-gcm-linked-subitem-task.HyperMD-task-line,
+      .cm-line.tps-gcm-linked-subitem-task.cm-active,
+      .cm-line.tps-gcm-linked-subitem-task.cm-active.HyperMD-task-line {
+        background: transparent !important;
+        box-shadow: none !important;
+        border: 0 !important;
+        outline: none !important;
+      }
+
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task.HyperMD-task-line,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task.cm-active,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task.cm-active.HyperMD-task-line {
+        display: block !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        padding-right: 0 !important;
+        min-height: 0 !important;
+        line-height: inherit !important;
+      }
+
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task::before,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task::after {
+        content: none !important;
+        display: none !important;
+        background: transparent !important;
+        border: 0 !important;
+        box-shadow: none !important;
+      }
+
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task > * {
+        align-self: center !important;
+      }
+
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task *,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task *::before,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task *::after {
+        box-shadow: none !important;
+      }
+
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task input.task-list-item-checkbox,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task .task-list-item-checkbox {
+        margin: 0 var(--tps-gcm-linked-subitem-checkbox-gap) 0 0 !important;
+        transform: translateX(var(--list-indent, 1.5em));
+        vertical-align: middle !important;
+      }
+
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task .tps-gcm-linked-subitem-cm-widget,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task .tps-gcm-linked-subitem-row-content.is-cm-widget {
+        margin-left: var(--list-indent, 1.5em) !important;
+      }
+
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task .cm-formatting-task {
+        margin: 0 !important;
+      }
+
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task .cm-formatting-list,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task .cm-formatting-task,
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task [class*="cm-formatting-list"],
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task [class*="cm-formatting-task"],
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task .cm-indent {
+        display: inline-block !important;
+        width: 0 !important;
+        min-width: 0 !important;
+        overflow: hidden !important;
+        opacity: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      .tps-gcm-linked-subitem-row,
+      .tps-gcm-linked-subitem-row-content {
+        display: flex !important;
+        align-items: center;
+        gap: var(--tps-gcm-linked-subitem-gap);
+        flex-wrap: nowrap !important;
+        min-width: 0;
+        max-width: none;
+        flex: 0 1 auto;
+        white-space: nowrap;
+        width: auto !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        border: 0 !important;
+      }
+
+      .tps-gcm-linked-subitem-link {
+        display: inline-flex;
+        align-items: center;
+        flex-shrink: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 300px;
+        min-width: 0;
+        cursor: pointer;
+      }
+
+      button.tps-gcm-linked-subitem-link {
+        appearance: none;
+        background: none;
+        border: 0;
+        padding: 0;
+        margin: 0;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+      }
+
+      .tps-gcm-linked-subitem-link-widget {
+        margin-left: 0;
+      }
+
+      .tps-gcm-linked-subitem-props-widget {
+        margin-left: 6px;
+      }
+
+      li.tps-gcm-linked-subitem-task > p.tps-gcm-linked-subitem-row,
+      li.tps-gcm-linked-subitem-task > div.tps-gcm-linked-subitem-row,
+      li.tps-gcm-linked-subitem-task > span.tps-gcm-linked-subitem-row-content {
+        display: flex !important;
+        margin: 0;
+        flex: 1 1 auto;
+        min-width: 0;
+        width: auto;
+      }
+
+      .tps-gcm-linked-subitem-checkbox {
+        border: 1px solid var(--background-modifier-border);
+        background: var(--background-primary);
+        color: var(--text-muted);
+        width: 18px;
+        height: 18px;
+        min-width: 18px;
+        border-radius: 5px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+        margin-right: 8px;
+        vertical-align: middle;
+        transition: opacity 0.1s ease, background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+        flex-shrink: 0;
+      }
+
+
+      .tps-gcm-linked-subitem-checkbox.is-cm-widget {
+        margin-right: 10px;
+      }
+
+      .tps-gcm-linked-subitem-checkbox.is-bullet {
+        border-color: transparent;
+        background: transparent;
+      }
+
+      /* Hide native checkbox only when explicitly marked hidden in Live Preview */
+      .cm-line input.task-list-item-checkbox.tps-gcm-linked-subitem-checkbox-hidden,
+      .cm-line .task-list-item-checkbox.tps-gcm-linked-subitem-checkbox-hidden,
+      .cm-line .cm-formatting-task.tps-gcm-linked-subitem-checkbox-hidden {
+        opacity: 0 !important;
+        width: 0 !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        position: absolute !important;
+      }
+
+      /* Hide native links in reading mode when replaced by custom row */
+      .tps-gcm-hidden-native-link {
+        display: none !important;
+        font-size: 0 !important;
+        width: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+      }
+
+      /* Row content container - unified structure for both modes */
+      .tps-gcm-linked-subitem-row-content {
+        display: inline-flex !important;
+        align-items: center;
+        gap: var(--tps-gcm-linked-subitem-gap);
+        flex-wrap: nowrap;
+        vertical-align: baseline;
+      }
+
+      .tps-gcm-linked-subitem-row-content.is-cm-widget,
+      .tps-gcm-linked-subitem-cm-widget {
+        display: inline-flex !important;
+        align-items: center;
+        gap: var(--tps-gcm-linked-subitem-gap);
+        flex-wrap: nowrap;
+        vertical-align: baseline;
+        width: auto !important;
+        max-width: none !important;
+        flex: 0 0 auto !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        border: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+      }
+
+      /* Link text styling */
+      .tps-gcm-linked-subitem-link {
+        font-weight: 600;
+        color: var(--text-normal);
+        cursor: pointer;
+      }
+
+      .tps-gcm-linked-subitem-link:hover {
+        color: var(--text-accent);
+      }
+
+      /* Pills container */
+      .tps-gcm-linked-subitem-pills {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        flex-wrap: nowrap;
+        margin-left: 4px;
+      }
+
+      .task-list-item.tps-gcm-linked-subitem-task {
+        list-style: none;
+        padding-left: 0;
+      }
+
+      .task-list-item.tps-gcm-linked-subitem-task::marker {
+        color: transparent;
+      }
+
+      .tps-gcm-linked-subitem-checkbox {
+        margin-right: 4px;
+        cursor: pointer;
+      }
+
+      .tps-gcm-linked-subitem-pill {
+        display: inline-block;
+        border: 1px solid var(--background-modifier-border);
+        border-radius: 999px;
+        background: var(--background-modifier-form-field);
+        color: var(--text-muted);
+        font-size: 0.85em;
+        font-weight: 500;
+        padding: 1px 4px;
+        margin-left: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .tps-gcm-linked-subitem-pill:hover {
+        border-color: var(--interactive-accent);
+        background: color-mix(in srgb, var(--background-modifier-hover), var(--background-primary));
+      }
+
+      .tps-gcm-linked-subitem-pill--status {
+        color: var(--text-muted);
+      }
+
+      .tps-gcm-linked-subitem-pill--priority {
+        color: var(--text-muted);
+      }
+
+      .tps-gcm-linked-subitem-pill--scheduled {
+        color: var(--text-muted);
+      }
+
+      .tps-gcm-linked-subitem-pill--tag {
+        color: var(--text-accent);
+      }
+
+      .tps-gcm-linked-subitem-pill--folder {
+        color: var(--text-muted);
+      }
+
+      .tps-gcm-linked-subitem-pill--action {
+        color: var(--text-muted);
+      }
+
+      /* CodeMirror widget context - ensure pills are visible in live preview */
+      .cm-widget .tps-gcm-linked-subitem-pill,
+      .cm-content .tps-gcm-linked-subitem-pill,
+      .cm-line .tps-gcm-linked-subitem-pill {
+        display: inline-block;
+        opacity: 1;
+        visibility: visible;
+      }
+
+      /* Wikilink mark decoration in live preview - style without replacing */
+      .cm-line .tps-gcm-linked-subitem-wikilink {
+        font-weight: 600;
+      }
+
+      /* CodeMirror widget wrapper for pills */
+      .tps-gcm-linked-subitem-cm-widget {
+        display: inline-flex;
+        align-items: center;
+        flex-wrap: nowrap;
+        gap: var(--tps-gcm-linked-subitem-gap);
+        vertical-align: baseline;
+        max-width: none;
+        overflow: visible;
+        background: transparent !important;
+        box-shadow: none !important;
+        border: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+      }
+
+      .tps-gcm-linked-subitem-caret-spacer {
+        display: inline-block;
+        width: 0.5ch;
+        min-width: 0.5ch;
+        opacity: 0;
+        pointer-events: none;
+        user-select: none;
+        white-space: pre;
+      }
+
+      /* Ensure widget pills inherit proper styling */
+      .tps-gcm-linked-subitem-cm-widget .tps-gcm-linked-subitem-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .markdown-source-view.mod-cm6.is-live-preview .cm-line.tps-gcm-linked-subitem-task .tps-gcm-linked-subitem-pill {
+        background: var(--background-modifier-form-field) !important;
+        border-color: var(--background-modifier-border) !important;
+      }
+
+      /* Reading mode should mirror the clean inline live-preview row, not a full-width card. */
+      .markdown-reading-view li.task-list-item.tps-gcm-linked-subitem-task,
+      .markdown-preview-view li.task-list-item.tps-gcm-linked-subitem-task,
+      .markdown-reading-view li.tps-gcm-linked-subitem-task,
+      .markdown-preview-view li.tps-gcm-linked-subitem-task {
+        background: transparent !important;
+        box-shadow: none !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        line-height: inherit !important;
+      }
+
+      .markdown-reading-view li.task-list-item.tps-gcm-linked-subitem-task > p,
+      .markdown-preview-view li.task-list-item.tps-gcm-linked-subitem-task > p,
+      .markdown-reading-view li.tps-gcm-linked-subitem-task > p,
+      .markdown-preview-view li.tps-gcm-linked-subitem-task > p {
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: var(--tps-gcm-linked-subitem-gap) !important;
+        margin: 0 !important;
+        min-width: 0 !important;
+        width: auto !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        border: 0 !important;
+        line-height: inherit !important;
+      }
+
+      .markdown-reading-view li.task-list-item.tps-gcm-linked-subitem-task > input.task-list-item-checkbox,
+      .markdown-preview-view li.task-list-item.tps-gcm-linked-subitem-task > input.task-list-item-checkbox,
+      .markdown-reading-view li.tps-gcm-linked-subitem-task > input.task-list-item-checkbox,
+      .markdown-preview-view li.tps-gcm-linked-subitem-task > input.task-list-item-checkbox {
+        margin: 0 var(--tps-gcm-linked-subitem-checkbox-gap) 0 0 !important;
+        align-self: center !important;
+      }
+
+      .markdown-reading-view li.tps-gcm-linked-subitem-task .tps-gcm-linked-subitem-row-content.is-reading-mode,
+      .markdown-preview-view li.tps-gcm-linked-subitem-task .tps-gcm-linked-subitem-row-content.is-reading-mode,
+      .markdown-reading-view li.task-list-item.tps-gcm-linked-subitem-task .tps-gcm-linked-subitem-row-content.is-reading-mode,
+      .markdown-preview-view li.task-list-item.tps-gcm-linked-subitem-task .tps-gcm-linked-subitem-row-content.is-reading-mode {
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: var(--tps-gcm-linked-subitem-gap) !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        border: 0 !important;
+      }
+
+      body[data-tps-gcm-linked-subitem-style="soft-link"] li.tps-gcm-linked-subitem-task,
+      body[data-tps-gcm-linked-subitem-style="soft-link"] .task-list-item.tps-gcm-linked-subitem-task,
+      body[data-tps-gcm-linked-subitem-style="soft-link"] p.tps-gcm-linked-subitem-task {
+        border-radius: 0;
+        transition: color 0.15s ease;
+      }
+
+      body[data-tps-gcm-linked-subitem-style="soft-link"] li.tps-gcm-linked-subitem-task.is-open,
+      body[data-tps-gcm-linked-subitem-style="soft-link"] .task-list-item.tps-gcm-linked-subitem-task.is-open,
+      body[data-tps-gcm-linked-subitem-style="soft-link"] p.tps-gcm-linked-subitem-task.is-open {
+        background: transparent !important;
+      }
+
+      /* Green complete-state background removed - styling now driven by status mapping only */
+      body[data-tps-gcm-linked-subitem-style="soft-link"] li.tps-gcm-linked-subitem-task.is-complete,
+      body[data-tps-gcm-linked-subitem-style="soft-link"] .task-list-item.tps-gcm-linked-subitem-task.is-complete,
+      body[data-tps-gcm-linked-subitem-style="soft-link"] p.tps-gcm-linked-subitem-task.is-complete {
+        /* Default bullet styling for complete items - no special background */
+      }
+
+      body[data-tps-gcm-linked-subitem-style="soft-link"] li.tps-gcm-linked-subitem-task.is-canceled,
+      body[data-tps-gcm-linked-subitem-style="soft-link"] .task-list-item.tps-gcm-linked-subitem-task.is-canceled,
+      body[data-tps-gcm-linked-subitem-style="soft-link"] p.tps-gcm-linked-subitem-task.is-canceled {
+        opacity: 0.84;
+      }
+
+      body[data-tps-gcm-linked-subitem-style="soft-link"] .tps-gcm-linked-subitem-link {
+        font-weight: 600;
+      }
+
+      body[data-tps-gcm-linked-subitem-style="accent"] li.tps-gcm-linked-subitem-task,
+      body[data-tps-gcm-linked-subitem-style="accent"] .task-list-item.tps-gcm-linked-subitem-task,
+      body[data-tps-gcm-linked-subitem-style="accent"] p.tps-gcm-linked-subitem-task {
+        border-left: 3px solid var(--interactive-accent);
+        padding-left: 6px;
+        border-radius: 6px;
+      }
+
+      body[data-tps-gcm-linked-subitem-style="accent"] li.tps-gcm-linked-subitem-task.is-complete,
+      body[data-tps-gcm-linked-subitem-style="accent"] .task-list-item.tps-gcm-linked-subitem-task.is-complete,
+      body[data-tps-gcm-linked-subitem-style="accent"] p.tps-gcm-linked-subitem-task.is-complete {
+        border-left-color: var(--color-green);
+      }
+
+      body[data-tps-gcm-linked-subitem-style="accent"] li.tps-gcm-linked-subitem-task.is-canceled,
+      body[data-tps-gcm-linked-subitem-style="accent"] .task-list-item.tps-gcm-linked-subitem-task.is-canceled,
+      body[data-tps-gcm-linked-subitem-style="accent"] p.tps-gcm-linked-subitem-task.is-canceled {
+        border-left-color: var(--color-orange);
+        opacity: 0.82;
+      }
+
+      body[data-tps-gcm-linked-subitem-style="accent"] .tps-gcm-linked-subitem-link {
+        font-weight: 700;
+        letter-spacing: 0.01em;
       }
       
       .tps-gcm-tag-add {
@@ -1251,6 +1761,14 @@ export const PLUGIN_STYLES = `
         scrollbar-width: none;
       }
 
+      .tps-gcm-subitem-inline-strip {
+        flex: 0 1 auto;
+        width: auto;
+        max-width: 55%;
+        min-width: 0;
+        justify-content: flex-end;
+      }
+
       .tps-gcm-subitem-strip::-webkit-scrollbar {
         display: none;
       }
@@ -1322,6 +1840,7 @@ export const PLUGIN_STYLES = `
       .tps-gcm-subitem-title-line {
         display: flex;
         align-items: center;
+        gap: 8px;
         min-width: 0;
         width: 100%;
       }
@@ -1441,11 +1960,11 @@ export const PLUGIN_STYLES = `
       }
 
       .tps-gcm-subitem-pill--priority {
-        color: #f4cf61;
+        color: var(--color-yellow);
       }
 
       .tps-gcm-subitem-pill--scheduled {
-        color: #8fd3ff;
+        color: var(--color-blue);
       }
 
       .tps-gcm-subitem-children {
@@ -2539,50 +3058,6 @@ export const PLUGIN_STYLES = `
         background: var(--background-modifier-hover);
       }
 
-      /* ───── Backlinks Sidebar Panel ───── */
-
-      .tps-gcm-backlinks-container {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-        overflow: hidden;
-        font-size: var(--font-ui-small);
-      }
-
-      .tps-gcm-backlinks-header {
-        display: flex;
-        align-items: center;
-        padding: 4px 10px 3px;
-        flex: 0 0 auto;
-      }
-
-      .tps-gcm-backlinks-current-file {
-        font-size: 10px;
-        font-weight: 600;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color: var(--text-faint);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .tps-gcm-backlinks-body {
-        flex: 1 1 auto;
-        overflow-y: auto;
-        overflow-x: hidden;
-        padding: 6px 8px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-
-      .tps-gcm-backlinks-empty {
-        font-size: var(--font-ui-small);
-        color: var(--text-muted);
-        padding: 12px 4px;
-      }
-
       /* Direction sections */
       .tps-gcm-bl-direction {
         display: flex;
@@ -2889,52 +3364,6 @@ export const PLUGIN_STYLES = `
 
       .tps-gcm-bl-file-name:hover {
         color: var(--text-accent);
-      }
-
-      /* Pomodoro Timer */
-      .tps-gcm-pomodoro-chip {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        background: var(--background-modifier-success);
-        color: var(--text-on-accent);
-        min-width: 90px;
-        justify-content: space-between;
-      }
-      .tps-gcm-pomodoro-chip.is-work {
-        background: var(--color-red);
-        color: white;
-      }
-      .tps-gcm-pomodoro-chip.is-short-break,
-      .tps-gcm-pomodoro-chip.is-long-break {
-        background: var(--color-blue);
-        color: white;
-      }
-      .tps-gcm-pomodoro-value {
-        font-family: var(--font-monospace);
-        font-weight: 600;
-        font-size: 0.95em;
-        letter-spacing: 0.5px;
-      }
-      .tps-gcm-pomodoro-action {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: transparent;
-        border: none;
-        color: inherit;
-        padding: 2px;
-        cursor: pointer;
-        opacity: 0.8;
-        border-radius: 4px;
-      }
-      .tps-gcm-pomodoro-action:hover {
-        opacity: 1;
-        background: rgba(255, 255, 255, 0.2);
-      }
-      .tps-gcm-pomodoro-action svg {
-        width: 14px;
-        height: 14px;
       }
 
     `;

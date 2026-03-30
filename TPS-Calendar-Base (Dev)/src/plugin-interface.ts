@@ -8,5 +8,6 @@ export interface CalendarPluginBridge {
   getEffectiveExternalCalendars(): any[];
   getPriorityValues(): string[];
   getStatusValues(): string[];
+  saveSettings(): Promise<void>;
   settings: any;
 }

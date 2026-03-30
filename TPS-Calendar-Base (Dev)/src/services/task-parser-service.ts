@@ -18,6 +18,14 @@ export interface ParsedTaskItem {
     scheduledDate: Date | null;
     /** True when a scheduled time token (e.g. @@{12:15pm}) is present. */
     hasScheduledTime: boolean;
+    /** Parsed inline duration in minutes, or null. */
+    durationMinutes: number | null;
+    /** Inline external event identity for synced task-list events. */
+    externalEventId: string | null;
+    /** Inline calendar UID for synced task-list events. */
+    calendarUid: string | null;
+    /** Inline source URL for synced task-list events. */
+    calendarSourceUrl: string | null;
     /** Parsed value of the 🛫 start-date annotation, or null. */
     startDate: Date | null;
 }
@@ -59,8 +67,54 @@ function extractInlineDateProperty(text: string, ...keys: string[]): Date | null
         const key = String(match[1] ?? '').trim().toLowerCase();
         if (!keySet.has(key)) continue;
         const val = String(match[2] ?? '').trim();
-        const ymd = val.match(/(\d{4}-\d{2}-\d{2})/);
-        if (ymd?.[1]) return parseYMD(ymd[1]);
+        const dt = val.match(/(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+        if (dt?.[1]) {
+            const base = parseYMD(dt[1]);
+            if (!base) return null;
+            if (dt[2] != null && dt[3] != null) {
+                base.setHours(Number(dt[2]), Number(dt[3]), 0, 0);
+            }
+            return base;
+        }
+    }
+    return null;
+}
+
+function inlineDatePropertyHasTime(text: string, ...keys: string[]): boolean {
+    const keySet = new Set(keys.map(k => k.toLowerCase()));
+    INLINE_DATE_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = INLINE_DATE_RE.exec(text)) !== null) {
+        const key = String(match[1] ?? '').trim().toLowerCase();
+        if (!keySet.has(key)) continue;
+        const val = String(match[2] ?? '').trim();
+        if (/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(val)) return true;
+    }
+    return false;
+}
+
+function extractInlineNumberProperty(text: string, ...keys: string[]): number | null {
+    const keySet = new Set(keys.map(k => k.toLowerCase()));
+    INLINE_DATE_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = INLINE_DATE_RE.exec(text)) !== null) {
+        const key = String(match[1] ?? '').trim().toLowerCase();
+        if (!keySet.has(key)) continue;
+        const value = Number(String(match[2] ?? '').trim());
+        if (Number.isFinite(value) && value > 0) return value;
+    }
+    return null;
+}
+
+function extractInlineStringProperty(text: string, ...keys: string[]): string | null {
+    const keySet = new Set(keys.map(k => k.toLowerCase()));
+    INLINE_DATE_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = INLINE_DATE_RE.exec(text)) !== null) {
+        const key = String(match[1] ?? '').trim().toLowerCase();
+        if (!keySet.has(key)) continue;
+        const value = String(match[2] ?? '').trim();
+        if (value) return value;
     }
     return null;
 }
@@ -154,7 +208,8 @@ export function parseTasksFromContent(
             ?? extractKanbanScheduledDate(rawText)
             ?? extractInlineDateProperty(rawText, 'scheduled', 'scheduleddate', 'scheduled-date');
         const scheduledMinutes = extractKanbanTimeMinutes(rawText);
-        const hasScheduledTime = scheduledMinutes !== null;
+        const hasInlineScheduledTime = inlineDatePropertyHasTime(rawText, 'scheduled', 'scheduleddate', 'scheduled-date');
+        const hasScheduledTime = scheduledMinutes !== null || hasInlineScheduledTime;
         if (scheduledDate && scheduledMinutes !== null) {
             const h = Math.floor(scheduledMinutes / 60);
             const min = scheduledMinutes % 60;
@@ -171,6 +226,14 @@ export function parseTasksFromContent(
         const startDate =
             extractEmojiDate(rawText, START_RE)
             ?? extractInlineDateProperty(rawText, 'start', 'startdate', 'start-date');
+        const durationMinutes =
+            extractInlineNumberProperty(rawText, 'timeestimate', 'duration', 'durationminutes', 'time-estimate');
+        const externalEventId =
+            extractInlineStringProperty(rawText, 'externaleventid', 'external-event-id');
+        const calendarUid =
+            extractInlineStringProperty(rawText, 'tpscalendaruid', 'calendaruid', 'calendar-uid');
+        const calendarSourceUrl =
+            extractInlineStringProperty(rawText, 'tpscalendarsourceurl', 'calendarsourceurl', 'calendar-source-url');
 
         // Only keep tasks that have at least one recognised date annotation.
         if (!dueDate && !scheduledDate && !startDate) continue;
@@ -183,6 +246,10 @@ export function parseTasksFromContent(
             dueDate,
             scheduledDate,
             hasScheduledTime,
+            durationMinutes,
+            externalEventId,
+            calendarUid,
+            calendarSourceUrl,
             startDate,
         });
     }

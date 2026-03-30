@@ -399,7 +399,7 @@ export class PropertyRowService {
     });
     menu.addSeparator();
 
-    const statuses = overrideOptions && overrideOptions.length > 0 ? overrideOptions : ['open', 'working', 'blocked', 'wont-do', 'complete'];
+    const statuses = overrideOptions && overrideOptions.length > 0 ? overrideOptions : ['todo', 'working', 'holding', 'wont-do', 'complete'];
     statuses.forEach(status => {
       menu.addItem(item => {
         item

@@ -1,21 +1,6 @@
 {
   "version": 1,
   "ops": {
-    "medication|2026-03-10 17:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Medication 2026-03-10.md",
-      "updatedAt": 1773067019670
-    },
-    "take out trash|2026-03-16 18:40:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Take Out Trash 2026-03-16.md",
-      "updatedAt": 1773101352685
-    },
-    "medication|2026-03-11 17:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Medication 2026-03-11.md",
-      "updatedAt": 1773179767013
-    },
     "medication|2026-03-15 17:15:00": {
       "state": "complete",
       "targetPath": "Markdown/Action Items/Medication 2026-03-15.md",
@@ -45,6 +30,16 @@
       "state": "complete",
       "targetPath": "Markdown/Action Items/Medication Saturday, March 21st 2026.md",
       "updatedAt": 1774038222958
+    },
+    "medication|2026-03-22 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Medication Sunday, March 22nd 2026.md",
+      "updatedAt": 1774108587087
+    },
+    "log timesheet|2026-04-03 20:36:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Log Timesheet Friday, April 3rd 2026.md",
+      "updatedAt": 1774644075855
     }
   }
 }

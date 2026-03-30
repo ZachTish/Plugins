@@ -79,6 +79,8 @@ export interface CalendarPluginSettings {
     syncIntervalMinutes: number;
     sidebarBasePath: string | null;
     dailyDateLinkTarget: "daily-note" | "daily-canvas";
+    defaultCreateMode: "note" | "task";
+    defaultTaskTargetFile: string;
 
     primaryControllerId: string | null; // Synced setting to identify the controller device
 
@@ -146,4 +148,5 @@ export interface CalendarPluginSettings {
     // Unscheduled view
     enableUnscheduledView: boolean;
     autoFocusBacklinksOnMdOpen: boolean;
+    hiddenExternalEventsByBase: Record<string, string[]>;
 }

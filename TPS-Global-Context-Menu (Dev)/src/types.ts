@@ -33,6 +33,14 @@ export interface CustomProperty {
 export type GcmLiveMenuPosition = 'left' | 'center' | 'right';
 export type ParentLinkFormat = 'wikilink' | 'markdown-title';
 export type ChecklistPromotionBehavior = 'remove' | 'complete-and-link' | 'link-only';
+export type LinkedSubitemCheckboxStyle = 'native' | 'soft-link' | 'accent';
+export interface LinkedSubitemCheckboxMapping {
+  checkboxState: string;
+  statuses: string[];
+  toggleTargetStatus?: string;
+  icon?: string;
+  label?: string;
+}
 export type AppearanceSyncMode = 'synced' | 'local';
 export type AppearanceSettingKey =
   | 'menuTextScale'
@@ -117,12 +125,14 @@ export interface TPSGlobalContextMenuSettings {
   checkOpenChecklistItems: boolean;
   checkParentLinkStatuses: boolean;
   parentLinkFrontmatterKey: string;
-  childLinkFrontmatterKey: string;
+  /** @deprecated Parent-side reverse links are no longer canonical. */
+  childLinkFrontmatterKey?: string;
   autoSelfLinkParentInParentKey: boolean;
   parentLinkFormat: ParentLinkFormat;
   parentTagOnChildLink: string;
   parentCompletionStatuses: string[];
   ignoredBacklinksFrontmatterKeys: string[];
+  ignoredSubitemTags: string[];
 
   // View Mode Settings
   enableViewModeSwitching: boolean;
@@ -131,14 +141,23 @@ export interface TPSGlobalContextMenuSettings {
   viewModeIgnoredFolders: string;
   viewModeRules: ViewModeRule[];
 
-  // System commands
-  systemCommands: string[];
-
-  // Checkbox behavior
-  enableTaskCheckboxCycle: boolean;
   enableChecklistCompletionProperty: boolean;
   checklistCompletionPropertyKey: string;
   checklistFinalPromptStatuses: string[];
+  enableLinkedSubitemCheckboxes: boolean;
+  linkedSubitemCheckboxStyle: LinkedSubitemCheckboxStyle;
+  linkedSubitemCheckboxMappings: LinkedSubitemCheckboxMapping[];
+  linkedSubitemDefaultOpenState: string;
+  /** @deprecated migrated into linkedSubitemCheckboxMappings */
+  linkedSubitemUncheckedStatuses?: string[];
+  /** @deprecated migrated into linkedSubitemCheckboxMappings */
+  linkedSubitemCheckedStatuses?: string[];
+  /** @deprecated migrated into linkedSubitemCheckboxMappings */
+  linkedSubitemCanceledStatuses?: string[];
+  /** @deprecated migrated into linkedSubitemCheckboxMappings */
+  linkedSubitemToggleCheckedStatus?: string;
+  /** @deprecated migrated into linkedSubitemCheckboxMappings */
+  linkedSubitemToggleUncheckedStatus?: string;
 
   // Archive tag automation
   enableArchiveTagMove: boolean;
@@ -148,16 +167,6 @@ export interface TPSGlobalContextMenuSettings {
   lastArchiveTagSweepDate?: string;
 
   // Workspace Ribbon Buttons
-  // Pomodoro Timer Settings
-  enablePomodoro: boolean;
-  pomodoroWorkDuration: number;
-  pomodoroBreakDuration: number;
-  pomodoroLongBreakDuration: number;
-  pomodoroLongBreakInterval: number;
-  pomodoroEventFolder: string;
-  pomodoroDefaultTags: string;
-
-
   workspaceRibbonButtons: boolean;
   workspaceRibbonIcons: Record<string, string>;
 
@@ -169,21 +178,18 @@ export interface TPSGlobalContextMenuSettings {
   enableTopParentNav: boolean;
   ignoreEmbeddedChildrenInTopLinks: boolean;
   dailyNavShowToday: boolean;
+  enableAutoPopulateDailyNotes: boolean;
 
   // Overlay ignore rules
   subitems_IgnoreRules: ViewModeRule[];
   inlineMenu_IgnoreRules: ViewModeRule[];
-  enableSubitemsPanel: boolean;
-  showChecklistInSubitemsPanel: boolean;
-  showReferencesInSubitemsPanel: boolean;
-  showMentionsInSubitemsPanel: boolean;
-  showInlineNoteGraph: boolean;
-  noteGraphDepth: number;
-  noteGraphMaxIncoming: number;
-  noteGraphMaxOutgoing: number;
-  noteGraphMaxMentions: number;
-  subitemsPanelPosition: 'above' | 'below';
-  subitemsPanelAutoCollapse: boolean;
+
+  // Auto-embed ignore settings
+  autoEmbedIgnoreFolders: string[];
+  autoEmbedIgnoreTags: string[];
+
+  // Auto-insert blank line on note open
+  enableAutoInsertBlankLineOnOpen: boolean;
 
   // Default paths for new items
   defaultAttachmentsPath: string;

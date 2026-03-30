@@ -230,6 +230,44 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
 
       const isPrimaryClick = event.button === 0;
       if (!isPrimaryClick || event.defaultPrevented) return;
+      if (target.closest(".tree-item-icon-collapse, .collapse-icon, .nn-navitem-chevron, [aria-label*='Collapse'], [aria-label*='Expand']")) {
+        return;
+      }
+      if (!this.isNotebookNavigatorStatusIconClickTarget(target)) return;
+
+      const file = this.resolveNotebookNavigatorFileFromTarget(target);
+      if (!(file instanceof TFile) || file.extension !== "md") return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void this.cycleNotebookNavigatorFileStatus(file);
+    }, { capture: true });
+
+    this.registerDomEvent(document, "click", (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+
+      const notebookNavigatorRoot = target.closest(".view-content.notebook-navigator, .notebook-navigator") as HTMLElement | null;
+      if (!notebookNavigatorRoot) return;
+
+      const isPrimaryClick = event.button === 0;
+      if (!isPrimaryClick || event.defaultPrevented) return;
+
+      // Only treat explicit tag-label/icon clicks as "open tag base/canvas".
+      // Leave the rest of the row alone so Notebook Navigator's own expand/collapse
+      // affordances keep working the same way folders do.
+      const tagActionTarget = target.closest(
+        [
+          ".nn-file-tag",
+          ".nn-clickable-tag",
+          ".nn-navitem-name",
+          ".tps-tag-canvas-icon",
+        ].join(", "),
+      ) as HTMLElement | null;
+      if (!tagActionTarget) return;
+      if (target.closest(".tree-item-icon-collapse, .collapse-icon, .nn-navitem-chevron, [aria-label*='Collapse'], [aria-label*='Expand']")) {
+        return;
+      }
 
       const tagEl = target.closest(".nn-file-tag.nn-clickable-tag, .nn-navitem[data-nav-item-type='tag'], .nn-navitem[data-drop-zone='tag'][data-tag], [data-drop-zone='tag'][data-tag], [data-drop-zone='tag-root']") as HTMLElement | null;
       if (!tagEl) return;
@@ -572,6 +610,133 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   private getActiveMarkdownFile(): TFile | null {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     return view?.file instanceof TFile ? view.file : null;
+  }
+
+  private isNotebookNavigatorStatusIconClickTarget(target: HTMLElement): boolean {
+    const row = target.closest(
+      ".nn-file[data-path], .nn-navitem[data-path][data-nav-item-type='note'], .nn-navitem[data-path][data-nav-item-type='file']",
+    ) as HTMLElement | null;
+    if (!row) return false;
+
+    if (target.closest(".nn-file-tag, .nn-clickable-tag, .nn-navitem-name, input, button, a")) {
+      return false;
+    }
+
+    return !!target.closest(
+      [
+        ".nn-file-icon",
+        ".nn-navitem-icon",
+        ".nn-item-icon",
+        ".nn-file-leading",
+        ".nn-navitem-leading",
+        ".nn-file svg",
+        ".nn-navitem svg",
+        ".nn-file .svg-icon",
+        ".nn-navitem .svg-icon",
+      ].join(", "),
+    );
+  }
+
+  private resolveNotebookNavigatorFileFromTarget(target: HTMLElement): TFile | null {
+    const row = target.closest(
+      ".nn-file[data-path], .nn-navitem[data-path][data-nav-item-type='note'], .nn-navitem[data-path][data-nav-item-type='file']",
+    ) as HTMLElement | null;
+    if (!row) return null;
+
+    const rawPath = row.getAttribute("data-path")
+      || row.dataset.path
+      || row.dataset.filePath
+      || row.dataset.filepath
+      || "";
+    const path = String(rawPath || "").trim();
+    if (!path) return null;
+
+    const direct = this.app.vault.getAbstractFileByPath(path);
+    if (direct instanceof TFile) return direct;
+
+    const resolved = this.app.metadataCache.getFirstLinkpathDest(path, "");
+    return resolved instanceof TFile ? resolved : null;
+  }
+
+  private getStatusFieldKey(): string {
+    const pluginsRegistry = (this.app as any)?.plugins;
+    const controller =
+      pluginsRegistry?.getPlugin?.("tps-controller") ||
+      pluginsRegistry?.plugins?.["tps-controller"];
+    const controllerKey = String((controller as any)?.settings?.statusKey || "").trim();
+    return controllerKey || "status";
+  }
+
+  private getStatusCycleOptions(): string[] {
+    const fallback = ["open", "working", "blocked", "wont-do", "complete"];
+    const pluginsRegistry = (this.app as any)?.plugins;
+    const gcm =
+      pluginsRegistry?.getPlugin?.("tps-global-context-menu") ||
+      pluginsRegistry?.plugins?.["tps-global-context-menu"];
+    const properties = Array.isArray((gcm as any)?.settings?.properties)
+      ? (gcm as any).settings.properties
+      : [];
+    const statusProperty = properties.find((property: any) => {
+      const id = String(property?.id || "").trim().toLowerCase();
+      const key = String(property?.key || "").trim().toLowerCase();
+      return id === "status" || key === "status" || key === this.getStatusFieldKey().toLowerCase();
+    });
+    const options = Array.isArray(statusProperty?.options)
+      ? statusProperty.options.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+      : [];
+    return options.length > 0 ? options : fallback;
+  }
+
+  private getFrontmatterValueCaseInsensitive(frontmatter: Record<string, unknown> | null | undefined, key: string): unknown {
+    if (!frontmatter || typeof frontmatter !== "object") return undefined;
+    if (Object.prototype.hasOwnProperty.call(frontmatter, key)) {
+      return frontmatter[key];
+    }
+    const normalizedTarget = String(key || "").trim().toLowerCase();
+    for (const [existingKey, value] of Object.entries(frontmatter)) {
+      if (existingKey.toLowerCase() === normalizedTarget) {
+        return value;
+      }
+    }
+    return undefined;
+  }
+
+  private setFrontmatterValueCaseInsensitive(frontmatter: Record<string, unknown>, key: string, value: string): boolean {
+    const normalizedTarget = String(key || "").trim().toLowerCase();
+    if (!normalizedTarget) return false;
+
+    for (const existingKey of Object.keys(frontmatter)) {
+      if (existingKey.toLowerCase() === normalizedTarget) {
+        if (frontmatter[existingKey] === value) return false;
+        frontmatter[existingKey] = value;
+        return true;
+      }
+    }
+
+    frontmatter[key] = value;
+    return true;
+  }
+
+  private async cycleNotebookNavigatorFileStatus(file: TFile): Promise<void> {
+    const statusKey = this.getStatusFieldKey();
+    const cycle = this.getStatusCycleOptions();
+    if (cycle.length === 0) return;
+
+    const cache = this.app.metadataCache.getFileCache(file);
+    const currentRaw = this.getFrontmatterValueCaseInsensitive((cache?.frontmatter || {}) as Record<string, unknown>, statusKey);
+    const current = String(currentRaw || "").trim().toLowerCase();
+    const normalizedCycle = cycle.map((value) => value.toLowerCase());
+    const currentIndex = normalizedCycle.indexOf(current);
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % cycle.length : 0;
+    const nextStatus = cycle[nextIndex];
+
+    const changed = await this.metadataManager.queueFrontmatterUpdate(file, "nn-icon-status-cycle", (frontmatter) => {
+      return this.setFrontmatterValueCaseInsensitive(frontmatter, statusKey, nextStatus);
+    });
+    if (!changed) return;
+
+    await this.applyRulesToFileInternal(file, "metadata-change", true);
+    this.styleService.updateActiveViewStyle(file);
   }
 
   private isProtectedFrontmatterKey(key: string): boolean {

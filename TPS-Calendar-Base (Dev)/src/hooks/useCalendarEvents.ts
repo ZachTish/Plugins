@@ -95,7 +95,27 @@ export function useCalendarEvents({
         ? !calEntry.taskTimed
         : calEntry.isExternal
         ? !!calEntry.externalEvent?.isAllDay
-        : ["true", "yes", "y", "1"].includes(normalizedAllDaySource);
+        : calEntry.forceAllDay === true || ["true", "yes", "y", "1"].includes(normalizedAllDaySource);
+
+      let eventStart = startDate;
+      let eventEnd = endDate;
+      if (isAllDay) {
+        eventStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+        // FullCalendar expects all-day `end` to be exclusive; guarantee at least 1 full day.
+        const candidateEnd = new Date(endDate);
+        if (
+          candidateEnd.getHours() === 0 &&
+          candidateEnd.getMinutes() === 0 &&
+          candidateEnd.getSeconds() === 0 &&
+          candidateEnd.getMilliseconds() === 0 &&
+          candidateEnd.getTime() > eventStart.getTime()
+        ) {
+          eventEnd = candidateEnd;
+        } else {
+          eventEnd = new Date(eventStart);
+          eventEnd.setDate(eventEnd.getDate() + 1);
+        }
+      }
 
       // Dim events that are in a "done" state (complete / wont-do / configured equivalent).
       // Time-based past detection is intentionally not used: an incomplete past event
@@ -110,10 +130,18 @@ export function useCalendarEvents({
       return {
         id: calEntry.isGhost
           ? `ghost-${(calEntry.entry as any).path}-${startDate.getTime()}`
-          : ((calEntry.entry as any).file?.path + (calEntry.isExternal ? "" : `-${backgroundColor}`)),
+          : calEntry.isTask
+            ? [
+                "task",
+                (calEntry.entry as any).file?.path || "unknown",
+                (calEntry.entry as any).__taskItem?.lineNumber ?? "na",
+                startDate.getTime(),
+                endDate.getTime(),
+              ].join("-")
+            : ((calEntry.entry as any).file?.path + (calEntry.isExternal ? "" : `-${backgroundColor}`)),
         title,
-        start: startDate,
-        end: endDate,
+        start: eventStart,
+        end: eventEnd,
         allDay: isAllDay,
         classNames: [...classNames, isAllDay ? "bases-all-day-event" : "", isPast ? "is-past" : ""],
         extendedProps: {

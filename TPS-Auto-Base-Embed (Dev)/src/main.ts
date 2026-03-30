@@ -103,6 +103,8 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   private lastEditorFocused: boolean = false;
   private queuedRefreshAllTimer: number | null = null;
   private queuedRefreshAllOptions: { resetExpanded?: boolean } | null = null;
+  private swipeCollapsed = false;
+  private scrollHideListeners = new Map<WorkspaceLeaf, { scroller: HTMLElement; listener: () => void; lastTop: number; accum: number }>();
 
   // ── Canvas node embed state ──────────────────────────────────────────────
   /** Per-canvas-leaf data: overlay map, expanded state, MutationObserver. */
@@ -162,6 +164,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
     this.addSettingTab(new AutoBaseEmbedSettingTab(this.app, this));
     this.injectStyles();
+    this.updateBottomObstructionOffset();
     this.setupKeyboardDetection();
     this.setupModalVisibilityWatcher();
 
@@ -260,6 +263,17 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       window.setTimeout(() => this.flushPendingRefreshAll({ resetExpanded: false }), 120);
     }, true);
 
+    this.registerDomEvent(document, "dragstart", (event: DragEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest(`.${EMBED_CLASS}`)) return;
+      const filePath = this.extractEmbeddableFilePath(target);
+      if (!filePath || !event.dataTransfer) return;
+      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.setData("obsidian/file", filePath);
+      event.dataTransfer.setData("text/plain", filePath);
+      event.dataTransfer.setData("text/uri-list", `obsidian://open?file=${encodeURIComponent(filePath)}`);
+    }, { capture: true });
+
     // Avoid focus-based flushes to reduce typing lag; rely on leaf/file changes.
 
     this.registerInterval(
@@ -343,6 +357,38 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       return;
     }
     this.refreshAllSupportedViews(mergedOptions);
+  }
+
+  private extractEmbeddableFilePath(target: HTMLElement): string | null {
+    const sourceEl = target.closest<HTMLElement>("[data-path], [data-href], a.internal-link, .internal-link");
+    if (!sourceEl) return null;
+
+    const candidateValues = [
+      sourceEl.getAttribute("data-path"),
+      sourceEl.getAttribute("data-href"),
+      sourceEl.getAttribute("href"),
+      sourceEl.getAttribute("aria-label"),
+      sourceEl.textContent,
+    ];
+
+    for (const rawValue of candidateValues) {
+      const raw = String(rawValue || "").trim();
+      if (!raw) continue;
+      const cleaned = raw
+        .replace(/^obsidian:\/\/open\?file=/i, "")
+        .replace(/^#/, "")
+        .split("|")[0]
+        .trim();
+      if (!cleaned) continue;
+      const decoded = decodeURIComponent(cleaned);
+      const candidatePath = decoded.endsWith(".md") ? decoded : `${decoded}.md`;
+      const abstract = this.app.vault.getAbstractFileByPath(candidatePath);
+      if (abstract instanceof TFile && abstract.extension === "md") {
+        return abstract.path;
+      }
+    }
+
+    return null;
   }
 
   private debounce<T extends (...args: any[]) => void>(fn: T, wait: number): T {
@@ -436,12 +482,111 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           });
           void this.refreshLeaf(leaf, { resetExpanded: false });
         }
+        continue;
+      }
+      if (desiredMode === "floating" && overlay?.isConnected) {
+        const view = leaf.view as any;
+        const viewContainer = view?.containerEl as HTMLElement | undefined;
+        const leafContent = viewContainer?.closest?.(".workspace-leaf-content") as HTMLElement | null;
+        const attachTarget = leafContent || viewContainer || null;
+        if (!attachTarget || overlay.parentElement !== attachTarget) {
+          this.logScrollSnapshot("reattach-refresh", leaf, this.getLeafFile(leaf), {
+            reason: !attachTarget ? "missing-floating-target" : "floating-target-mismatch",
+          });
+          void this.refreshLeaf(leaf, { resetExpanded: false });
+        }
       }
     }
   }
 
+  private applyOverlayVisibility(leaf: WorkspaceLeaf): void {
+    const overlay = this.overlayByLeaf.get(leaf);
+    if (!overlay?.isConnected) return;
+    if (this.swipeCollapsed) {
+      overlay.style.visibility = "hidden";
+      overlay.style.opacity = "0";
+      overlay.style.pointerEvents = "none";
+    } else {
+      overlay.style.removeProperty("visibility");
+      overlay.style.removeProperty("opacity");
+      overlay.style.removeProperty("pointer-events");
+    }
+  }
+
+  private applyAllOverlayVisibility(): void {
+    for (const leaf of this.getSupportedLeaves()) {
+      this.applyOverlayVisibility(leaf);
+    }
+  }
+
+  private setSwipeCollapsed(collapsed: boolean): void {
+    if (this.swipeCollapsed === collapsed) return;
+    this.swipeCollapsed = collapsed;
+    this.applyAllOverlayVisibility();
+  }
+
+  private ensureSwipeGestureTracking(leaf: WorkspaceLeaf): void {
+    const scroller = this.resolveScrollContainer(leaf);
+    const existing = this.scrollHideListeners.get(leaf);
+    if (existing) {
+      if (existing.scroller === scroller) return;
+      existing.scroller.removeEventListener("scroll", existing.listener);
+      this.scrollHideListeners.delete(leaf);
+    }
+    if (!scroller) return;
+
+    const HIDE_THRESHOLD = 60;
+    const SHOW_THRESHOLD = 30;
+    const state = { scroller, lastTop: scroller.scrollTop, accum: 0, listener: () => {} };
+
+    state.listener = () => {
+      if (this.keyboardHidden) return;
+
+      const top = scroller.scrollTop;
+      const delta = top - state.lastTop;
+      state.lastTop = top;
+
+      if ((delta > 0 && state.accum < 0) || (delta < 0 && state.accum > 0)) {
+        state.accum = 0;
+      }
+      state.accum += delta;
+
+      if (!this.swipeCollapsed && state.accum > HIDE_THRESHOLD) {
+        this.setSwipeCollapsed(true);
+        state.accum = 0;
+      } else if (this.swipeCollapsed && state.accum < -SHOW_THRESHOLD) {
+        this.setSwipeCollapsed(false);
+        state.accum = 0;
+      }
+    };
+
+    scroller.addEventListener("scroll", state.listener, { passive: true });
+    this.scrollHideListeners.set(leaf, state);
+  }
+
+  private releaseSwipeGestureTracking(leaf: WorkspaceLeaf): void {
+    const state = this.scrollHideListeners.get(leaf);
+    if (!state) return;
+    state.scroller.removeEventListener("scroll", state.listener);
+    this.scrollHideListeners.delete(leaf);
+  }
+
+  private resolveScrollContainer(leaf: WorkspaceLeaf): HTMLElement | null {
+    const view = leaf.view as any;
+    const contentEl = view?.contentEl as HTMLElement | undefined;
+    if (!contentEl) return null;
+    return (
+      contentEl.querySelector<HTMLElement>(".markdown-preview-view") ||
+      contentEl.querySelector<HTMLElement>(".cm-scroller")
+    );
+  }
+
   onunload(): void {
     this.clearAllOverlaysFromDom();
+    for (const state of this.scrollHideListeners.values()) {
+      state.scroller.removeEventListener("scroll", state.listener);
+    }
+    this.scrollHideListeners.clear();
     // Stop all canvas node watchers
     for (const leaf of this.canvasLeafData.keys()) {
       this.stopCanvasLeafWatcher(leaf);
@@ -1240,17 +1385,20 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       resetExpanded: options?.resetExpanded ?? true,
     });
     if (!this.isSupportedLeaf(leaf)) {
+      this.releaseSwipeGestureTracking(leaf);
       this.removeOverlay(leaf);
       return;
     }
     const file = this.getLeafFile(leaf);
     if (!file || (file.extension !== "md" && file.extension !== "canvas")) {
+      this.releaseSwipeGestureTracking(leaf);
       this.currentFileByLeaf.delete(leaf);
       this.renderSignatureByLeaf.delete(leaf);
       this.removeOverlay(leaf);
       return;
     }
     if (!this.settings.enabled) {
+      this.releaseSwipeGestureTracking(leaf);
       this.removeOverlay(leaf);
       return;
     }
@@ -1277,6 +1425,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         return;
       }
       this.renderSignatureByLeaf.delete(leaf);
+      this.releaseSwipeGestureTracking(leaf);
       this.removeOverlay(leaf);
       return;
     }
@@ -1382,6 +1531,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         return;
       }
       this.renderSignatureByLeaf.delete(leaf);
+      this.releaseSwipeGestureTracking(leaf);
       this.removeOverlay(leaf);
       this.logScrollSnapshot("refresh-empty", leaf, file, { token: nextToken });
       return;
@@ -1394,6 +1544,12 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     // Refresh the timestamp now that all panels have finished rendering, so the
     // cooldown window extends from render-end rather than only from render-start.
     this.lastRefreshMetaByLeaf.set(leaf, { signature: renderSignature, at: Date.now() });
+    this.ensureSwipeGestureTracking(leaf);
+    if (options) {
+      this.setSwipeCollapsed(false);
+    } else {
+      this.applyOverlayVisibility(leaf);
+    }
     this.logScrollSnapshot("refresh-end", leaf, file, {
       token: nextToken,
       panels: container.children.length,
@@ -1415,17 +1571,29 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
   private ensureFloatingOverlay(leaf: WorkspaceLeaf): HTMLElement {
     let overlay = this.overlayByLeaf.get(leaf);
-    if (overlay && overlay.isConnected) {
-      overlay.setAttribute("data-render-mode", "floating");
-      overlay.removeAttribute("data-inline-placement");
-      return overlay;
-    }
-
     const view = leaf.view;
     const viewContainer = (view as any).containerEl as HTMLElement | undefined;
     if (!viewContainer) return document.createElement("div");
 
     const leafContent = viewContainer.closest(".workspace-leaf-content") as HTMLElement | null;
+    const attachTarget = leafContent || viewContainer;
+
+    if (overlay && overlay.isConnected) {
+      if (overlay.parentElement !== attachTarget) {
+        attachTarget.appendChild(overlay);
+        if (leafContent) {
+          this.attachOverlayObserver(leaf, overlay, leafContent);
+        }
+      }
+      overlay.setAttribute("data-render-mode", "floating");
+      overlay.removeAttribute("data-inline-placement");
+      overlay.style.removeProperty("visibility");
+      overlay.style.removeProperty("opacity");
+      overlay.style.removeProperty("pointer-events");
+      this.applyOverlayVisibility(leaf);
+      return overlay;
+    }
+
     if (leafContent && getComputedStyle(leafContent).position === "static") {
       leafContent.style.position = "relative";
     }
@@ -1434,13 +1602,13 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     overlay.className = EMBED_CLASS;
     overlay.setAttribute("data-render-mode", "floating");
     overlay.innerHTML = "";
-    const attachTarget = leafContent || viewContainer;
     attachTarget.appendChild(overlay);
     if (leafContent) {
       this.attachOverlayObserver(leaf, overlay, leafContent);
     }
 
     this.overlayByLeaf.set(leaf, overlay);
+    this.applyOverlayVisibility(leaf);
     return overlay;
   }
 
@@ -1460,6 +1628,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       if (nextHeight === lastHeight) return;
       lastHeight = nextHeight;
       leafContent.style.setProperty("--tps-auto-base-embed-height", `${nextHeight}px`);
+      this.syncGlobalFloatingEmbedHeight();
     };
     const observer = new ResizeObserver(() => {
       if (rafId != null) window.cancelAnimationFrame(rafId);
@@ -1471,6 +1640,22 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     observer.observe(overlay);
     this.overlayObservers.set(leaf, observer);
     update();
+  }
+
+  private syncGlobalFloatingEmbedHeight(): void {
+    const overlays = Array.from(
+      document.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}[data-render-mode="floating"]`),
+    ).filter((overlay) => overlay.isConnected);
+
+    const maxHeight = overlays.reduce((largest, overlay) => {
+      const rect = overlay.getBoundingClientRect();
+      const height = Number.isFinite(rect.height) ? Math.ceil(rect.height) : 0;
+      return Math.max(largest, height);
+    }, 0);
+
+    const heightValue = `${maxHeight}px`;
+    document.body?.style.setProperty("--tps-auto-base-embed-height", heightValue);
+    document.documentElement?.style.setProperty("--tps-auto-base-embed-height", heightValue);
   }
 
   private scheduleTypingRefresh(leaf: WorkspaceLeaf): void {
@@ -1697,6 +1882,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   }
 
   private removeOverlay(leaf: WorkspaceLeaf): void {
+    this.releaseSwipeGestureTracking(leaf);
     const retryTimer = this.leafRetryTimers.get(leaf);
     if (retryTimer != null) {
       window.clearTimeout(retryTimer);
@@ -1719,6 +1905,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       overlay.remove();
     }
     this.overlayByLeaf.delete(leaf);
+    this.syncGlobalFloatingEmbedHeight();
     const anchor = this.inlineAnchorByLeaf.get(leaf);
     if (anchor?.isConnected) {
       anchor.remove();
@@ -1840,10 +2027,6 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         --tps-auto-base-embed-gap: 6px;
         font-size: calc(var(--font-text-size) * 0.62);
         gap: 6px;
-      }
-      body.is-mobile .${EMBED_CLASS}[data-render-mode="floating"],
-      body.is-phone .${EMBED_CLASS}[data-render-mode="floating"] {
-        --tps-auto-base-embed-bottom: 50px;
       }
       .tps-auto-base-embed-hidden-for-keyboard .${EMBED_CLASS}[data-render-mode="floating"],
       .tps-context-hidden-for-keyboard .${EMBED_CLASS}[data-render-mode="floating"] {
@@ -2235,6 +2418,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           document.body.classList.remove("tps-auto-base-embed-hidden-for-keyboard");
           this.keyboardHidden = false;
         }
+        this.updateBottomObstructionOffset();
         return;
       }
 
@@ -2244,6 +2428,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           document.body.classList.remove("tps-auto-base-embed-hidden-for-keyboard");
           this.keyboardHidden = false;
         }
+        this.updateBottomObstructionOffset();
         return;
       }
 
@@ -2263,6 +2448,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         this.keyboardHidden = shouldHide;
         document.body.classList.toggle("tps-auto-base-embed-hidden-for-keyboard", shouldHide);
       }
+      this.updateBottomObstructionOffset();
     }, 300);
 
     this.keyboardResizeHandler = handleResize;
@@ -2289,6 +2475,50 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
     // Initial state check
     setTimeout(() => this.keyboardResizeHandler?.(), 200);
+  }
+
+  private updateBottomObstructionOffset(): void {
+    if (typeof document === "undefined") return;
+
+    const isMobile =
+      window.innerWidth < 768 ||
+      document.body.classList.contains("is-mobile") ||
+      document.body.classList.contains("is-phone");
+
+    if (!isMobile) {
+      document.documentElement.style.setProperty("--tps-auto-base-embed-bottom", "16px");
+      return;
+    }
+
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    let maxObstruction = 0;
+    const candidates = Array.from(document.body?.querySelectorAll<HTMLElement>("*") || []);
+
+    for (const el of candidates) {
+      if (!el.isConnected) continue;
+      if (
+        el.closest(`.${EMBED_CLASS}`) ||
+        el.closest(".tps-global-context-menu") ||
+        el.closest(".menu") ||
+        el.closest(".modal")
+      ) {
+        continue;
+      }
+
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none") continue;
+      if (style.position !== "fixed" && style.position !== "sticky") continue;
+
+      const rect = el.getBoundingClientRect();
+      if (!Number.isFinite(rect.height) || rect.height <= 0) continue;
+      if (viewportHeight > 0 && rect.bottom < viewportHeight - 4) continue;
+      if (rect.top > viewportHeight - Math.max(160, viewportHeight * 0.4)) {
+        maxObstruction = Math.max(maxObstruction, Math.ceil(rect.height));
+      }
+    }
+
+    const offset = maxObstruction > 0 ? maxObstruction + 12 : 16;
+    document.documentElement.style.setProperty("--tps-auto-base-embed-bottom", `${offset}px`);
   }
 
   private teardownKeyboardDetection(): void {

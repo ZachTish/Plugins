@@ -22,7 +22,13 @@ import { CommandQueueService, getErrorMessage, getPluginById } from './core';
 import { VaultQueryService } from './services/vault-query-service';
 import { TaskIdentityService } from './services/task-identity-service';
 import { WorkspaceRibbonService } from './services/workspace-ribbon-service';
-import { PomodoroService } from './services/pomodoro-service';
+import { InlineTaskSubtaskService } from './services/inline-task-subtask-service';
+import { LinkedSubitemCheckboxService } from './services/linked-subitem-checkbox-service';
+import { FrontmatterMutationService } from './services/frontmatter-mutation-service';
+import { ParentLinkResolutionService } from './services/parent-link-resolution-service';
+import { BodySubitemLinkService } from './services/body-subitem-link-service';
+import { SubitemRelationshipSyncService } from './services/subitem-relationship-sync-service';
+import { SubitemReferenceIndexService } from './services/subitem-reference-index-service';
 import { registerGcmEvents } from './events/register-events';
 import { registerGcmCommands } from './commands/register-commands';
 import { setupPluginApi } from './plugin-api';
@@ -46,13 +52,20 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
   vaultQueryService: VaultQueryService;
   taskIdentityService: TaskIdentityService;
   workspaceRibbonService: WorkspaceRibbonService;
-  pomodoroService: PomodoroService;
+  inlineTaskSubtaskService: InlineTaskSubtaskService;
+  linkedSubitemCheckboxService: LinkedSubitemCheckboxService;
+  frontmatterMutationService: FrontmatterMutationService;
+  parentLinkResolutionService: ParentLinkResolutionService;
+  bodySubitemLinkService: BodySubitemLinkService;
+  subitemRelationshipSyncService: SubitemRelationshipSyncService;
+  subitemReferenceIndexService: SubitemReferenceIndexService;
   styleEl: HTMLStyleElement | null = null;
   ignoreNextContext = false;
   keyboardVisible = false;
   private archiveSweepTimerId: number | null = null;
   private restoreMenuPatch: (() => void) | null = null;
   private restoreCanvasOpenGuard: (() => void) | null = null;
+  private restoreProcessFrontmatterPatch: (() => void) | null = null;
   private viewModeSuppressedPaths: Set<string> = new Set();
   private canvasPointerSession:
     | {
@@ -77,6 +90,41 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
   private debouncedSave = debounce(async () => {
     await this.saveData(this.settings);
   }, 1000, false);
+
+  private getStrictLinkedSubitemMappings() {
+    return [
+      { checkboxState: '[ ]', statuses: ['todo'], toggleTargetStatus: 'complete', icon: 'square', label: 'Todo' },
+      { checkboxState: '[x]', statuses: ['complete'], toggleTargetStatus: 'todo', icon: 'check', label: 'Complete' },
+      { checkboxState: '[\\]', statuses: ['working'], toggleTargetStatus: 'complete', icon: 'slash', label: 'Working' },
+      { checkboxState: '[?]', statuses: ['holding'], toggleTargetStatus: 'todo', icon: 'help-circle', label: 'Holding' },
+      { checkboxState: '[-]', statuses: ['wont-do'], toggleTargetStatus: 'todo', icon: 'minus', label: 'Won’t Do' },
+    ];
+  }
+
+  private normalizeStrictLinkedSubitemMappings(
+    current: Array<{ checkboxState?: string; toggleTargetStatus?: string; icon?: string; label?: string }> | undefined,
+  ) {
+    const byState = new Map(
+      (current || [])
+        .map((entry) => ({
+          checkboxState: String(entry?.checkboxState || '').trim(),
+          toggleTargetStatus: String(entry?.toggleTargetStatus || '').trim() || undefined,
+          icon: String(entry?.icon || '').trim() || undefined,
+          label: String(entry?.label || '').trim() || undefined,
+        }))
+        .filter((entry) => entry.checkboxState)
+        .map((entry) => [entry.checkboxState, entry] as const),
+    );
+    return this.getStrictLinkedSubitemMappings().map((entry) => {
+      const existing = byState.get(entry.checkboxState);
+      return {
+        ...entry,
+        toggleTargetStatus: existing?.toggleTargetStatus || entry.toggleTargetStatus,
+        icon: existing?.icon || entry.icon,
+        label: existing?.label || entry.label,
+      };
+    });
+  }
 
   private isCanvasOrBasesInteractionTarget(target: EventTarget | null): target is HTMLElement {
     if (!(target instanceof HTMLElement)) return false;
@@ -125,7 +173,16 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.vaultQueryService = new VaultQueryService(this.app);
     this.taskIdentityService = new TaskIdentityService();
     this.workspaceRibbonService = new WorkspaceRibbonService(this);
-    this.pomodoroService = new PomodoroService(this);
+    this.parentLinkResolutionService = new ParentLinkResolutionService(this);
+    this.bodySubitemLinkService = new BodySubitemLinkService(this);
+    this.subitemRelationshipSyncService = new SubitemRelationshipSyncService(this);
+    this.subitemReferenceIndexService = new SubitemReferenceIndexService(this);
+    this.inlineTaskSubtaskService = new InlineTaskSubtaskService(this);
+    this.linkedSubitemCheckboxService = new LinkedSubitemCheckboxService(this);
+    this.frontmatterMutationService = new FrontmatterMutationService(this);
+    this.restoreProcessFrontmatterPatch = this.installProcessFrontmatterPatch();
+    this.registerEditorExtension(this.linkedSubitemCheckboxService.getEditorExtension());
+    this.app.workspace.updateOptions();
 
     this.menuController = new MenuController(this);
     this.persistentMenuManager = new PersistentMenuManager(this);
@@ -165,9 +222,6 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
 
     // Check for missing recurrences on startup; build workspace ribbon buttons
     this.app.workspace.onLayoutReady(async () => {
-      for (const leaf of this.app.workspace.getLeavesOfType('tps-gcm-backlinks')) {
-        leaf.detach();
-      }
       this.workspaceRibbonService.setup();
       // Wait for metadataCache to finish initial indexing before scanning for
       // missing recurrences. 'resolved' fires once indexing completes; the
@@ -277,7 +331,16 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
 
     // Manual context interception for markdown-like link/embed targets only.
     this.registerDomEvent(document, 'contextmenu', (evt: MouseEvent) => {
+      void this.linkedSubitemCheckboxService.handleContextMenu(evt);
+    }, { capture: true });
+
+    // Manual context interception for markdown-like link/embed targets only.
+    this.registerDomEvent(document, 'contextmenu', (evt: MouseEvent) => {
       void this.taskCheckboxHandler.handleContextMenu(evt);
+    }, { capture: true });
+
+    this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
+      void this.linkedSubitemCheckboxService.handleClick(evt);
     }, { capture: true });
 
     // Manual context interception for markdown-like link/embed targets only.
@@ -297,12 +360,6 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       const menu = new Menu();
       this.menuController.addToNativeMenu(menu, targets);
       menu.showAtPosition({ x: evt.pageX, y: evt.pageY });
-    }, { capture: true });
-
-    // Task checkbox state cycle: [ ] -> [x] -> [?] -> [-] -> [ ]
-    this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-      if (this.suppressCanvasActivationEvent(evt)) return;
-      void this.taskCheckboxHandler.handleClick(evt);
     }, { capture: true });
 
     // Long-press on touch devices opens a checkbox state selector.
@@ -329,6 +386,10 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       this.restoreCanvasOpenGuard();
       this.restoreCanvasOpenGuard = null;
     }
+    if (this.restoreProcessFrontmatterPatch) {
+      this.restoreProcessFrontmatterPatch();
+      this.restoreProcessFrontmatterPatch = null;
+    }
     if (this.restoreMenuPatch) {
       this.restoreMenuPatch();
       this.restoreMenuPatch = null;
@@ -338,6 +399,8 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.persistentMenuManager?.detach();
     this.recurrenceService?.cleanup();
     this.taskCheckboxHandler?.dispose();
+    this.inlineTaskSubtaskService?.detach();
+    this.linkedSubitemCheckboxService?.detach();
     this.stopArchiveTagAutomation();
     document.body?.classList?.remove('tps-context-hidden-for-keyboard');
   }
@@ -356,18 +419,62 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       this.settings.archiveFolderPath = legacyArchiveFolder;
     }
     if (
-      typeof (loaded as any)?.enableTaskCheckboxCycle !== 'boolean'
-      && typeof loaded?.enableShiftClickCancel === 'boolean'
-    ) {
-      // Backward compatibility for legacy setting key.
-      this.settings.enableTaskCheckboxCycle = loaded.enableShiftClickCancel;
-    }
-    if (
       this.settings.checklistPromotionBehavior !== 'remove' &&
       this.settings.checklistPromotionBehavior !== 'complete-and-link' &&
       this.settings.checklistPromotionBehavior !== 'link-only'
     ) {
       this.settings.checklistPromotionBehavior = DEFAULT_SETTINGS.checklistPromotionBehavior;
+    }
+    const legacyUnchecked = Array.isArray(loaded?.linkedSubitemUncheckedStatuses)
+      ? loaded?.linkedSubitemUncheckedStatuses.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const legacyChecked = Array.isArray(loaded?.linkedSubitemCheckedStatuses)
+      ? loaded?.linkedSubitemCheckedStatuses.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const legacyCanceled = Array.isArray(loaded?.linkedSubitemCanceledStatuses)
+      ? loaded?.linkedSubitemCanceledStatuses.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const migratedMappings = Array.isArray(this.settings.linkedSubitemCheckboxMappings)
+      ? this.settings.linkedSubitemCheckboxMappings
+      : [];
+    if (migratedMappings.length === 0) {
+      this.settings.linkedSubitemCheckboxMappings = this.normalizeStrictLinkedSubitemMappings([
+        {
+          checkboxState: '[ ]',
+          toggleTargetStatus: String(loaded?.linkedSubitemToggleCheckedStatus || 'complete').trim() || 'complete',
+          icon: 'square',
+          label: 'Todo',
+        },
+        {
+          checkboxState: '[x]',
+          toggleTargetStatus: String(loaded?.linkedSubitemToggleUncheckedStatus || 'todo').trim() || 'todo',
+          icon: 'check',
+          label: 'Complete',
+        },
+        {
+          checkboxState: '[-]',
+          toggleTargetStatus: String(loaded?.linkedSubitemToggleUncheckedStatus || 'todo').trim() || 'todo',
+          icon: 'minus',
+          label: 'Won’t Do',
+        },
+      ]);
+    }
+    this.settings.linkedSubitemDefaultOpenState = String(this.settings.linkedSubitemDefaultOpenState || '[ ]').trim() || '[ ]';
+    this.settings.linkedSubitemCheckboxMappings = this.normalizeStrictLinkedSubitemMappings(
+      this.settings.linkedSubitemCheckboxMappings
+        .map((entry) => ({
+        checkboxState: String(entry?.checkboxState || '').trim(),
+        statuses: Array.isArray(entry?.statuses)
+          ? entry.statuses.map((value) => String(value || '').trim()).filter(Boolean)
+          : [],
+        toggleTargetStatus: String(entry?.toggleTargetStatus || '').trim() || undefined,
+        icon: String(entry?.icon || '').trim() || undefined,
+        label: String(entry?.label || '').trim() || undefined,
+      }))
+      .filter((entry) => entry.checkboxState && entry.statuses.length > 0),
+    );
+    if (this.settings.linkedSubitemCheckboxMappings.length === 0) {
+      this.settings.linkedSubitemCheckboxMappings = this.getStrictLinkedSubitemMappings();
     }
     logger.setLoggingEnabled(this.settings.enableLogging);
   }
@@ -396,6 +503,7 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.startArchiveTagAutomation();
     this.debouncedSave();
     this.persistentMenuManager?.ensureMenus?.();
+    this.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
     const seen = new Set<string>();
     for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
       const file = (leaf.view as any)?.file;
@@ -730,6 +838,26 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       if (typeof originalRevealLeaf === 'function') {
         workspace.revealLeaf = originalRevealLeaf;
       }
+    };
+  }
+
+  private installProcessFrontmatterPatch(): () => void {
+    const fileManager = this.app.fileManager as any;
+    const original = fileManager.processFrontMatter?.bind(fileManager);
+    if (typeof original !== 'function') {
+      return () => {};
+    }
+
+    const plugin = this;
+    fileManager.processFrontMatter = async function (
+      file: TFile,
+      mutator: (frontmatter: Record<string, unknown>) => void | Promise<void>,
+    ) {
+      return await plugin.frontmatterMutationService.process(file, mutator);
+    };
+
+    return () => {
+      fileManager.processFrontMatter = original;
     };
   }
 

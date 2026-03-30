@@ -259,6 +259,56 @@ export class NewEventService {
     }
   }
 
+  async createTask(
+    start: Date,
+    end: Date,
+    targetFilePath: string,
+    frontmatterOverrides?: Record<string, any>,
+    options?: NewEventCreationOptions,
+  ): Promise<TFile | null> {
+    if (this.createInProgress) {
+      return null;
+    }
+    this.createInProgress = true;
+    try {
+      const rawTitle = await this.promptForTitle(options?.typeFolderOverride);
+      if (rawTitle === undefined || rawTitle === "__LINK_EXISTING_CANCEL__") {
+        this.pendingTypeFolderPath = null;
+        this.pendingLinkExisting = false;
+        return null;
+      }
+
+      const titleInput = rawTitle && rawTitle.trim() ? rawTitle.trim() : "";
+      const { cleanTitle: extractedTitle, tags } = this.extractTags(titleInput);
+      const resolvedTags = await this.resolveTags(tags);
+      if (resolvedTags === null) return null;
+
+      const finalOverrides = frontmatterOverrides ? { ...frontmatterOverrides } : {};
+      const defaults = options?.frontmatterDefaults ?? {};
+
+      const mergedTagInputs = mergeTagInputs(
+        mergeTagInputs(defaults.tags, finalOverrides.tags),
+        resolvedTags,
+      );
+      const mergedTags = mergedTagInputs.map((tag) => normalizeTagValue(tag)).filter(Boolean);
+
+      const cleanTitle = extractedTitle?.trim() || "Untitled";
+      const targetFile = await this.ensureTaskTargetFile(targetFilePath);
+      const taskLine = this.buildTaskLine(cleanTitle, start, end, mergedTags, defaults, finalOverrides);
+      const existing = await this.config.app.vault.cachedRead(targetFile);
+      const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+      await this.config.app.vault.modify(targetFile, `${existing}${separator}${taskLine}\n`);
+      return targetFile;
+    } catch (error) {
+      logger.error('[NewEventService] Error creating task:', error);
+      throw error;
+    } finally {
+      this.createInProgress = false;
+      this.pendingTypeFolderPath = null;
+      this.pendingLinkExisting = false;
+    }
+  }
+
   private extractTags(title: string): { cleanTitle: string; tags: string[] } {
     const tagRegex = /#([a-zA-Z0-9_/-]+)/g;
     const tags: string[] = [];
@@ -272,6 +322,88 @@ export class NewEventService {
     const cleanTitle = title.replace(tagRegex, '').trim().replace(/\s+/g, ' ');
 
     return { cleanTitle, tags };
+  }
+
+  private getConfigPropertyName(propId: BasesPropertyId | null | undefined, fallback: string): string {
+    if (!propId) return fallback;
+    const parsed = parsePropertyId(propId);
+    return String(parsed.name || (parsed as any).property || fallback).trim() || fallback;
+  }
+
+  private formatInlineDateValue(date: Date, includeTime: boolean): string {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    if (!includeTime) return `${y}-${m}-${d}`;
+    const hh = String(date.getHours()).padStart(2, "0");
+    const mm = String(date.getMinutes()).padStart(2, "0");
+    return `${y}-${m}-${d} ${hh}:${mm}`;
+  }
+
+  private buildTaskLine(
+    title: string,
+    start: Date,
+    end: Date,
+    tags: string[],
+    defaults: Record<string, any>,
+    overrides: Record<string, any>,
+  ): string {
+    const startKey = this.getConfigPropertyName(this.config.startProperty, "scheduled");
+    const endKey = this.getConfigPropertyName(this.config.endProperty, "timeEstimate");
+    const durationMinutes = Math.max(5, Math.round((end.getTime() - start.getTime()) / 60000));
+    const isAllDay =
+      start.getHours() === 0 &&
+      start.getMinutes() === 0 &&
+      start.getSeconds() === 0 &&
+      start.getMilliseconds() === 0 &&
+      end.getHours() === 0 &&
+      end.getMinutes() === 0 &&
+      end.getSeconds() === 0 &&
+      end.getMilliseconds() === 0 &&
+      (end.getTime() - start.getTime()) % (24 * 60 * 60 * 1000) === 0;
+
+    const properties: string[] = [];
+    properties.push(`[${startKey}:: ${this.formatInlineDateValue(start, !isAllDay)}]`);
+    if (!isAllDay && durationMinutes > 0) {
+      properties.push(`[${endKey}:: ${durationMinutes}]`);
+    }
+
+    const merged = { ...defaults, ...overrides };
+    const priorityValue = merged.priority;
+    const statusValue = merged.status;
+    if (typeof statusValue === "string" && statusValue.trim()) {
+      properties.push(`[status:: ${statusValue.trim()}]`);
+    }
+    if (typeof priorityValue === "string" && priorityValue.trim()) {
+      properties.push(`[priority:: ${priorityValue.trim()}]`);
+    }
+
+    const tagSuffix = tags.length > 0
+      ? ` ${tags.map((tag) => `#${normalizeTagValue(tag)}`).join(" ")}`
+      : "";
+
+    return `- [ ] ${title}${properties.length > 0 ? ` ${properties.join(" ")}` : ""}${tagSuffix}`;
+  }
+
+  private async ensureTaskTargetFile(targetFilePath: string): Promise<TFile> {
+    const normalized = normalizePath(String(targetFilePath || "").trim());
+    if (!normalized) {
+      throw new Error("Task target file path is required");
+    }
+
+    const existing = this.config.app.vault.getAbstractFileByPath(normalized);
+    if (existing instanceof TFile) {
+      return existing;
+    }
+    if (existing) {
+      throw new Error(`Task target path is not a markdown file: ${normalized}`);
+    }
+
+    const folderPath = normalized.includes("/") ? normalized.substring(0, normalized.lastIndexOf("/")) : "";
+    if (folderPath) {
+      await this.ensureFolderExists(folderPath);
+    }
+    return await this.config.app.vault.create(normalized, "");
   }
 
   private async resolveTags(tags: string[]): Promise<string[] | null> {
@@ -786,6 +918,11 @@ export class NewEventService {
   private async canMutateFrontmatterSafely(
     file: TFile,
   ): Promise<{ safe: boolean; reason?: string }> {
+    const normalizedLeading = await this.normalizeDuplicateLeadingFrontmatter(file);
+    if (normalizedLeading) {
+      return { safe: true };
+    }
+
     let content = "";
     try {
       content = await this.config.app.vault.cachedRead(file);
@@ -832,6 +969,47 @@ export class NewEventService {
     }
 
     return { safe: false, reason: "duplicate leading frontmatter blocks detected" };
+  }
+
+  private async normalizeDuplicateLeadingFrontmatter(file: TFile): Promise<boolean> {
+    let content = "";
+    try {
+      content = await this.config.app.vault.cachedRead(file);
+    } catch {
+      return false;
+    }
+
+    const normalized = content.replace(/\r\n/g, "\n");
+    const bom = normalized.startsWith("\uFEFF") ? "\uFEFF" : "";
+    const body = bom ? normalized.slice(1) : normalized;
+    if (!body.startsWith("---\n")) return false;
+
+    const firstClose = body.indexOf("\n---\n", 3);
+    if (firstClose === -1) return false;
+
+    const afterFirst = body.slice(firstClose + "\n---\n".length);
+    const trimmedAfterFirst = afterFirst.replace(/^\s*/, "");
+    if (!trimmedAfterFirst.startsWith("---\n")) return false;
+
+    const secondClose = trimmedAfterFirst.indexOf("\n---\n", 4);
+    if (secondClose === -1) return false;
+
+    const secondBody = trimmedAfterFirst.slice(4, secondClose);
+    const hasYamlLikeEntry = secondBody
+      .split("\n")
+      .some((line) => /^[A-Za-z0-9_"'.-]+\s*:/.test(line.trim()));
+    if (!hasYamlLikeEntry) return false;
+
+    const firstBody = body.slice(4, firstClose);
+    const trailing = trimmedAfterFirst.slice(secondClose + "\n---\n".length).replace(/^\n+/, "");
+    const mergedBody = [firstBody.trimEnd(), secondBody.trim()].filter(Boolean).join("\n");
+    const merged = `${bom}---\n${mergedBody}\n---\n${trailing}`;
+
+    if (merged === normalized) return false;
+
+    await this.config.app.vault.modify(file, merged);
+    logger.log("[NewEventService] Consolidated duplicate leading frontmatter blocks", { file: file.path });
+    return true;
   }
 
   private normalizeFrontmatterKey(key: string): string {

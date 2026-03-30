@@ -31,7 +31,7 @@ export class MenuController {
   plugin: TPSGlobalContextMenuPlugin;
   private propertyRowService: PropertyRowService;
   private badgeRenderer: BadgeRenderer;
-  private panelBuilder: PanelBuilder;
+  public panelBuilder: PanelBuilder;
   private menuBuilder: MenuBuilder;
 
   constructor(plugin: TPSGlobalContextMenuPlugin) {

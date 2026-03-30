@@ -1,4 +1,4 @@
-﻿import { TPSGlobalContextMenuSettings } from './types';
+import { TPSGlobalContextMenuSettings } from './types';
 
 export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   enableLogging: false,
@@ -11,7 +11,7 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   enableLineItems: false, // LINE-ITEMS: Feature flag
   suppressMobileKeyboard: true,
   properties: [
-    { id: 'status', label: 'Status', key: 'status', type: 'selector', options: ['open', 'working', 'blocked', 'wont-do', 'complete'], icon: 'circle-check', showInCollapsed: true },
+    { id: 'status', label: 'Status', key: 'status', type: 'selector', options: ['todo', 'working', 'holding', 'wont-do', 'complete'], icon: 'circle-check', showInCollapsed: true },
     { id: 'priority', label: 'Priority', key: 'priority', type: 'selector', options: ['high', 'medium', 'normal', 'low'], icon: 'flag', showInCollapsed: true },
     { id: 'tags', label: 'Tags', key: 'tags', type: 'list', icon: 'tag', showInCollapsed: true },
     { id: 'recurrence', label: 'Recurrence', key: 'recurrence', type: 'recurrence', icon: 'repeat', showInCollapsed: true },
@@ -27,7 +27,7 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   promptOnRecurrenceEdit: true,
   recurrencePromptTimeout: 30, // 30 minutes (syncs across devices)
   recurrenceCompletionStatuses: ['complete', 'wont-do'],
-  recurrenceDefaultStatus: 'open', // Default status for new recurrence instances
+  recurrenceDefaultStatus: 'todo', // Default status for new recurrence instances
   recurringTemplateFolder: 'Recurring Templates', // Folder to store recurring event templates
 
   // File naming settings
@@ -51,25 +51,29 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   viewModeFrontmatterKey: 'viewmode',
   viewModeIgnoredFolders: '',
   viewModeRules: [],
-  systemCommands: ['open-in-new-tab', 'duplicate', 'get-relative-path'],
-  enableTaskCheckboxCycle: true,
   enableChecklistCompletionProperty: false,
   checklistCompletionPropertyKey: 'allChecked',
   checklistFinalPromptStatuses: ['complete', 'wont-do'],
+  enableLinkedSubitemCheckboxes: true,
+  linkedSubitemCheckboxStyle: 'soft-link',
+  linkedSubitemCheckboxMappings: [
+    { checkboxState: '[ ]', statuses: ['todo'], toggleTargetStatus: 'complete', icon: 'square', label: 'Todo' },
+    { checkboxState: '[x]', statuses: ['complete'], toggleTargetStatus: 'todo', icon: 'check', label: 'Complete' },
+    { checkboxState: '[\\]', statuses: ['working'], toggleTargetStatus: 'complete', icon: 'slash', label: 'Working' },
+    { checkboxState: '[?]', statuses: ['holding'], toggleTargetStatus: 'todo', icon: 'help-circle', label: 'Holding' },
+    { checkboxState: '[-]', statuses: ['wont-do'], toggleTargetStatus: 'todo', icon: 'minus', label: 'Won’t Do' },
+  ],
+  linkedSubitemDefaultOpenState: '[ ]',
+  linkedSubitemUncheckedStatuses: ['todo'],
+  linkedSubitemCheckedStatuses: ['complete'],
+  linkedSubitemCanceledStatuses: ['wont-do'],
+  linkedSubitemToggleCheckedStatus: 'complete',
+  linkedSubitemToggleUncheckedStatus: 'todo',
   enableArchiveTagMove: false,
   archiveTag: 'archive',
   archiveFolderPath: 'System/Archive',
   archiveUseDailyFolder: false,
   lastArchiveTagSweepDate: '',
-
-  // Pomodoro Timer Defaults
-  enablePomodoro: true,
-  pomodoroWorkDuration: 25,
-  pomodoroBreakDuration: 5,
-  pomodoroLongBreakDuration: 15,
-  pomodoroLongBreakInterval: 4,
-  pomodoroEventFolder: 'Action Items/Events',
-  pomodoroDefaultTags: 'pomodoro, timebox',
 
   workspaceRibbonButtons: false,
   workspaceRibbonIcons: {},
@@ -78,22 +82,20 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
   enableTopParentNav: true,
   ignoreEmbeddedChildrenInTopLinks: true,
   dailyNavShowToday: true,
+  enableAutoPopulateDailyNotes: true,
 
   // Overlay ignore rules
   ignoredBacklinksFrontmatterKeys: ['dateModified'],
+  ignoredSubitemTags: ['hide', 'dailynote', 'project'],
   subitems_IgnoreRules: [],
   inlineMenu_IgnoreRules: [],
-  enableSubitemsPanel: true,
-  showChecklistInSubitemsPanel: true,
-  showReferencesInSubitemsPanel: true,
-  showMentionsInSubitemsPanel: true,
-  showInlineNoteGraph: true,
-  noteGraphDepth: 1,
-  noteGraphMaxIncoming: 3,
-  noteGraphMaxOutgoing: 3,
-  noteGraphMaxMentions: 2,
-  subitemsPanelPosition: 'below',
-  subitemsPanelAutoCollapse: true,
+
+  // Auto-embed ignore settings
+  autoEmbedIgnoreFolders: ['Archive'],
+  autoEmbedIgnoreTags: ['archive'],
+
+  // Auto-insert blank line on note open
+  enableAutoInsertBlankLineOnOpen: true,
 
   // Default paths for new items
   defaultAttachmentsPath: '',
@@ -126,7 +128,7 @@ export const SYSTEM_COMMANDS = [
   { id: 'get-relative-path', label: 'Copy Relative Path', icon: 'link' },
 ] as const;
 
-export const STATUSES = ['open', 'working', 'blocked', 'wont-do', 'complete'] as const;
+export const STATUSES = ['todo', 'working', 'holding', 'wont-do', 'complete'] as const;
 
 /**
  * Available priority levels

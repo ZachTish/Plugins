@@ -1,181 +1,180 @@
 /* TPS Global Context Menu - UI Shared Styles */
 
 /* ============================================================================
-   Collapsible Sections
+   Linked Subitem row content
    ============================================================================ */
 
-.tps-collapsible-section {
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 12px;
-  background: transparent;
-}
-
-.tps-collapsible-section[open] {
-  padding: 12px;
-}
-
-.tps-collapsible-section-summary {
-  font-weight: 600;
-  cursor: pointer;
-  padding: 4px;
-  margin: -4px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  user-select: none;
-}
-
-.tps-collapsible-section-summary:hover {
-  color: var(--interactive-accent-hover);
-}
-
-.tps-collapsible-section-icon {
-  display: inline-block;
-  width: 20px;
-  flex-shrink: 0;
-}
-
-.tps-collapsible-section-title {
-  flex: 1;
-}
-
-.tps-collapsible-section-description {
-  margin: 8px 0 0 0;
-  font-size: 13px;
-  color: var(--text-muted);
-  line-height: 1.4;
-}
-
-.tps-collapsible-section[open] > .tps-collapsible-section-summary {
-  margin-bottom: 8px;
-}
-
-.tps-collapsible-section-content {
-  padding-left: 4px;
-  padding-right: 4px;
-  padding-top: 8px;
-}
-
-/* ============================================================================
-   List Rendering & Cards
-   ============================================================================ */
-
-.tps-list-container {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.tps-list-empty-state {
-  padding: 20px;
-  text-align: center;
-  color: var(--text-muted);
-  font-style: italic;
-  border: 1px dashed var(--background-modifier-border);
-  border-radius: 6px;
-}
-
-.tps-card {
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 6px;
-  padding: 12px;
-  background: var(--background-secondary);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.tps-card-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  justify-content: space-between;
-}
-
-.tps-card-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.tps-card-preview {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.tps-card-status {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-.tps-card-controls {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-  align-items: center;
-}
-
-.tps-card-btn {
+.tps-gcm-linked-subitem-row-content {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 32px;
-  height: 32px;
-  padding: 4px 8px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 4px;
-  background: var(--background-primary);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-normal);
-  transition: all 0.2s ease;
-}
-
-.tps-card-btn:hover:not(:disabled) {
-  background: var(--background-modifier-hover);
-  border-color: var(--interactive-accent);
-  color: var(--interactive-accent);
-}
-
-.tps-card-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.tps-card-btn-danger {
-  color: var(--text-error);
-}
-
-.tps-card-btn-danger:hover:not(:disabled) {
-  background: rgba(var(--text-error-rgb), 0.1);
-  border-color: var(--text-error);
-}
-
-/* ============================================================================
-   Main Category (collapsible) styling used by settings tabs
-   ============================================================================ */
-.tps-settings-main-category {
-  border: 1px solid transparent;
-  border-radius: 8px;
-  margin-bottom: 12px;
-}
-.tps-settings-main-category > summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 6px;
-  margin: -6px;
-  display: flex;
-  align-items: center;
   gap: 8px;
 }
-.tps-settings-main-summary h3 { margin: 0; font-size: 1.05em; }
-.tps-settings-main-content { padding: 8px 4px 12px 4px; }
+
+.tps-gcm-linked-subitem-row-content .is-cm-widget {
+  /* CodeMirror widget in LP mode */
+}
+ .tps-gcm-linked-subitem-row-content.is-reading-mode {
+  /* Reading mode: inline flex */
+  gap: 8px;
+}
+.tps-gcm-linked-subitem-row-content.is-live-preview {
+  /* Live Preview: inline flex */
+  gap: 6px;
+}
+.tps-gcm-linked-subitem-row-content .tps-gcm-linked-subitem-checkbox {
+  flex-shrink: 0;
+  width: 20px;
+    height: 19px;
+    border-radius: 4px;
+    background: none;
+    box-shadow: none;
+    pointer-events: none;
+  }
+  .tps-gcm-linked-subitem-checkbox:hover {
+    cursor: pointer;
+  }
+  .tps-gcm-linked-subitem-checkbox:checked) {
+    cursor: pointer;
+  }
+  .tps-gcm-linked-subitem-checkbox:active {
+    cursor: pointer;
+  }
+  .tps-gcm-linked-subitem-checkbox:disabled) {
+    cursor: default;
+    opacity: 0.4;
+  }
+  .tps-gcm-linked-subitem-checkbox:focus-within,
+  outline: none;
+    box-shadow: none;
+  }
+  .tps-gcm-linked-subitem-checkbox svg {
+    width: 16px;
+    height: 16px;
+  }
+  .tps-gcm-linked-subitem-checkbox svg {
+    fill: currentColor;
+  }
+  .tps-gcm-linked-subitem-checkbox svg path {
+    fill: var(--icon-color);
+  }
+  .tps-gcm-linked-subitem-checkbox svg {
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+  }
+  .tps-gcm-linked-subitem-checkbox:focus-within:focus,
+    outline: none;
+    box-shadow: none;
+  }
+          pointer-events: none;
+        }
+      }
+    }
+  }
+  .tps-gcm-linked-subitem-checkbox:focus-within:focus-visible {
+    outline: 2px solid var(--background-secondary);
+    box-shadow: 0 0 2px 1px 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+  }
+  .tps-gcm-linked-subitem-checkbox-hidden {
+    display: none;
+  }
+  .tps-gcm-hidden-native-link {
+    display: none;
+  }
+  .tps-gcm-linked-subitem-replaced {
+    /* Mark list item as having replaced content */
+  }
+  .tps-gcm-linked-subitem-task {
+    /* Host list item as a linked subitem task */
+  }
+          .classList.add('tps-gcm-linked-subitem-task');
+          host.classList.add(model.visualStateClass);
+        }
+      }
+    }
+  }
+  }
+}
+
+ /**
+ * * Get the text content of a list item, excluding nested lists.
+ */
+  const liText = (clone.textContent || '').trim();
+  if (!liText) return null;
+  
+  // Try to match this list item to a source line and wikilink
+ const parsed = this.plugin.bodySubitemLinkService.parseLine(line.text);
+ if (!parsed) continue;
+ 
+ const childFile = this.resolveLinkedFile(parsed.linkTarget, file.path);
+ if (!(childFile instanceof TFile)) continue;
+         const model = this.subitemLineModelService.buildModel(parsed, childFile, file);
+         subitemLines.set(i, { parsed, childFile, model });
+       }
+     }
+     
+     // Find all list item hosts in the preview
+     const hosts = Array.from(root.querySelectorAll<HTMLElement>('li, .task-list-item'));
+     
+     for (const host of hosts) {
+       // Match host to source line using simplified text matching
+ const matchedEntry: { parsed: any; childFile: TFile; model: SubitemLineModel } | null {
+       const lineText = lines[lineNum];
+       const displayLabel = entry.parsed.wikilink;
+       const linkTarget = entry.parsed.linkTarget;
+       // Get display label from wikilink (alias or target itself)
+       const displayLabelMatch = wikilink.match(/\[\[[^\]|]+(?:#[^\]|]+)?(?:\|([^\]]+))?$/);
+         if (alias) {
+           displayLabel = aliasMatch[1] : aliasMatch[2] : aliasMatch =3] : aliasMatch[3] && aliasMatch[4] && aliasMatch[5] && aliasMatch[6] && aliasMatch[7] || aliasMatch[8] && aliasMatch[9] && aliasMatch[10] || aliasMatch[11] && aliasMatch[12] && aliasMatch[13] && aliasMatch[14] && aliasMatch[15] && aliasMatch[16] && aliasMatch[17] && aliasMatch[18] && aliasMatch[19] && aliasMatch[20] && aliasMatch[21] && aliasMatch[22] && aliasMatch[23] && aliasMatch[24] && aliasMatch[25] && aliasMatch[26] && aliasMatch[27] && aliasMatch[28] && aliasMatch[29] && aliasMatch[30] && aliasMatch[31] && aliasMatch[32] && aliasMatch[33] && aliasMatch[34] && aliasMatch[35] && aliasMatch[36] && aliasMatch[37] && aliasMatch[38] && aliasMatch[39] && aliasMatch[40] && aliasMatch[41] && aliasMatch[42] && aliasMatch[43] && aliasMatch[44] && aliasMatch[45] && aliasMatch[46] && aliasMatch[47] && aliasMatch[48] && aliasMatch[49) && aliasMatch[50] && aliasMatch[51] && aliasMatch[52] && aliasMatch[53] && aliasMatch[54] && aliasMatch[55] && aliasMatch[56] && aliasMatch[57] && aliasMatch[58] && aliasMatch[59] && aliasMatch[60] && aliasMatch[61] && aliasMatch[62] && aliasMatch[63] && aliasMatch[64] && aliasMatch[65] && aliasMatch[66] && aliasMatch[67] && aliasMatch[68] && aliasMatch[69] && aliasMatch[70] && aliasMatch[71] && aliasMatch[72] && aliasMatch[73] && aliasMatch[74] && aliasMatch[75] && aliasMatch[76] && aliasMatch[77] && aliasMatch[78] && aliasMatch[79] && aliasMatch[80] && aliasMatch[81] && aliasMatch[82] && aliasMatch[83] && aliasMatch[84] && aliasMatch[85] && aliasMatch[86] && aliasMatch[87] && aliasMatch[88] && aliasMatch[89] && aliasMatch[90] && aliasMatch[91] && aliasMatch[92] && aliasMatch[93] && aliasMatch[94] && aliasMatch[95] && aliasMatch[96] && aliasMatch[97] && aliasMatch[98] && aliasMatch[99] && aliasMatch[100) && aliasMatch[101) && aliasMatch[102) && aliasMatch[103) && aliasMatch[104) && aliasMatch[105) && aliasMatch[106) && aliasMatch[107) && aliasMatch[108) && aliasMatch[109) && aliasMatch[110) && aliasMatch[111) && aliasMatch[112) && aliasMatch[113) && aliasMatch[114) && aliasMatch[115) && aliasMatch[116) && aliasMatch[117) && aliasMatch[118) && aliasMatch[119) && aliasMatch[120) && aliasMatch[121) && aliasMatch[122) && aliasMatch[123) && aliasMatch[124) && aliasMatch[125) && aliasMatch[126) && aliasMatch[127) && aliasMatch[128) && aliasMatch[129) && aliasMatch[130) && aliasMatch[131) && aliasMatch[132) && aliasMatch[133) && aliasMatch[134) && aliasMatch[135) && aliasMatch[136) && aliasMatch[137) && aliasMatch[138) && aliasMatch[139) && aliasMatch[140) && aliasMatch[141) && aliasMatch[142) && aliasMatch[143) && aliasMatch[144) && aliasMatch[145) && aliasMatch[146) && aliasMatch[147) && aliasMatch[148) && aliasMatch[149) && aliasMatch[150) && aliasMatch[151) && aliasMatch[152) && aliasMatch[153) && aliasMatch[154) && aliasMatch[155) && aliasMatch[156) && aliasMatch[157) && aliasMatch[158) && aliasMatch[159) && aliasMatch[160) && aliasMatch[161) && aliasMatch[162) && aliasMatch[163) && aliasMatch[164) && aliasMatch[165) && aliasMatch[166) && aliasMatch[167) && aliasMatch[168) && aliasMatch[169) && aliasMatch[170) && aliasMatch[171) && aliasMatch[172) && aliasMatch[173) && aliasMatch[174) && aliasMatch[175) && aliasMatch[176) && aliasMatch[177) && aliasMatch[178) && aliasMatch[179) && aliasMatch[180) && aliasMatch[181) && aliasMatch[182) && aliasMatch[183) && aliasMatch[184) && aliasMatch[185) && alias-match[186) && alias-match[187) && alias-match[188] && alias-match[189) && alias-match[190] && alias-match[191] && alias-match[192) && alias-match[193) && alias-match[194) && alias-match[195) && alias-match[196) && alias-match[197) && alias-match[198) && alias-match[199) && alias-match[200) && alias-match[201) && alias-match[202) && alias-match[203) && alias-match[204) && alias-match(205) && alias-match(206) && alias-match(207) && alias-match(208) && alias-match(209) && alias-match(210) && alias-match(211) && alias-match(212) && alias-match(213) && alias-match(214) && alias-match(215) && alias-match(216) && alias-match(217) && alias-match(218) && alias-match(219) && alias-match(220) && alias-match(221) && alias-match(222) && alias-match(223) && alias-match(224) && alias-match(225) && alias-match(226) && alias-match(227) && alias-match(228) && alias-match(229) && alias-match(230) && alias-match(231) && alias-match(232) && alias-match(233) && alias-match(234) && alias-match(235) && alias-match(236) && alias-match(237) && alias-match(238) && alias-match(239) && alias-match(240) && alias-match(241) && alias-match(242) && alias-match(243) && alias-match(244) && alias-match(245) && alias-match(246) && alias-match(247) && alias-match(248) && alias-match(249) && alias-match(250) && alias-match(251) && alias-match(252) && alias-match(253) && alias-match(254) && alias-match(255) && alias-match(256) && alias-match(257) && alias-match(258) && alias-match(259) && alias-match(260) && alias-match(261) && alias-match(262) && alias-match(264) && alias-match(265) && alias-match(266) && alias-match(267) && alias-match(268) && alias-match(269) && alias-match(270) && alias-match(271) && alias-match(272) && alias-match(273) && alias-match(274) && alias-match(275) && alias-match(276) && alias-match(277) && alias-match(278) && alias-match(279) && alias-match(280) && alias-match(281) && alias-match(282) && alias-match(283) && alias-match(284) && alias-match(285) && alias-match(286) && alias-match(287) && alias-match(288) && alias-match(289) && alias-match(290) && alias-match(291) && alias-match(292) && alias-match(293) && alias-match(294) && alias-match(295) && alias-match(296) && alias-match(297) && alias-match(298) && alias-match(299) && alias-match(300) && alias-match(301) && alias-match(302) && alias-match(303) && alias-match(304) && alias-match(305) && alias-match(306) && alias-match(307) && alias-match(308) && alias-match(309) && alias-match(310) && alias-match(311) && alias-match(312) && alias-match(313) && alias-match(314) && alias-match(315) && alias-match(316) && alias-match(317) && alias-match(318) && alias-match(319) && alias-match(320) && alias-match(321) && alias-match(322) && alias-match(323) && alias-match(324) && alias-match(325) && alias-match(326) && alias-match(327) && alias-match(328) && alias-match(329) && alias-match(330) && alias-match(331) && alias-match(332) && alias-match(333) && alias-match(334) && alias-match(335) && alias-match(336) && alias-match(337) && alias-match(338) && alias-match(339) && alias-match(340) && alias-match(341) && alias-match(342) && alias-match(343) && alias-match(344) && alias-match(345) && alias-match(346) && alias-match(347) && alias-match(348) && alias-match(349) && alias-match(350) && alias-match(351) && alias-match(352) && alias-match(353) && alias-match(354) && alias-match(355) && alias-match(356) && alias-match(357) && icon, width: 16px;
+            height: 16px;
+            line-height: 1.2;
+          }
+          border-radius: 4px;
+          background: var(--background-secondary);
+          box-shadow: none;
+        }
+      }
+    }
+  }
+  .tps-gcm-linked-subitem-task.is-complete .tps-gcm-linked-subitem-task .is-open,
+      host.classList.add('is-complete');
+      host.classList.remove('is-canceled');
+    }
+  }
+}
+
+  // Clear decorations and but rebuild the list item content
+  this.clearDecorations(view);
+    
+    const file = view.file;
+    if (!(file instanceof TFile)) return;
+    }
+    
+    // Build the row content using the unified builder
+    const elements = buildLinkedSubitemRow(
+      model,
+      (evt) => {
+        void this.handleCustomCheckboxClick(evt, elements.checkbox);
+      },
+      (path) => this.openLinkedSubitemPath(path),
+      (evt, pill) => {
+        void this.handlePropertyPillClick(evt, elements.pillsContainer.querySelector(`.tps-gcm-linked-subitem-pill[data-linked-subitem-pill-kind="${pill.kind}"]`) as HTMLElement;
+ || elements.pillsContainer);
+ {
+ pillEl.dataset.linkedSubitemPillKind = pill.dataset.linkedSubitemPill;
+(evt, pill) => {
+        void this.handlePropertyPillClick(evt, elements.pillsContainer.querySelector(`.tps-gcm-linked-subitem-pill[data-linked-subitem-pill-kind="${pill.kind}"]`) as HTMLElement;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+}

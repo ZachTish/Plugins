@@ -32,10 +32,13 @@ export interface ExternalCalendarConfig {
     color?: string;
     enabled?: boolean;
     autoCreateEnabled?: boolean;
+    autoCreateMode?: "note" | "task-list";
     autoCreateTypeFolder?: string;
     autoCreateFolder?: string;
     autoCreateTag?: string;
     autoCreateTemplate?: string;
+    autoCreateTaskListPath?: string;
+    autoCreateTaskListHeading?: string;
 }
 
 
@@ -68,6 +71,7 @@ export interface PropertyReminder {
     allDayFilter?: "any" | "true" | "false";
     allDayBaseTime?: string;
     triggerAtEnd?: boolean;
+    includeUnmatchedExternalEvents?: boolean;
 }
 
 export interface KanbanTaskReminderSettings {
@@ -102,7 +106,7 @@ export interface OverdueItem {
     diff: string;
     id: string;
     sourceKey?: string;
-    sourceType?: "file" | "kanban-task";
+    sourceType?: "file" | "kanban-task" | "external-event";
     taskLineNumber?: number;
     taskText?: string;
     title?: string;

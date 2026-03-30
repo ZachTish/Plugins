@@ -235,7 +235,7 @@ export function hasRequiredStatus(fm: any, reminder: PropertyReminder): boolean 
  * Pass the global fallback arrays from settings for when the reminder doesn't have its own.
  */
 export function shouldIgnoreForReminder(
-    file: TFile,
+    file: Pick<TFile, "path" | "basename">,
     cache: any,
     fm: any,
     reminder: PropertyReminder,

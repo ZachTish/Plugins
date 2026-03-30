@@ -1,6 +1,5 @@
-import { App, Menu, TFile, TFolder, Notice, normalizePath } from 'obsidian';
+import { App, Menu, TFile, Notice, normalizePath } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
-import { SYSTEM_COMMANDS } from '../constants';
 import { TextInputModal } from '../modals/text-input-modal';
 import { FileSuggestModal } from '../modals/FileSuggestModal';
 import { MultiFileSelectModal } from '../modals/MultiFileSelectModal';
@@ -8,7 +7,8 @@ import { mergeNormalizedTags, normalizeTagValue } from '../utils/tag-utils';
 import * as logger from '../logger';
 import { resolveCustomProperties } from '../resolve-profiles';
 import { ViewModeService } from '../services/view-mode-service';
-import { executeCommandById, hasCommand } from '../core';
+import { parseLinksFromFrontmatterValue } from '../services/link-target-service';
+import { promptAndCreateSubitemForParent } from '../services/subitem-creation-service';
 
 export class MenuBuilder {
   private plugin: TPSGlobalContextMenuPlugin;
@@ -50,6 +50,150 @@ export class MenuBuilder {
     return Object.keys(frontmatter).some((k) => k.toLowerCase() === lowerKey);
   }
 
+  private resolveParentFilesFor(file: TFile): TFile[] {
+    const parents = new Map<string, TFile>();
+    for (const entry of this.plugin.parentLinkResolutionService.getParentsForChild(file)) {
+      if (entry.file.path !== file.path) parents.set(entry.file.path, entry.file);
+    }
+    return Array.from(parents.values());
+  }
+
+  private resolveChildFilesFor(file: TFile): TFile[] {
+    const children = new Map<string, TFile>();
+    const indexed = this.plugin.app.vault.getMarkdownFiles().filter((candidate) =>
+      this.plugin.parentLinkResolutionService.hasParent(candidate, file),
+    );
+    for (const child of indexed) {
+      if (child.path !== file.path) children.set(child.path, child);
+    }
+
+    return Array.from(children.values());
+  }
+
+  private getFileDisplayTitle(file: TFile): string {
+    const frontmatter = (this.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
+    const titleValue = this.getValueCaseInsensitive(frontmatter, 'title');
+    const title = typeof titleValue === 'string' ? titleValue.trim() : '';
+    return title || file.basename;
+  }
+
+  private getFileIconMeta(file: TFile): { icon: string; color?: string } {
+    const frontmatter = (this.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
+    const rawIcon = typeof frontmatter.icon === 'string' ? frontmatter.icon.trim() : '';
+    const rawColor = typeof frontmatter.color === 'string' ? frontmatter.color.trim() : '';
+    const icon = rawIcon.replace(/^lucide:/i, '') || 'file-text';
+    return {
+      icon,
+      color: rawColor || undefined,
+    };
+  }
+
+  private populateParentRelationSubmenu(menu: Menu, file: TFile): void {
+    const parentFiles = this.resolveParentFilesFor(file);
+
+    menu.addItem((sub) => {
+      sub.setTitle(parentFiles.length > 0 ? 'Replace parent...' : 'Link existing parent...')
+        .setIcon('plus')
+        .onClick(() => {
+          new FileSuggestModal(this.app, async (parentFile: TFile) => {
+            await this.plugin.bulkEditService.linkToParent([file], parentFile);
+            new Notice(`Linked to parent: ${parentFile.basename}`);
+          }, { extensions: ['md', 'base'] }).open();
+        });
+    });
+
+    menu.addSeparator();
+
+    if (parentFiles.length === 0) {
+      menu.addItem((sub) => {
+        sub.setTitle('No linked parents')
+          .setIcon('info')
+          .setDisabled(true);
+      });
+      return;
+    }
+
+    parentFiles.forEach((parentFile) => {
+      menu.addItem((sub) => {
+        sub.setTitle(this.getFileDisplayTitle(parentFile))
+          .setIcon(this.getFileIconMeta(parentFile).icon || 'file-text')
+          .onClick(() => {
+            void this.plugin.openFileInLeaf(parentFile, false, () => this.app.workspace.getLeaf(false), {
+              revealLeaf: true,
+              ignoreCanvasDragGuard: true,
+            });
+          });
+      });
+
+      menu.addItem((sub) => {
+        sub.setTitle(this.getFileDisplayTitle(parentFile))
+          .setIcon('x')
+          .onClick(async () => {
+            await this.plugin.bulkEditService.unlinkFromParent(file, parentFile);
+            new Notice(`Removed parent link: ${this.getFileDisplayTitle(parentFile)}`);
+          });
+      });
+    });
+  }
+
+  private populateChildRelationSubmenu(menu: Menu, file: TFile): void {
+    const childFiles = this.resolveChildFilesFor(file);
+
+    menu.addItem((sub) => {
+      sub.setTitle('Create new child...')
+        .setIcon('plus')
+        .onClick(() => {
+          void promptAndCreateSubitemForParent(this.plugin, file);
+        });
+    });
+
+    menu.addItem((sub) => {
+      sub.setTitle('Link existing child...')
+        .setIcon('link')
+        .onClick(() => {
+          new MultiFileSelectModal(this.app, async (childFilesToAdd: TFile[]) => {
+            if (childFilesToAdd.length > 0) {
+              await this.plugin.bulkEditService.linkChildren(file, childFilesToAdd);
+              new Notice(`Linked ${childFilesToAdd.length} children to this note.`);
+            }
+          }).open();
+        });
+    });
+
+    menu.addSeparator();
+
+    if (childFiles.length === 0) {
+      menu.addItem((sub) => {
+        sub.setTitle('No linked children')
+          .setIcon('info')
+          .setDisabled(true);
+      });
+      return;
+    }
+
+    childFiles.forEach((childFile) => {
+      menu.addItem((sub) => {
+        sub.setTitle(this.getFileDisplayTitle(childFile))
+          .setIcon(this.getFileIconMeta(childFile).icon || 'file-text')
+          .onClick(() => {
+            void this.plugin.openFileInLeaf(childFile, false, () => this.app.workspace.getLeaf(false), {
+              revealLeaf: true,
+              ignoreCanvasDragGuard: true,
+            });
+          });
+      });
+
+      menu.addItem((sub) => {
+        sub.setTitle(this.getFileDisplayTitle(childFile))
+          .setIcon('x')
+          .onClick(async () => {
+            await this.plugin.bulkEditService.unlinkFromParent(childFile, file);
+            new Notice(`Removed child link: ${this.getFileDisplayTitle(childFile)}`);
+          });
+      });
+    });
+  }
+
   private async ensureFolderPath(path: string): Promise<void> {
     const clean = normalizePath(path).trim();
     if (!clean) return;
@@ -61,6 +205,17 @@ export class MenuBuilder {
         await this.app.vault.createFolder(current);
       }
     }
+  }
+
+  private setFrontmatterValueCaseInsensitive(frontmatter: Record<string, any>, key: string, value: any): void {
+    if (!frontmatter || typeof frontmatter !== 'object') return;
+    if (key in frontmatter) {
+      frontmatter[key] = value;
+      return;
+    }
+    const lowerKey = key.toLowerCase();
+    const existingKey = Object.keys(frontmatter).find((candidate) => candidate.toLowerCase() === lowerKey);
+    frontmatter[existingKey ?? key] = value;
   }
 
   private getUniqueArchiveTargetPath(file: TFile, archiveFolder: string): string {
@@ -300,8 +455,6 @@ export class MenuBuilder {
       });
     };
 
-    // System Commands (All Files)
-    const enabledCommands = this.plugin.settings.systemCommands || [];
     const file = entries[0].file;
 
     // Handwriting / PDF Integration
@@ -312,34 +465,11 @@ export class MenuBuilder {
           .setSection('tps-file-ops')
           .onClick(async () => {
             const app = (this.app as any);
-            if (hasCommand(this.app, 'open-with-default-app:open')) {
-              executeCommandById(this.app, 'open-with-default-app:open');
-              return;
-            }
-
             if (app.openWithDefaultApp && file instanceof TFile) {
               app.openWithDefaultApp(file.path);
               return;
             }
-
-            const knownIds = [
-              'handwritten-notes:create',
-              'handwritten-notes:modal-create-open',
-              'obsidian-handwriting:create'
-            ];
-
-            let found = false;
-            for (const id of knownIds) {
-              if (hasCommand(this.app, id)) {
-                executeCommandById(this.app, id);
-                found = true;
-                break;
-              }
-            }
-
-            if (!found) {
-              new Notice("Could not open PDF with default app or handwriting plugin (checked 'open-with-default-app', native 'openWithDefaultApp', and 'Handwritten Notes').");
-            }
+            new Notice("Could not open PDF with the system default app.");
           });
       });
     }
@@ -436,55 +566,27 @@ export class MenuBuilder {
 
       });
 
-      // Add Note Operations (Markdown Only)
-      if (markdownFiles.length > 0) {
-        menu.addItem((item) =>
-          item
-            .setTitle("Add to note...")
-            .setIcon("file-plus")
-            .setSection('tps-note-ops')
-            .onClick(() => {
-              this.plugin.noteOperationService.addNotesToAnotherNote(markdownFiles);
-            })
-        );
-
-        menu.addItem((item) =>
-          item
-            .setTitle("Add to daily note...")
-            .setIcon("calendar-plus")
-            .setSection('tps-note-ops')
-            .onClick(() => {
-              this.plugin.noteOperationService.addNotesToDailyNotes(markdownFiles);
-            })
-        );
-      }
-
       // Link Operations (rendered below frontmatter properties)
       if (file.extension?.toLowerCase() === 'md') {
+        const parentCount = this.resolveParentFilesFor(file).length;
+        const childCount = this.resolveChildFilesFor(file).length;
+
         menu.addItem((item) => {
-          item.setTitle('Link to Parent')
+          item.setTitle(parentCount > 0 ? `Link to Parent (${parentCount})` : 'Link to Parent')
             .setIcon('link')
-            .setSection('tps-props')
-            .onClick(() => {
-              new FileSuggestModal(this.app, async (parentFile: TFile) => {
-                await this.plugin.bulkEditService.linkToParent([file], parentFile);
-                new Notice(`Linked to parent: ${parentFile.basename}`);
-              }).open();
-            });
+            .setSection('tps-props');
+
+          const subMenu = (item as any).setSubmenu();
+          this.populateParentRelationSubmenu(subMenu, file);
         });
 
         menu.addItem((item) => {
-          item.setTitle('Link Children')
+          item.setTitle(childCount > 0 ? `Link Children (${childCount})` : 'Link Children')
             .setIcon('network')
-            .setSection('tps-props')
-            .onClick(() => {
-              new MultiFileSelectModal(this.app, async (childFiles: TFile[]) => {
-                if (childFiles.length > 0) {
-                  await this.plugin.bulkEditService.linkChildren(file, childFiles);
-                  new Notice(`Linked ${childFiles.length} children to this note.`);
-                }
-              }).open();
-            });
+            .setSection('tps-props');
+
+          const subMenu = (item as any).setSubmenu();
+          this.populateChildRelationSubmenu(subMenu, file);
         });
 
         menu.addItem((item) => {
@@ -556,210 +658,6 @@ export class MenuBuilder {
           }
         });
     });
-
-    // --- File/System Operations (rendered below properties) ---
-    if (enabledCommands.includes('open-in-new-tab')) {
-      menu.addItem((item) => {
-        item.setTitle('Open in new tab')
-          .setIcon('file-plus')
-          .setSection('tps-file-ops')
-          .onClick(async () => {
-            await this.plugin.openFileInLeaf(file, 'tab', () => this.app.workspace.getLeaf('tab'));
-          });
-      });
-    }
-
-    if (enabledCommands.includes('open-to-right')) {
-      menu.addItem((item) => {
-        item.setTitle('Open to the right')
-          .setIcon('separator-vertical')
-          .setSection('tps-file-ops')
-          .onClick(async () => {
-            await this.plugin.openFileInLeaf(file, 'split', () => this.app.workspace.getLeaf('split'));
-          });
-      });
-    }
-
-    if (enabledCommands.includes('open-in-new-window')) {
-      menu.addItem((item) => {
-        item.setTitle('Open in new window')
-          .setIcon('maximize')
-          .setSection('tps-file-ops')
-          .onClick(async () => {
-            await this.plugin.openFileInLeaf(file, 'window', () => this.app.workspace.getLeaf('window'));
-          });
-      });
-    }
-
-    if (enabledCommands.includes('open-in-same-tab')) {
-      menu.addItem((item) => {
-        item.setTitle('Open in same tab')
-          .setIcon('file')
-          .setSection('tps-file-ops')
-          .onClick(async () => {
-            await this.plugin.openFileInLeaf(file, false, () => this.app.workspace.getLeaf(false));
-          });
-      });
-    }
-
-    if (enabledCommands.includes('bookmark')) {
-      menu.addItem((item) => {
-        // @ts-ignore - accessing internal plugins API
-        const bookmarksPlugin = this.app.internalPlugins.getPluginById('bookmarks');
-        const bookmarkItems = bookmarksPlugin?.instance?.items || [];
-        const existingBookmark = bookmarkItems.find((i: any) => i.path === file.path);
-        const isBookmarked = !!existingBookmark;
-
-        item.setTitle(isBookmarked ? 'Remove bookmark' : 'Bookmark')
-          .setIcon('bookmark')
-          .setSection('tps-file-ops')
-          .onClick(async () => {
-            if (!bookmarksPlugin?.instance) return;
-
-            try {
-              if (isBookmarked && existingBookmark) {
-                if (typeof bookmarksPlugin.instance.removeItem === 'function') {
-                  bookmarksPlugin.instance.removeItem(existingBookmark);
-                } else if (Array.isArray(bookmarksPlugin.instance.items)) {
-                  const idx = bookmarksPlugin.instance.items.indexOf(existingBookmark);
-                  if (idx > -1) {
-                    bookmarksPlugin.instance.items.splice(idx, 1);
-                    if (typeof bookmarksPlugin.instance.saveData === 'function') {
-                      await bookmarksPlugin.instance.saveData();
-                    }
-                  }
-                }
-              } else {
-                if (typeof bookmarksPlugin.instance.addItem === 'function') {
-                  bookmarksPlugin.instance.addItem({ type: 'file', path: file.path, title: file.basename });
-                } else if (Array.isArray(bookmarksPlugin.instance.items)) {
-                  bookmarksPlugin.instance.items.push({ type: 'file', path: file.path, title: file.basename });
-                  if (typeof bookmarksPlugin.instance.saveData === 'function') {
-                    await bookmarksPlugin.instance.saveData();
-                  }
-                }
-              }
-            } catch (err) {
-              logger.error('[TPS GCM] Bookmark operation failed:', err);
-            }
-          });
-      });
-    }
-
-    if (entries.length === 1) {
-      menu.addItem((item) => {
-        item.setTitle('Rename...')
-          .setIcon('pencil')
-          .setSection('tps-file-ops')
-          .onClick(() => {
-            void this.promptRenameFile(file);
-          });
-      });
-    }
-
-    if (enabledCommands.includes('move-file')) {
-      menu.addItem((item) => {
-        item.setTitle('Move file to...')
-          .setIcon('folder-input')
-          .setSection('tps-file-ops')
-          .onClick(() => {
-            // @ts-ignore
-            if (typeof this.app.fileManager.promptForFileMove === 'function') {
-              // @ts-ignore
-              this.app.fileManager.promptForFileMove(file);
-            } else {
-              executeCommandById(this.app, 'app:move-file');
-            }
-          });
-      });
-    }
-
-    if (enabledCommands.includes('duplicate')) {
-      menu.addItem((item) => {
-        item.setTitle('Duplicate')
-          .setIcon('copy')
-          .setSection('tps-file-ops')
-          .onClick(async () => {
-            const baseName = file.basename;
-            const ext = file.extension;
-            const folder = file.parent?.path || '';
-            const isFolder = !ext;
-            const name = isFolder ? file.name : baseName;
-
-            let newPath = folder ? `${folder}/${name} copy` : `${name} copy`;
-            if (ext) newPath += `.${ext}`;
-
-            let counter = 2;
-            while (this.app.vault.getAbstractFileByPath(newPath)) {
-              newPath = folder ? `${folder}/${name} copy ${counter}` : `${name} copy ${counter}`;
-              if (ext) newPath += `.${ext}`;
-              counter++;
-            }
-
-            if (file instanceof TFile) {
-              const content = await this.app.vault.read(file);
-              await this.app.vault.create(newPath, content);
-            } else {
-              new Notice("Folder duplication not supported yet");
-              return;
-            }
-            new Notice(`Created ${newPath}`);
-          });
-      });
-    }
-
-    if (enabledCommands.includes('copy-url')) {
-      menu.addItem((item) => {
-        item.setTitle('Copy Obsidian URL')
-          .setIcon('link')
-          .setSection('tps-file-ops')
-          .onClick(() => {
-            // @ts-ignore
-            const url = this.app.getObsidianUrl(file);
-            navigator.clipboard.writeText(url);
-            new Notice('Obsidian URL copied');
-          });
-      });
-    }
-
-    if (enabledCommands.includes('get-relative-path')) {
-      menu.addItem((item) => {
-        item.setTitle('Copy relative path')
-          .setIcon('link')
-          .setSection('tps-file-ops')
-          .onClick(() => {
-            navigator.clipboard.writeText(file.path);
-            new Notice('Path copied to clipboard');
-          });
-      });
-    }
-
-    if (enabledCommands.includes('reveal-finder')) {
-      menu.addItem((item) => {
-        item.setTitle('Reveal in system explorer')
-          .setIcon('monitor')
-          .setSection('tps-reveal-ops')
-          .onClick(() => {
-            // @ts-ignore
-            this.app.showInFolder(file.path);
-          });
-      });
-    }
-
-    if (enabledCommands.includes('reveal-nav')) {
-      menu.addItem((item) => {
-        item.setTitle('Reveal in navigation')
-          .setIcon('folder-open')
-          .setSection('tps-reveal-ops')
-          .onClick(() => {
-            const leaf = this.app.workspace.getLeavesOfType('file-explorer')[0];
-            if (leaf && leaf.view) {
-              // @ts-ignore
-              leaf.view.revealInFolder(file);
-            }
-          });
-      });
-    }
 
     // Restore original methods
     menu.addItem = originalAddItem;

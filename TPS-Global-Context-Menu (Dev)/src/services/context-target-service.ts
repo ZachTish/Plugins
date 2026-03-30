@@ -131,6 +131,7 @@ export class ContextTargetService {
 
     isManualContextInterceptTarget(target: HTMLElement | null): boolean {
         if (!target) return false;
+        if (target.closest('[data-tps-task-context="true"]')) return false;
         if (this.isNativeMenuManagedTarget(target)) return false;
         if (this.resolveEmbedTarget(target)) return true;
 
@@ -547,11 +548,11 @@ export class ContextTargetService {
                 '.nn-file.nn-selected, ' +
                 '.nn-navitem.nn-selected, ' +
                 // nn-context-menu-active = the actual right-clicked item
-                '.nn-context-menu-active, ' +
-                // aria-selected is set programmatically only on explicitly selected items
-                '.nn-file[aria-selected="true"], ' +
-                '.nn-navitem[aria-selected="true"], ' +
-                '[data-path][aria-selected="true"]'
+                '.nn-context-menu-active'
+                // NOTE: aria-selected intentionally excluded here. In practice NN can
+                // expose focused/current rows through aria-selected even when the user
+                // only right-clicked a single item, which causes GCM to inflate a
+                // single-file menu into a phantom multi-selection.
                 // NOTE: .nn-file.is-selected and bare .nn-selected intentionally excluded —
                 // Obsidian applies is-selected / nn-selected to the active/focused item in
                 // the tree (the currently-open file), not only to explicitly multi-selected ones.
@@ -626,7 +627,7 @@ export class ContextTargetService {
         const root: ParentNode = scopeRoot ?? document;
         const nodes = Array.from(
             root.querySelectorAll<HTMLElement>(
-                '.nn-file.nn-selected, .nn-navitem.nn-selected, .nn-context-menu-active, [data-path][aria-selected="true"]',
+                '.nn-file.nn-selected, .nn-navitem.nn-selected, .nn-context-menu-active',
             ),
         );
         return nodes.some((node) => node.getClientRects().length > 0);

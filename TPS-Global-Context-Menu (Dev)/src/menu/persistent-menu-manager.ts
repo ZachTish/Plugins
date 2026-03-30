@@ -63,6 +63,7 @@ export class PersistentMenuManager {
   constructor(plugin: TPSGlobalContextMenuPlugin) {
     this.plugin = plugin;
     this.setupKeyboardDetection();
+    this.updateMobileBottomOffsets();
   }
 
   /**
@@ -104,7 +105,7 @@ export class PersistentMenuManager {
           if (operator === 'ends-with') match = path.endsWith(condition.value || '');
           if (operator === 'not-contains') match = !path.includes(condition.value || '');
 
-          console.log(`[fileMatchesIgnoreRules] path eval: ${path} vs ${condition.value} with ${operator} -> ${match}`);
+          logger.debug(`[fileMatchesIgnoreRules] path eval: ${path} vs ${condition.value} with ${operator} -> ${match}`);
           return match;
         }
 
@@ -122,7 +123,7 @@ export class PersistentMenuManager {
           if (operator === 'contains') match = String(value || '').includes(condition.value || '');
           if (operator === 'not-contains') match = !String(value || '').includes(condition.value || '');
 
-          console.log(`[fileMatchesIgnoreRules] frontmatter eval: key=${key}, value=${value} vs ${condition.value} with ${operator} -> ${match}`);
+          logger.debug(`[fileMatchesIgnoreRules] frontmatter eval: key=${key}, value=${value} vs ${condition.value} with ${operator} -> ${match}`);
           return match;
         }
 
@@ -261,6 +262,7 @@ export class PersistentMenuManager {
   private handleKeyboardVisibilityChange(visible: boolean): void {
     // Keep class for compatibility with existing selectors.
     document.body?.classList?.toggle('tps-context-hidden-for-keyboard', visible);
+    this.updateMobileBottomOffsets();
 
     for (const [view, instances] of this.menus.entries()) {
       if (instances.reading?.isConnected) {
@@ -299,6 +301,7 @@ export class PersistentMenuManager {
    */
   ensureMenus(): void {
     if (!this.plugin?.app?.workspace) return;
+    this.updateMobileBottomOffsets();
 
     if (!this.plugin.settings.enableInlinePersistentMenus) {
       for (const view of Array.from(this.menus.keys())) {
@@ -338,24 +341,21 @@ export class PersistentMenuManager {
         logger.error('[TPS GCM] Failed to ensure live menu:', error);
       }
       try {
-        this.ensureInlineSubitemsPanel(targetView);
+        this.removeInlineSubitemsPanel(targetView);
+        this.removeNoteGraphPanel(targetView);
+        this.removeNoteReferencesPanel(targetView);
       } catch (error) {
-        logger.error('[TPS GCM] Failed to ensure inline subitems panel:', error);
-      }
-      try {
-        this.ensureNoteGraphPanel(targetView);
-      } catch (error) {
-        logger.error('[TPS GCM] Failed to ensure note graph panel:', error);
-      }
-      try {
-        this.ensureNoteReferencesPanel(targetView);
-      } catch (error) {
-        logger.error('[TPS GCM] Failed to ensure note references panel:', error);
+        logger.error('[TPS GCM] Failed to remove retired inline panels:', error);
       }
       try {
         this.ensureInlineTitleIcon(targetView);
       } catch (error) {
         logger.error('[TPS GCM] Failed to ensure inline title icon:', error);
+      }
+      try {
+        this.plugin.inlineTaskSubtaskService?.ensureForView(targetView);
+      } catch (error) {
+        logger.error('[TPS GCM] Failed to ensure inline task subtask controls:', error);
       }
       try {
         this.ensureTopParentNav(targetView);
@@ -396,6 +396,12 @@ export class PersistentMenuManager {
     for (const view of Array.from(this.titleIcons.keys())) {
       if (!activeViews.has(view)) {
         this.removeInlineTitleIcon(view);
+      }
+    }
+    for (const leaf of this.plugin.app.workspace.getLeavesOfType('markdown')) {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && !activeViews.has(view)) {
+        this.plugin.inlineTaskSubtaskService?.removeForView(view);
       }
     }
 
@@ -625,32 +631,11 @@ export class PersistentMenuManager {
   }
 
   private shouldShowInlineSubitems(view: MarkdownView): boolean {
-    if (!this.plugin.settings.enableSubitemsPanel) return false;
-    const file = view.file;
-    if (!(file instanceof TFile)) return false;
-    if (file.extension?.toLowerCase() !== 'md') return false;
-
-    // Check ignore rules for subitems
-    if (this.fileMatchesIgnoreRules(file, this.plugin.settings.subitems_IgnoreRules)) {
-      return false;
-    }
-
-    const mode = getViewMode(view);
-    // Show in both preview and source (live preview) modes
-    return mode === 'preview' || mode === 'source';
+    return false;
   }
 
   private shouldRenderInlineNotePanels(view: MarkdownView): boolean {
-    const file = view.file;
-    if (!(file instanceof TFile)) return false;
-    if (file.extension?.toLowerCase() !== 'md') return false;
-    if (this.plugin.shouldIgnoreAutoFrontmatterWrite(file)) return false;
-
-    // We do NOT check inlineMenu_IgnoreRules here, because the user wants References and Graph
-    // to be visible on Daily Notes even if the Global Context Menu is hidden.
-
-    const mode = getViewMode(view);
-    return mode === 'preview' || mode === 'source';
+    return false;
   }
 
   private resolveInlineSubitemsAnchor(view: MarkdownView): { parent: HTMLElement; reference: Element | null; titleEl?: Element | null } | null {
@@ -916,7 +901,7 @@ export class PersistentMenuManager {
       menuEl.style.transform = 'translate(0px, 0px)';
     } else {
       menuEl.style.top = 'auto';
-      menuEl.style.bottom = 'calc(var(--tps-auto-base-embed-bottom, var(--tps-gcm-live-bottom, 16px)) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) + 8px)';
+      menuEl.style.bottom = 'calc(max(var(--tps-auto-base-embed-bottom, var(--tps-gcm-live-bottom, 16px)), var(--tps-gcm-mobile-toolbar-offset, 0px)) + env(safe-area-inset-bottom, 0px) + var(--tps-auto-base-embed-height, 0px) + 8px)';
       menuEl.style.transform = `translate(0px, ${offsetY}px)`;
     }
 
@@ -1976,34 +1961,16 @@ export class PersistentMenuManager {
 
   private getParentChildRelationshipPaths(file: TFile, knownParents?: TFile[]): Set<string> {
     const relationshipPaths = new Set<string>();
-    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
-    const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
 
     const parentFiles = knownParents ?? this.resolveParentFiles(file);
     for (const parentFile of parentFiles) {
       relationshipPaths.add(parentFile.path);
     }
 
-    const ownFrontmatter = (this.plugin.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
-    const ownChildrenRaw = this.getFrontmatterValueCaseInsensitive(ownFrontmatter, childKey);
-    for (const linkedChild of this.extractLinkedFilesFromFrontmatterValue(ownChildrenRaw, file.path)) {
-      relationshipPaths.add(linkedChild.path);
-    }
-
     // Include reverse-only relationships if one direction is missing.
     for (const candidate of this.plugin.app.vault.getMarkdownFiles()) {
       if (candidate.path === file.path) continue;
-      const candidateFrontmatter = (this.plugin.app.metadataCache.getFileCache(candidate)?.frontmatter || {}) as Record<string, any>;
-
-      const candidateParentsRaw = this.getFrontmatterValueCaseInsensitive(candidateFrontmatter, parentKey);
-      const candidateParents = this.extractLinkedFilesFromFrontmatterValue(candidateParentsRaw, candidate.path);
-      if (candidateParents.some((linkedFile) => linkedFile.path === file.path)) {
-        relationshipPaths.add(candidate.path);
-      }
-
-      const candidateChildrenRaw = this.getFrontmatterValueCaseInsensitive(candidateFrontmatter, childKey);
-      const candidateChildren = this.extractLinkedFilesFromFrontmatterValue(candidateChildrenRaw, candidate.path);
-      if (candidateChildren.some((linkedFile) => linkedFile.path === file.path)) {
+      if (this.plugin.parentLinkResolutionService.hasParent(candidate, file)) {
         relationshipPaths.add(candidate.path);
       }
     }
@@ -2116,30 +2083,10 @@ export class PersistentMenuManager {
   }
 
   private resolveParentFiles(file: TFile): TFile[] {
-    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
-    const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
     const parentFiles = new Map<string, TFile>();
-
-    const cache = this.plugin.app.metadataCache.getFileCache(file);
-    const fm = (cache?.frontmatter || {}) as Record<string, any>;
-    const raw = this.getFrontmatterValueCaseInsensitive(fm, parentKey);
-    const values = Array.isArray(raw) ? raw : (raw === undefined || raw === null ? [] : [raw]);
-
-    for (const val of values) {
-      const parentFile = this.resolveParentValueToFile(val, file.path);
-      if (parentFile && parentFile.path !== file.path) {
-        parentFiles.set(parentFile.path, parentFile);
-      }
-    }
-
-    // Reverse-only link support: parent note defines this note in its child key.
-    for (const candidate of this.plugin.app.vault.getMarkdownFiles()) {
-      if (candidate.path === file.path) continue;
-      const candidateFrontmatter = (this.plugin.app.metadataCache.getFileCache(candidate)?.frontmatter || {}) as Record<string, any>;
-      const childRaw = this.getFrontmatterValueCaseInsensitive(candidateFrontmatter, childKey);
-      const children = this.extractLinkedFilesFromFrontmatterValue(childRaw, candidate.path);
-      if (children.some((linkedFile) => linkedFile.path === file.path)) {
-        parentFiles.set(candidate.path, candidate);
+    for (const entry of this.plugin.parentLinkResolutionService.getParentsForChild(file)) {
+      if (entry.file.path !== file.path) {
+        parentFiles.set(entry.file.path, entry.file);
       }
     }
 
@@ -2244,106 +2191,8 @@ export class PersistentMenuManager {
   }
 
   private ensureInlineSubitemsPanel(view: MarkdownView): void {
-    if (!this.shouldShowInlineSubitems(view)) {
-      this.removeInlineSubitemsPanel(view);
-      this.removeStrayInlineSubitemsPanels(view, null);
-      return;
-    }
-
-    const file = view.file;
-    if (!(file instanceof TFile)) {
-      this.removeInlineSubitemsPanel(view);
-      this.removeStrayInlineSubitemsPanels(view, null);
-      return;
-    }
-
-    const tracked = this.inlineSubitemsPanels.get(view) || null;
-    this.removeStrayInlineSubitemsPanels(view, tracked);
-
-    // Check if the panel already exists and is attached properly
-    const instances = this.menus.get(view);
-    const activeMenu = instances?.live || instances?.reading;
-
-    if (tracked && tracked.isConnected && tracked.dataset.filePath === file.path) {
-      if (activeMenu && tracked.parentElement === activeMenu) {
-        this.applyInlinePanelVisibility(tracked);
-        this.ensureSwipeGestureTracking(view);
-        return;
-      }
-      if (!activeMenu && tracked.parentElement === document.body) {
-        this.applyInlinePanelVisibility(tracked);
-        this.ensureSwipeGestureTracking(view);
-        return;
-      }
-    }
-
-    // Check for existing collapsed state using our persistent map
-    const path = file.path;
-    const hasCollapsedEntry = this.collapsedStateByPath.has(path);
-    const wasCollapsed = this.collapsedStateByPath.get(path) ?? false;
-
     this.removeInlineSubitemsPanel(view);
-
-    try {
-      const panel = this.plugin.menuController.createSubitemsPanel(file);
-      // We use the --live class ONLY if standard body attachment is needed (fallback)
-      // If attaching to menu container, we omit it to let flexbox handle flow
-      panel.addClass('tps-gcm-subitems-panel--title-inline');
-      if (wasCollapsed) panel.addClass('tps-gcm-subitems-panel--collapsed');
-
-      // Mark for auto-collapse detection on second content render (first open of this file)
-      if (!hasCollapsedEntry && (this.plugin.settings.subitemsPanelAutoCollapse ?? true)) {
-        panel.dataset.autoCollapse = 'pending';
-      }
-
-      if (!activeMenu) panel.addClass('tps-gcm-subitems-panel--live');
-
-      panel.dataset.filePath = file.path;
-      panel.dataset.tpsGcmGestureSurface = 'subitems';
-      panel.setAttribute('contenteditable', 'false');
-      panel.setAttribute('spellcheck', 'false');
-      panel.setAttribute('draggable', 'false');
-
-      // Add to menu container or body hidden initially
-      panel.style.opacity = '0';
-      panel.style.visibility = 'hidden';
-
-      if (activeMenu) {
-        activeMenu.appendChild(panel);
-        // Position panel above or below the inline menu based on setting
-        const panelPosition = this.plugin.settings.subitemsPanelPosition ?? 'below';
-        if (panelPosition === 'above') {
-          panel.style.order = '-1';
-          panel.style.marginBottom = 'var(--tps-gcm-subitems-margin-bottom)';
-          panel.style.marginTop = '';
-        } else {
-          panel.style.order = '1';
-          panel.style.marginTop = 'var(--tps-gcm-subitems-margin-bottom)';
-          panel.style.marginBottom = '';
-        }
-      } else {
-        document.body.appendChild(panel);
-      }
-
-      this.inlineSubitemsPanels.set(view, panel);
-      this.applyInlinePanelVisibility(panel);
-      this.ensureSwipeGestureTracking(view);
-
-      // Attach scroll listener to active view to hide/show this fixed panel
-      // Attach scroll listener to active view to hide/show this fixed panel
-      // We attach to contentEl with capture: true to catch any scrolling within the pane
-      if (view.contentEl) {
-        this.attachPanelScrollListener(view, panel, view.contentEl);
-      }
-
-      // Initial positioning
-      window.requestAnimationFrame(() => {
-        if (panel.isConnected) this.applyInlinePanelGeometry(view, panel);
-      });
-
-    } catch (error) {
-      logger.error('[TPS GCM] Failed to attach subitems panel:', error);
-    }
+    this.removeStrayInlineSubitemsPanels(view, null);
   }
 
   private getScrollerForView(view: MarkdownView): HTMLElement {
@@ -2568,10 +2417,52 @@ export class PersistentMenuManager {
     }
   }
 
-  private ensureSwipeGestureTracking(view: MarkdownView): void {
-    if (this.scrollHideListeners.has(view)) return;
+  private updateMobileBottomOffsets(): void {
+    if (typeof document === 'undefined') return;
+    if (!Platform.isMobile) {
+      document.documentElement.style.setProperty('--tps-gcm-mobile-toolbar-offset', '0px');
+      return;
+    }
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    let maxObstruction = 0;
+    const candidates = Array.from(document.body?.querySelectorAll<HTMLElement>('*') || []);
 
+    for (const el of candidates) {
+      if (!el.isConnected) continue;
+      if (
+        el.closest('.tps-global-context-menu') ||
+        el.closest('.tps-gcm-panel') ||
+        el.closest('.tps-auto-base-embed') ||
+        el.closest('.menu') ||
+        el.closest('.modal')
+      ) {
+        continue;
+      }
+
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') continue;
+      if (style.position !== 'fixed' && style.position !== 'sticky') continue;
+
+      const rect = el.getBoundingClientRect();
+      if (!Number.isFinite(rect.height) || rect.height <= 0) continue;
+      if (viewportHeight > 0 && rect.bottom < viewportHeight - 4) continue;
+      if (rect.top > viewportHeight - Math.max(160, viewportHeight * 0.4)) {
+        maxObstruction = Math.max(maxObstruction, Math.ceil(rect.height));
+      }
+    }
+
+    const offset = maxObstruction > 0 ? maxObstruction + 12 : 0;
+    document.documentElement.style.setProperty('--tps-gcm-mobile-toolbar-offset', `${offset}px`);
+  }
+
+  private ensureSwipeGestureTracking(view: MarkdownView): void {
     const scroller = this.resolveScrollContainer(view);
+    const existing = this.scrollHideListeners.get(view);
+    if (existing) {
+      if (existing.scroller === scroller) return;
+      existing.scroller.removeEventListener('scroll', existing.listener);
+      this.scrollHideListeners.delete(view);
+    }
     if (!scroller) return;
 
     const HIDE_THRESHOLD = 60;
@@ -2634,65 +2525,7 @@ export class PersistentMenuManager {
   }
 
   private ensureNoteReferencesPanel(view: MarkdownView): void {
-    const s = this.plugin.settings;
-    if (!this.shouldRenderInlineNotePanels(view) || (!s.showReferencesInSubitemsPanel && !s.showMentionsInSubitemsPanel)) {
-      this.removeNoteReferencesPanel(view);
-      return;
-    }
-
-    const file = view.file;
-    if (!(file instanceof TFile) || file.extension?.toLowerCase() !== 'md') {
-      this.removeNoteReferencesPanel(view);
-      return;
-    }
-
-    const parent = this.resolveNoteFooterParent(view);
-    if (!parent) {
-      logger.debug('[TPS GCM] Inline references: no footer parent found', {
-        file: file.path,
-        mode: getViewMode(view),
-      });
-      this.removeNoteReferencesPanel(view);
-      return;
-    }
-
-    parent.querySelectorAll('.tps-gcm-note-references').forEach((node) => {
-      if (node !== this.noteReferencesPanels.get(view)) {
-        node.remove();
-      }
-    });
-
-    const tracked = this.noteReferencesPanels.get(view) || null;
-    if (tracked && tracked.isConnected && tracked.parentElement === parent && tracked.dataset.filePath === file.path) {
-      this.syncInlineNotePanelLayout(view);
-      void this.plugin.menuController.getPanelBuilder().refreshNoteReferencesPanel(file, tracked.querySelector('.tps-gcm-note-references-body') as HTMLElement);
-      return;
-    }
-
     this.removeNoteReferencesPanel(view);
-
-    // CRITICAL: `removeNoteReferencesPanel` removes the empty footer-host from the DOM!
-    // We must re-resolve the parent so we don't append to a detached node.
-    const finalParent = this.resolveNoteFooterParent(view);
-    if (!finalParent) return;
-
-    const panel = this.plugin.menuController.createNoteReferencesPanel(file);
-    panel.dataset.filePath = file.path;
-    finalParent.appendChild(panel);
-    this.noteReferencesPanels.set(view, panel);
-    logger.debug('[TPS GCM] Inline references mounted', {
-      file: file.path,
-      mode: getViewMode(view),
-      parentClass: finalParent.className,
-    });
-    this.syncInlineNotePanelLayout(view);
-
-    // Now that it's connected to the live DOM, force a refresh. 
-    // This bypasses the `!body.isConnected` abort check inside refreshNoteReferencesPanel
-    const bodyObj = panel.querySelector('.tps-gcm-note-references-body') as HTMLElement | null;
-    if (bodyObj) {
-      void this.plugin.menuController.getPanelBuilder().refreshNoteReferencesPanel(file, bodyObj);
-    }
   }
 
   private removeNoteReferencesPanel(view: MarkdownView): void {
@@ -2715,52 +2548,7 @@ export class PersistentMenuManager {
   }
 
   private ensureNoteGraphPanel(view: MarkdownView): void {
-    if (!this.shouldRenderInlineNotePanels(view) || !this.plugin.settings.showInlineNoteGraph) {
-      this.removeNoteGraphPanel(view);
-      return;
-    }
-
-    const file = view.file;
-    if (!(file instanceof TFile) || file.extension?.toLowerCase() !== 'md') {
-      this.removeNoteGraphPanel(view);
-      return;
-    }
-
-    const parent = this.resolveNoteGraphHost(view);
-    if (!parent) {
-      this.removeNoteGraphPanel(view);
-      return;
-    }
-
-    view.contentEl?.querySelectorAll('.tps-gcm-note-graph').forEach((node) => {
-      if (node !== this.noteGraphPanels.get(view)) {
-        node.remove();
-      }
-    });
-    view.contentEl?.querySelectorAll('.tps-gcm-note-graph-host').forEach((node) => {
-      if (node !== parent) {
-        node.classList.remove('tps-gcm-note-graph-host');
-      }
-    });
-
-    parent.classList.add('tps-gcm-note-graph-host');
-
-    const tracked = this.noteGraphPanels.get(view) || null;
-    if (tracked && tracked.isConnected && tracked.parentElement === parent && tracked.dataset.filePath === file.path) {
-      this.positionNoteGraphPanel(view, tracked, parent);
-      this.syncInlineNotePanelLayout(view);
-      void this.plugin.menuController.getPanelBuilder().refreshNoteGraphPanel(file, tracked.querySelector('.tps-gcm-note-graph-body') as HTMLElement);
-      return;
-    }
-
     this.removeNoteGraphPanel(view);
-
-    const panel = this.plugin.menuController.createNoteGraphPanel(file);
-    panel.dataset.filePath = file.path;
-    parent.appendChild(panel);
-    this.noteGraphPanels.set(view, panel);
-    this.positionNoteGraphPanel(view, panel, parent);
-    this.syncInlineNotePanelLayout(view);
   }
 
   private removeNoteGraphPanel(view: MarkdownView): void {
@@ -3038,6 +2826,7 @@ export class PersistentMenuManager {
     this.removeNoteGraphPanel(view);
     this.removeStrayInlineSubitemsPanels(view, null);
     this.removeInlineTitleIcon(view);
+    this.plugin.inlineTaskSubtaskService?.removeForView(view);
     const instances = this.menus.get(view);
     if (!instances) return;
 
@@ -3062,6 +2851,9 @@ export class PersistentMenuManager {
     force: boolean = false,
     options: { rebuildInlineSubitems?: boolean } = {}
   ): void {
+    if (force && this.swipeCollapsed) {
+      this.setSwipeCollapsed(false);
+    }
     const lastEdit = (this.plugin as any)?.lastEditorChangeAt as number | undefined;
     const quietMs = (this.plugin as any)?.typingQuietWindowMs as number | undefined;
     if (!force && lastEdit && quietMs && Date.now() - lastEdit < quietMs) {
@@ -3108,13 +2900,11 @@ export class PersistentMenuManager {
         if (shouldRebuildInlineSubitems) {
           this.removeInlineSubitemsPanel(view);
           this.removeStrayInlineSubitemsPanels(view, null);
-          this.removeNoteReferencesPanel(view);
-          this.removeNoteGraphPanel(view);
         }
-        this.ensureInlineSubitemsPanel(view);
-        this.ensureNoteGraphPanel(view);
-        this.ensureNoteReferencesPanel(view);
+        this.removeNoteReferencesPanel(view);
+        this.removeNoteGraphPanel(view);
         this.ensureInlineTitleIcon(view);
+        this.plugin.inlineTaskSubtaskService?.ensureForView(view);
         this.ensureTopParentNav(view);
       }
     }

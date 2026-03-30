@@ -232,6 +232,7 @@ export interface CalendarEntry {
   startDate: Date;
   endDate?: Date;
   title?: string;
+  forceAllDay?: boolean;
   isGhost?: boolean;
   ghostDate?: Date;
   isExternal?: boolean;
@@ -792,7 +793,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   const viewName =
     resolvedFilterViewMode === "month" ? "dayGridMonth" :
       resolvedFilterViewMode === "week" ? "timeGridWeek" :
-        resolvedFilterViewMode === "day" ? "timeGridDay" :
+        resolvedFilterViewMode === "day" ? "timeGridRange-1" :
           resolvedFilterViewMode === "continuous" ? "timeGridDay" :
               `timeGridRange-${targetDayCount}`;
 
@@ -1797,8 +1798,28 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
       if (event.extendedProps.entryPath) {
         element.setAttribute('data-path', event.extendedProps.entryPath);
         element.classList.add('tps-calendar-entry');
+        if (event.extendedProps.isTask) {
+          element.setAttribute('data-tps-task-context', 'true');
+        } else {
+          element.removeAttribute('data-tps-task-context');
+        }
         const shouldHighlight = pathsLikelyMatch(event.extendedProps.entryPath, activeFilePathRef.current);
         applyActiveNoteEventHighlight(element, shouldHighlight);
+        element.setAttribute("draggable", "true");
+        const dragPath = String(event.extendedProps.entryPath || "").trim();
+        const handleDragStart = (dragEvent: DragEvent) => {
+          if (!dragEvent.dataTransfer || !dragPath) return;
+          dragEvent.dataTransfer.effectAllowed = "copy";
+          dragEvent.dataTransfer.setData("obsidian/file", dragPath);
+          dragEvent.dataTransfer.setData("text/plain", dragPath);
+          dragEvent.dataTransfer.setData("text/uri-list", `obsidian://open?file=${encodeURIComponent(dragPath)}`);
+        };
+        const previousDragStartHandler = (element as any)._tpsDragStartHandler as ((dragEvent: DragEvent) => void) | undefined;
+        if (previousDragStartHandler) {
+          element.removeEventListener("dragstart", previousDragStartHandler);
+        }
+        (element as any)._tpsDragStartHandler = handleDragStart;
+        element.addEventListener("dragstart", handleDragStart);
       }
       if (!event.allDay) {
         const eventMinHeight = event.extendedProps.minEventHeight as number | undefined;
@@ -1964,6 +1985,11 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
       stickyScroller.removeEventListener('scroll', stickyHandler);
       delete (element as any)._stickyScroller;
       delete (element as any)._stickyHandler;
+    }
+    const dragStartHandler = (element as any)._tpsDragStartHandler as EventListener | undefined;
+    if (dragStartHandler) {
+      element.removeEventListener("dragstart", dragStartHandler);
+      delete (element as any)._tpsDragStartHandler;
     }
   }, []);
 
@@ -2588,12 +2614,12 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   }, [handleMoreLinkClick]);
 
   const views = {
+    "timeGridRange-1": { type: "timeGrid", duration: { days: 1 }, buttonText: "Day" },
     "timeGridRange-3": { type: "timeGrid", duration: { days: 3 }, buttonText: "3d" },
     "timeGridRange-4": { type: "timeGrid", duration: { days: 4 }, buttonText: "4d" },
     "timeGridRange-5": { type: "timeGrid", duration: { days: 5 }, buttonText: "5d" },
     "timeGridRange-7": { type: "timeGrid", duration: { days: 7 }, buttonText: "7d" },
     timeGridWeek: { buttonText: "Week" },
-    timeGridDay: { buttonText: "Day" },
     dayGridMonth: { buttonText: "Month" },
   };
 
@@ -2614,6 +2640,14 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
         "--tps-allday-max-rows": `${allDayExpanded ? 99 : (allDayMaxRows ?? 3)}`,
         "--tps-past-event-opacity": `${pastEventOpacity / 100}`,
         "--tps-event-font-size": eventFontSize === "small" ? "var(--font-ui-smaller)" : eventFontSize === "large" ? "var(--font-ui-medium)" : "var(--font-ui-small)",
+        "--tps-event-title-font-size": isMobile
+          ? "clamp(10px, 2.4vw, 12px)"
+          : eventFontSize === "large"
+            ? "var(--font-ui-medium)"
+            : "var(--font-ui-small)",
+        "--tps-event-title-weight": "600",
+        "--tps-event-title-line-height": isMobile ? "1.1" : "1.2",
+        "--tps-event-title-shadow": "0 1px 2px rgba(0, 0, 0, 0.35)",
         "--tps-active-note-highlight-color": activeEventHighlightColor || "#3b82f6",
         position: "relative"
       } as React.CSSProperties}

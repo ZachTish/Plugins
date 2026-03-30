@@ -128,7 +128,17 @@ export function useEventRenderer({
               {iconName && <EventIcon iconName={iconName} color={iconColor} />}
               <div
                 className="bases-calendar-event-title"
-                style={{ fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 }}
+                style={{
+                  fontWeight: 'var(--tps-event-title-weight, 600)',
+                  fontSize: 'var(--tps-event-title-font-size, var(--tps-event-font-size, var(--font-ui-small)))',
+                  lineHeight: 'var(--tps-event-title-line-height, 1.2)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  textShadow: 'var(--tps-event-title-shadow, none)',
+                  flex: 1,
+                  minWidth: 0,
+                }}
                 title={title}
               >
                 {title}
@@ -177,7 +187,23 @@ export function useEventRenderer({
               </svg>
             )}
             {iconName && <EventIcon iconName={iconName} color={iconColor} />}
-            <div className="bases-calendar-event-title" style={{ fontWeight: 'bold', flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+            <div
+              className="bases-calendar-event-title"
+              style={{
+                fontWeight: 'var(--tps-event-title-weight, 600)',
+                fontSize: 'var(--tps-event-title-font-size, var(--tps-event-font-size, var(--font-ui-small)))',
+                lineHeight: 'var(--tps-event-title-line-height, 1.2)',
+                textShadow: 'var(--tps-event-title-shadow, none)',
+                flex: 1,
+                minWidth: 0,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+              title={title}
+            >
+              {title}
+            </div>
           </div>
           {propertyChips.length > 0 && (
             <div className="bases-calendar-event-properties" style={{ flex: '1 1 0', minHeight: 0, overflow: 'hidden' }}>

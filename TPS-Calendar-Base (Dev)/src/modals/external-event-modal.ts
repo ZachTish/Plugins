@@ -1,4 +1,4 @@
-import { App, Modal, TFile, normalizePath, Notice } from "obsidian";
+import { App, Modal, TFile, normalizePath, Notice, moment } from "obsidian";
 import { ExternalCalendarEvent } from "../types";
 import * as logger from "../logger";
 import { formatDateTimeForFrontmatter } from "../utils";
@@ -267,7 +267,7 @@ export async function createMeetingNoteFromExternalEvent(
     noteContent += `## Notes\n\n`;
   }
 
-  let file: TFile;
+  let file: TFile | null = null;
 
   if (existingFile) {
     // Preserve existing non-empty content; only write body if the file is empty.
@@ -286,6 +286,36 @@ export async function createMeetingNoteFromExternalEvent(
       }
     }
 
+    if (event.uid) {
+      const existingByUidDate = await findExistingNoteByUidAndDate(
+        app,
+        event.uid,
+        event.startDate,
+        frontmatterKeys?.uidKey || "tpsCalendarUid",
+        startProperty || "scheduled",
+        folderPath || null,
+      );
+      if (existingByUidDate) {
+        logger.log(`[CreateMeetingNote] Found existing note by uid+date for "${event.title}" (${event.uid}) — reusing ${existingByUidDate.path}`);
+        return existingByUidDate;
+      }
+    }
+
+    if (event.title && folderPath) {
+      const sanitizedForSearch = sanitizeFileName(event.title);
+      const existingByTitleDay = findExistingNoteByTitleAndDay(
+        app,
+        sanitizedForSearch,
+        folderPath,
+        event.startDate,
+        startProperty || "scheduled",
+      );
+      if (existingByTitleDay) {
+        logger.log(`[CreateMeetingNote] Found existing note by title+day for "${event.title}" — reusing ${existingByTitleDay.path}`);
+        return existingByTitleDay;
+      }
+    }
+
     const folder = folderPath ? normalizePath(folderPath) : "";
 
     if (folder) {
@@ -294,24 +324,28 @@ export async function createMeetingNoteFromExternalEvent(
         try {
           await app.vault.createFolder(folder);
         } catch (e) {
-          logger.error(`Failed to create folder ${folder}:`, e);
+          const nowExists = app.vault.getAbstractFileByPath(folder);
+          if (nowExists) {
+            logger.debug(`[CreateMeetingNote] Folder creation raced but folder now exists: ${folder}`);
+          } else {
+            logger.error(`Failed to create folder ${folder}:`, e);
+          }
         }
       }
     }
 
-    const sanitizedTitle = event.title
-      .replace(/[\\/:*?"<>|]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
+    const sanitizedTitle = sanitizeFileName(event.title) || "Untitled Event";
+    const preferredDateFormat = await getDailyNoteDateFormat(app);
+    const momentApi = moment as unknown as (input: Date | string) => { format: (pattern: string) => string; isValid?: () => boolean };
+    const dateSuffix = sanitizeFileName(momentApi(event.startDate).format(preferredDateFormat));
+    const titleAlreadyHasDate = titleContainsDateToken(event.title, event.startDate, preferredDateFormat);
+    const rawBasename = titleAlreadyHasDate || !dateSuffix
+      ? sanitizedTitle
+      : `${sanitizedTitle} ${dateSuffix}`;
+    const safeBasename = sanitizePathSegment(app, rawBasename);
+    const deterministicPath = normalizePath(`${folder}/${safeBasename}.md`);
 
-    const dateSuffix = `${event.startDate.getFullYear()}-${String(
-      event.startDate.getMonth() + 1
-    ).padStart(2, "0")}-${String(event.startDate.getDate()).padStart(2, "0")}`;
-
-    const eventSuffix = buildEventIdentitySuffix(event.id);
-    const deterministicPath = normalizePath(`${folder}/${sanitizedTitle} ${dateSuffix} ${eventSuffix}.md`);
-
-    const existingAtPath = app.vault.getAbstractFileByPath(deterministicPath);
+    const existingAtPath = app.vault.getAbstractFileByPath(deterministicPath) || findFileByPathInsensitive(app, deterministicPath);
     if (existingAtPath instanceof TFile) {
       file = existingAtPath;
       const existingContent = await app.vault.read(file);
@@ -319,8 +353,60 @@ export async function createMeetingNoteFromExternalEvent(
         await app.vault.modify(file, noteContent);
       }
     } else {
-      file = await app.vault.create(deterministicPath, noteContent);
-      logger.log(`[CreateMeetingNote] Created note: "${file.basename}" at ${file.path}`);
+      const maxRetries = 3;
+      const retryDelayMs = 100;
+      let lastError: Error | null = null;
+
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          file = await app.vault.create(deterministicPath, noteContent);
+          logger.log(`[CreateMeetingNote] Created note: "${file.basename}" at ${file.path}`);
+          lastError = null;
+          break;
+        } catch (error: any) {
+          lastError = error;
+          const errorMessage = error?.message || String(error);
+          if (errorMessage.includes("already exists") || errorMessage.includes("file already exists")) {
+            const racedFile = app.vault.getAbstractFileByPath(deterministicPath) || findFileByPathInsensitive(app, deterministicPath);
+            if (racedFile instanceof TFile) {
+              file = racedFile;
+              lastError = null;
+              break;
+            }
+
+            const byBasename = findFileByBasenameInFolder(app, folder, safeBasename);
+            if (byBasename) {
+              file = byBasename;
+              lastError = null;
+              break;
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+            continue;
+          }
+
+          logger.warn(`[CreateMeetingNote] Attempt ${attempt + 1} failed: ${errorMessage}`);
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        }
+      }
+
+      if (!file) {
+        const racedFileFinal = app.vault.getAbstractFileByPath(deterministicPath) || findFileByPathInsensitive(app, deterministicPath);
+        if (racedFileFinal instanceof TFile) {
+          file = racedFileFinal;
+        } else {
+          const byBasename = findFileByBasenameInFolder(app, folder, safeBasename);
+          if (byBasename) {
+            file = byBasename;
+          }
+        }
+      }
+
+      if (!file) {
+        const errorMsg = lastError?.message || "Unknown error";
+        throw new Error(`Failed to create meeting note after ${maxRetries} attempts: ${errorMsg}`);
+      }
+
       await runTemplaterOnFile(app, file);
     }
   }
@@ -383,16 +469,6 @@ function normalizeKey(key: string): string {
   return String(key || "").trim().toLowerCase();
 }
 
-function buildEventIdentitySuffix(eventId: string): string {
-  const normalized = String(eventId ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const compact = normalized || "event";
-  return `evt-${compact.slice(0, 48)}`;
-}
-
 function findExistingNoteByEventId(app: App, eventId: string, eventIdKey: string): TFile | null {
   if (!eventId) return null;
   const targetId = String(eventId).trim();
@@ -404,6 +480,225 @@ function findExistingNoteByEventId(app: App, eventId: string, eventIdKey: string
     if (storedId == null) continue;
     if (String(storedId).trim() === targetId) return file;
   }
+  return null;
+}
+
+async function getDailyNoteDateFormat(app: App): Promise<string> {
+  const dailyNotes = (app as any).internalPlugins?.getPluginById?.("daily-notes");
+  const format = dailyNotes?.instance?.options?.format;
+  if (format && typeof format === "string" && format.trim()) {
+    return format.trim();
+  }
+
+  try {
+    const configDir = (app.vault as any)?.configDir || ".obsidian";
+    const configPath = normalizePath(`${configDir}/daily-notes.json`);
+    const raw = await app.vault.adapter.read(configPath);
+    const parsed = JSON.parse(raw);
+    const configFormat = parsed?.format;
+    if (typeof configFormat === "string" && configFormat.trim()) {
+      return configFormat.trim();
+    }
+  } catch {
+    // Ignore config read/parse errors.
+  }
+
+  return "YYYY-MM-DD";
+}
+
+function sanitizeFileName(value: string): string {
+  return String(value || "")
+    .replace(/[\\/:*?"<>|\x00-\x1F\x7F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function titleContainsDateToken(title: string, date: Date, preferredFormat: string): boolean {
+  const momentApi = moment as unknown as (
+    input: string | Date,
+    formats?: string | string[],
+    strict?: boolean,
+  ) => { format: (pattern: string) => string; isValid: () => boolean };
+  const normalizedTitle = String(title || "").trim();
+  if (!normalizedTitle) return false;
+
+  const ymd = momentApi(date).format("YYYY-MM-DD");
+  const preferred = momentApi(date).format(preferredFormat);
+  const titleLower = normalizedTitle.toLowerCase();
+  if (titleLower.includes(ymd.toLowerCase()) || titleLower.includes(preferred.toLowerCase())) {
+    return true;
+  }
+
+  const parsed = momentApi(
+    normalizedTitle,
+    [preferredFormat, "YYYY-MM-DD", "dddd, MMMM Do YYYY", "MMMM D, YYYY", "MMM D, YYYY"],
+    true,
+  );
+  if (!parsed.isValid()) return false;
+  return parsed.format("YYYY-MM-DD") === ymd;
+}
+
+async function findExistingNoteByUidAndDate(
+  app: App,
+  uid: string,
+  startDate: Date,
+  uidKey: string,
+  startKey: string,
+  folderPath: string | null,
+): Promise<TFile | null> {
+  const uidTarget = String(uid || "").trim();
+  if (!uidTarget) return null;
+
+  const dayTarget = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(startDate.getDate()).padStart(2, "0")}`;
+  const uidKeyLower = String(uidKey || "").trim().toLowerCase();
+  const startKeyLower = String(startKey || "").trim().toLowerCase();
+  const folderNorm = normalizePath(String(folderPath || "").trim()).toLowerCase();
+
+  for (const file of app.vault.getMarkdownFiles()) {
+    if (folderNorm) {
+      const fileFolder = normalizePath(file.parent?.path || "").toLowerCase();
+      if (fileFolder !== folderNorm) continue;
+    }
+
+    const cacheFm = app.metadataCache.getFileCache(file)?.frontmatter;
+    if (cacheFm) {
+      const storedUid = findFrontmatterValueCaseInsensitive(cacheFm, uidKeyLower);
+      const storedStart =
+        findFrontmatterValueCaseInsensitive(cacheFm, startKeyLower) ||
+        findFrontmatterValueCaseInsensitive(cacheFm, "scheduled");
+      if (String(storedUid || "").trim() === uidTarget && doesFrontmatterDateMatchDay(storedStart, dayTarget)) {
+        return file;
+      }
+      continue;
+    }
+
+    try {
+      const content = await app.vault.cachedRead(file);
+      const fm = extractRawFrontmatter(content);
+      if (!fm) continue;
+
+      const rawUid = findRawFrontmatterValue(fm, uidKeyLower);
+      const rawStart = findRawFrontmatterValue(fm, startKeyLower) || findRawFrontmatterValue(fm, "scheduled");
+      if (String(rawUid || "").trim() === uidTarget && doesFrontmatterDateMatchDay(rawStart, dayTarget)) {
+        return file;
+      }
+    } catch {
+      // Ignore unreadable files.
+    }
+  }
+
+  return null;
+}
+
+function findFrontmatterValueCaseInsensitive(frontmatter: Record<string, any>, keyLower: string): any {
+  for (const [key, value] of Object.entries(frontmatter || {})) {
+    if (String(key || "").trim().toLowerCase() === keyLower) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function extractRawFrontmatter(content: string): string | null {
+  const match = String(content || "").match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  return match ? match[1] : null;
+}
+
+function findRawFrontmatterValue(frontmatterBody: string, keyLower: string): string | null {
+  const lines = String(frontmatterBody || "").replace(/\r\n/g, "\n").split("\n");
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith("-")) continue;
+    const sep = line.indexOf(":");
+    if (sep <= 0) continue;
+
+    const key = line.slice(0, sep).trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+    if (key !== keyLower) continue;
+
+    return line.slice(sep + 1).trim().replace(/^['"]|['"]$/g, "");
+  }
+  return null;
+}
+
+function doesFrontmatterDateMatchDay(value: unknown, dayTarget: string): boolean {
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    return raw.slice(0, 10) === dayTarget;
+  }
+  if (/^\d{8}$/.test(raw)) {
+    const normalized = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+    return normalized === dayTarget;
+  }
+  return false;
+}
+
+function findExistingNoteByTitleAndDay(
+  app: App,
+  sanitizedTitle: string,
+  folderPath: string,
+  startDate: Date,
+  startKey: string,
+): TFile | null {
+  if (!sanitizedTitle || !folderPath || !startDate) return null;
+  const titlePrefix = sanitizedTitle.toLowerCase() + " ";
+  const folderNorm = normalizePath(folderPath).toLowerCase();
+  const dayTarget = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(startDate.getDate()).padStart(2, "0")}`;
+  const startKeyLower = String(startKey || "scheduled").toLowerCase();
+
+  for (const file of app.vault.getMarkdownFiles()) {
+    const parentPath = normalizePath(file.parent?.path || "").toLowerCase();
+    if (parentPath !== folderNorm) continue;
+    if (!file.basename.toLowerCase().startsWith(titlePrefix)) continue;
+
+    const fm = app.metadataCache.getFileCache(file)?.frontmatter;
+    if (!fm) continue;
+
+    const storedStart =
+      findFrontmatterValueCaseInsensitive(fm, startKeyLower) ??
+      findFrontmatterValueCaseInsensitive(fm, "scheduled");
+    if (storedStart && doesFrontmatterDateMatchDay(String(storedStart), dayTarget)) {
+      return file;
+    }
+  }
+
+  return null;
+}
+
+function findFileByPathInsensitive(app: App, path: string): TFile | null {
+  const target = normalizePath(path).toLowerCase();
+  for (const markdownFile of app.vault.getMarkdownFiles()) {
+    if (normalizePath(markdownFile.path).toLowerCase() === target) {
+      return markdownFile;
+    }
+  }
+  return null;
+}
+
+function sanitizePathSegment(app: App, segment: string): string {
+  const raw = String(segment || "").trim();
+  if (!raw) return "Untitled";
+  const fsSanitize = (app.vault.adapter as any)?.fs?.sanitize;
+  if (typeof fsSanitize === "function") {
+    const sanitized = String(fsSanitize(raw) || "").trim();
+    if (sanitized) return sanitized;
+  }
+  return raw.replace(/[\\/:*?"<>|]/g, "").trim() || "Untitled";
+}
+
+function findFileByBasenameInFolder(app: App, folderPath: string, basename: string): TFile | null {
+  const folderNorm = normalizePath(folderPath || "").toLowerCase();
+  const nameNorm = `${String(basename || "").trim().toLowerCase()}.md`;
+  if (!nameNorm) return null;
+
+  for (const markdownFile of app.vault.getMarkdownFiles()) {
+    const parentPath = normalizePath(markdownFile.parent?.path || "").toLowerCase();
+    if (folderNorm && parentPath !== folderNorm) continue;
+    if (markdownFile.name.toLowerCase() === nameNorm) {
+      return markdownFile;
+    }
+  }
+
   return null;
 }
 
@@ -464,6 +759,11 @@ async function canMutateFrontmatterSafely(
   app: App,
   file: TFile,
 ): Promise<{ safe: boolean; reason?: string }> {
+  const normalizedLeading = await normalizeDuplicateLeadingFrontmatter(app, file);
+  if (normalizedLeading) {
+    return { safe: true };
+  }
+
   let content = "";
   try {
     content = await app.vault.cachedRead(file);
@@ -507,4 +807,46 @@ async function canMutateFrontmatterSafely(
   }
 
   return { safe: false, reason: "duplicate leading frontmatter blocks detected" };
+}
+
+async function normalizeDuplicateLeadingFrontmatter(app: App, file: TFile): Promise<boolean> {
+  let content = "";
+  try {
+    content = await app.vault.cachedRead(file);
+  } catch {
+    return false;
+  }
+
+  const normalized = content.replace(/\r\n/g, "\n");
+  const bom = normalized.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const body = bom ? normalized.slice(1) : normalized;
+  if (!body.startsWith("---\n")) return false;
+
+  const firstClose = body.indexOf("\n---\n", 3);
+  if (firstClose === -1) return false;
+
+  const afterFirst = body.slice(firstClose + "\n---\n".length);
+  const trimmedAfterFirst = afterFirst.replace(/^\s*/, "");
+  if (!trimmedAfterFirst.startsWith("---\n")) return false;
+
+  const secondClose = trimmedAfterFirst.indexOf("\n---\n", 4);
+  if (secondClose === -1) return false;
+
+  const secondBody = trimmedAfterFirst.slice(4, secondClose);
+  const hasYamlLikeEntry = secondBody
+    .split("\n")
+    .some((line) => /^[A-Za-z0-9_"'.-]+\s*:/.test(line.trim()));
+  if (!hasYamlLikeEntry) return false;
+
+  const firstBody = body.slice(4, firstClose);
+  const trailing = trimmedAfterFirst.slice(secondClose + "\n---\n".length).replace(/^\n+/, "");
+  const mergedBody = [firstBody.trimEnd(), secondBody.trim()].filter(Boolean).join("\n");
+  const merged = `${bom}---\n${mergedBody}\n---\n${trailing}`;
+
+  if (merged === normalized) return false;
+
+  await app.vault.modify(file, merged);
+  malformedFrontmatterWarnedPaths.delete(file.path);
+  logger.log("[ExternalEvent] Consolidated duplicate leading frontmatter blocks", { file: file.path });
+  return true;
 }

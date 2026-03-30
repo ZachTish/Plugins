@@ -7,10 +7,13 @@ import { formatDateTimeForFrontmatter, parseFrontmatterDate, matchesExclusionPat
 import { mergeTagInputs, normalizeTagValue, parseTagInput } from "../utils/tag-utils";
 
 interface CalendarAutoCreateConfig {
+    mode?: "note" | "task-list";
     typeFolder?: string | null;
     folder?: string | null;
     tag?: string | null;
     template?: string | null;
+    taskListPath?: string | null;
+    taskListHeading?: string | null;
     autoCreateEnabled?: boolean;
 }
 
@@ -55,6 +58,26 @@ interface VaultNote {
     isArchived: boolean;
 }
 
+interface TaskListItemRecord {
+    eventId: string;
+    uid: string | null;
+    sourceUrl: string | null;
+    scheduledValue: string | null;
+    title: string;
+    lineNumber: number;
+    line: string;
+    isCompleted: boolean;
+}
+
+interface TaskListState {
+    file: TFile;
+    lines: string[];
+    heading: string | null;
+    itemsByEventId: Map<string, TaskListItemRecord>;
+    touchedEventIds: Set<string>;
+    changed: boolean;
+}
+
 export class AutoCreateService {
     app: App;
     config: AutoCreateServiceConfig;
@@ -70,6 +93,7 @@ export class AutoCreateService {
     private static readonly ORPHAN_GRACE_CYCLES = 2;
     private orphanDeletionTombstones: Map<string, number> = new Map();
     private static readonly ORPHAN_TOMBSTONE_TTL_MS = 6 * 60 * 60 * 1000;
+    private readonly taskListStateByPath = new Map<string, TaskListState>();
 
     constructor(app: App) {
         this.app = app;
@@ -112,7 +136,10 @@ export class AutoCreateService {
 
         const hasAutoCreate = Object.values(calendarConfigs).some(config => (config?.autoCreateEnabled ?? true) !== false);
         if (!hasAutoCreate) return;
-        if (!this.getConfiguredScanRoots().length) {
+        const hasTaskListMode = Object.values(calendarConfigs).some(
+            (config) => (config?.autoCreateEnabled ?? true) !== false && (config?.mode || "note") === "task-list"
+        );
+        if (!hasTaskListMode && !this.getConfiguredScanRoots().length) {
             logger.warn("[AutoCreateService] Skipping sync: no scoped scan roots configured (vault-wide scan disabled).");
             return;
         }
@@ -122,6 +149,7 @@ export class AutoCreateService {
 
         try {
             this.pruneOrphanDeletionTombstones();
+            this.taskListStateByPath.clear();
 
             const rangeStart = new Date();
             rangeStart.setDate(rangeStart.getDate() - 14);
@@ -194,6 +222,12 @@ export class AutoCreateService {
                     logger.error(`[AutoCreateService] Error processing event "${event.title}"`, error);
                 }
             }
+
+            const taskListDeleteResult = await this.cleanupTaskListOrphans(successfulUrls, failedUrls, rangeStart, rangeEnd);
+            deleted += taskListDeleteResult.deleted;
+            updated += taskListDeleteResult.updated;
+            created += taskListDeleteResult.created;
+            await this.flushTaskListStates();
 
             // Orphan Cleanup with grace period
             logger.log(`[AutoCreateService] Checking for orphaned notes...`);
@@ -431,6 +465,181 @@ export class AutoCreateService {
         return Array.from(roots);
     }
 
+    private async ensureTaskListState(taskListPath: string, heading: string | null | undefined): Promise<TaskListState | null> {
+        const normalizedPath = normalizePath(String(taskListPath || "").trim());
+        if (!normalizedPath) return null;
+
+        const cached = this.taskListStateByPath.get(normalizedPath);
+        if (cached) return cached;
+
+        const file = await this.ensureTaskListFile(normalizedPath);
+        if (!file) return null;
+
+        const content = await this.app.vault.cachedRead(file);
+        const state: TaskListState = {
+            file,
+            lines: content.split(/\r?\n/),
+            heading: heading ? String(heading).trim() || null : null,
+            itemsByEventId: new Map(),
+            touchedEventIds: new Set(),
+            changed: false,
+        };
+        this.rebuildTaskListIndex(state);
+        this.taskListStateByPath.set(normalizedPath, state);
+        return state;
+    }
+
+    private async ensureTaskListFile(path: string): Promise<TFile | null> {
+        const existing = this.app.vault.getAbstractFileByPath(path);
+        if (existing instanceof TFile) return existing;
+        if (!path.toLowerCase().endsWith(".md")) return null;
+
+        const slashIndex = path.lastIndexOf("/");
+        if (slashIndex > 0) {
+            await this.ensureFolder(path.slice(0, slashIndex));
+        }
+        return await this.app.vault.create(path, "");
+    }
+
+    private rebuildTaskListIndex(state: TaskListState): void {
+        state.itemsByEventId.clear();
+        for (let lineNumber = 0; lineNumber < state.lines.length; lineNumber++) {
+            const parsed = this.parseTaskListLine(state.lines[lineNumber], lineNumber);
+            if (parsed) {
+                state.itemsByEventId.set(parsed.eventId, parsed);
+            }
+        }
+    }
+
+    private parseTaskListLine(line: string, lineNumber: number): TaskListItemRecord | null {
+        const checkboxMatch = line.match(/^\s*-\s+\[([^\]]*)\]\s+(.*)$/);
+        if (!checkboxMatch) return null;
+        const body = checkboxMatch[2] || "";
+        const eventId = this.extractInlineFieldValue(body, this.config.eventIdKey);
+        if (!eventId) return null;
+
+        return {
+            eventId,
+            uid: this.extractInlineFieldValue(body, this.config.uidKey),
+            sourceUrl: this.normalizeSourceUrl(this.extractInlineFieldValue(body, this.config.sourceUrlKey)),
+            scheduledValue: this.extractInlineFieldValue(body, this.config.startProperty),
+            title: this.stripInlineFields(body),
+            lineNumber,
+            line,
+            isCompleted: /^[xX]$/.test(checkboxMatch[1] || ""),
+        };
+    }
+
+    private extractInlineFieldValue(text: string, key: string): string | null {
+        const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const match = text.match(new RegExp(`\\[${escaped}::\\s*([^\\]]+)\\]`, "i"));
+        return match?.[1] ? String(match[1]).trim() : null;
+    }
+
+    private stripInlineFields(text: string): string {
+        return text.replace(/\s*\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, "").trim();
+    }
+
+    private formatTaskListScheduledValue(date: Date, isAllDay: boolean): string {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
+        if (isAllDay) {
+            return `${year}-${month}-${day}`;
+        }
+        const hour = String(date.getHours()).padStart(2, "0");
+        const minute = String(date.getMinutes()).padStart(2, "0");
+        return `${year}-${month}-${day} ${hour}:${minute}`;
+    }
+
+    private buildTaskListLine(event: ExternalCalendarEvent): string {
+        const checkbox = event.endDate.getTime() < Date.now() ? "x" : " ";
+        const sourceUrl = this.normalizeSourceUrl(event.sourceUrl) || "";
+        const durationMinutes = Math.max(5, Math.round((event.endDate.getTime() - event.startDate.getTime()) / 60000));
+        return [
+            `- [${checkbox}] ${event.title.trim()}`,
+            `[${this.config.eventIdKey}:: ${event.id}]`,
+            `[${this.config.uidKey}:: ${event.uid || event.id}]`,
+            `[${this.config.sourceUrlKey}:: ${sourceUrl}]`,
+            `[${this.config.startProperty}:: ${this.formatTaskListScheduledValue(event.startDate, event.isAllDay)}]`,
+            `[${this.config.endProperty}:: ${durationMinutes}]`,
+        ].join(" ");
+    }
+
+    private getTaskListInsertIndex(state: TaskListState): number {
+        if (!state.heading) return state.lines.length;
+
+        const normalizedHeading = state.heading.trim().toLowerCase();
+        for (let index = 0; index < state.lines.length; index++) {
+            const line = state.lines[index].trim();
+            if (!line.startsWith("#")) continue;
+            const headingText = line.replace(/^#+\s*/, "").trim().toLowerCase();
+            if (headingText !== normalizedHeading) continue;
+
+            let insertAt = index + 1;
+            while (insertAt < state.lines.length && !state.lines[insertAt].trim().startsWith("#")) {
+                insertAt++;
+            }
+            return insertAt;
+        }
+
+        if (state.lines.length > 0 && state.lines[state.lines.length - 1].trim() !== "") {
+            state.lines.push("");
+        }
+        state.lines.push(`## ${state.heading}`);
+        state.lines.push("");
+        state.changed = true;
+        return state.lines.length;
+    }
+
+    private removeTaskListLine(state: TaskListState, lineNumber: number): void {
+        if (lineNumber < 0 || lineNumber >= state.lines.length) return;
+        state.lines.splice(lineNumber, 1);
+        state.changed = true;
+        this.rebuildTaskListIndex(state);
+    }
+
+    private async cleanupTaskListOrphans(
+        successfulUrls: Set<string>,
+        failedUrls: Set<string>,
+        rangeStart: Date,
+        rangeEnd: Date,
+    ): Promise<{ created: number; updated: number; deleted: number }> {
+        if (this.config.syncOnEventDelete === "nothing") {
+            return { created: 0, updated: 0, deleted: 0 };
+        }
+
+        let deleted = 0;
+        for (const state of this.taskListStateByPath.values()) {
+            const items = Array.from(state.itemsByEventId.values())
+                .filter((item) => !!item.sourceUrl)
+                .filter((item) => !state.touchedEventIds.has(item.eventId))
+                .filter((item) => successfulUrls.has(item.sourceUrl!))
+                .filter((item) => !failedUrls.has(item.sourceUrl!))
+                .filter((item) => {
+                    const scheduledDate = item.scheduledValue ? parseFrontmatterDate(item.scheduledValue) : null;
+                    if (!scheduledDate) return false;
+                    return scheduledDate >= rangeStart && scheduledDate <= rangeEnd;
+                })
+                .sort((a, b) => b.lineNumber - a.lineNumber);
+
+            for (const item of items) {
+                this.removeTaskListLine(state, item.lineNumber);
+                deleted++;
+            }
+        }
+
+        return { created: 0, updated: 0, deleted };
+    }
+
+    private async flushTaskListStates(): Promise<void> {
+        for (const state of this.taskListStateByPath.values()) {
+            if (!state.changed) continue;
+            await this.app.vault.modify(state.file, state.lines.join("\n"));
+            state.changed = false;
+        }
+    }
+
     private async getScopedMarkdownFiles(): Promise<TFile[]> {
         const roots = this.getConfiguredScanRoots();
         if (!roots.length) return [];
@@ -496,6 +705,10 @@ export class AutoCreateService {
         filterTerms: string[],
         forceRegenerate: boolean
     ): Promise<{ action: 'created' | 'updated' | 'deleted' | 'none', file?: TFile }> {
+        if ((calendarInfo?.mode || "note") === "task-list") {
+            return this.processEventAsTaskList(event, calendarInfo, filterTerms);
+        }
+
         const normalizedSourceUrl = this.normalizeSourceUrl(event.sourceUrl);
 
         // 1. Find match — primary by eventId, fallback by uid+start, tertiary by title+day
@@ -637,7 +850,7 @@ export class AutoCreateService {
 
         logger.log(`[AutoCreateService] Creating new note for: ${event.title}`);
 
-        const resolvedFolder = calendarInfo?.folder || calendarInfo?.typeFolder || "";
+        const resolvedFolder = calendarInfo?.typeFolder || calendarInfo?.folder || "";
 
         // Hard protection: never auto-create at vault root or inside any _ folder.
         const folderSegments = resolvedFolder.split('/').filter(Boolean);
@@ -670,6 +883,56 @@ export class AutoCreateService {
         );
 
         return file ? { action: 'created', file } : { action: 'none' };
+    }
+
+    private async processEventAsTaskList(
+        event: ExternalCalendarEvent,
+        calendarInfo: CalendarAutoCreateConfig | null,
+        filterTerms: string[],
+    ): Promise<{ action: 'created' | 'updated' | 'deleted' | 'none', file?: TFile }> {
+        const taskListPath = String(calendarInfo?.taskListPath || "").trim();
+        if (!taskListPath) {
+            logger.warn("[AutoCreateService] Task-list mode requires a target markdown file.", { event: event.title });
+            return { action: "none" };
+        }
+
+        const state = await this.ensureTaskListState(taskListPath, calendarInfo?.taskListHeading || null);
+        if (!state) return { action: "none" };
+
+        const existing = state.itemsByEventId.get(event.id);
+        if (existing) {
+            state.touchedEventIds.add(event.id);
+        }
+
+        if (event.isCancelled) {
+            if (!existing || this.config.syncOnEventDelete === "nothing") {
+                return { action: "none", file: state.file };
+            }
+            this.removeTaskListLine(state, existing.lineNumber);
+            return { action: "deleted", file: state.file };
+        }
+
+        if (filterTerms.some((t) => event.title.toLowerCase().includes(t))) return { action: "none" };
+        if (calendarInfo?.autoCreateEnabled === false) return { action: "none" };
+
+        const desiredLine = this.buildTaskListLine(event);
+        if (existing) {
+            if (existing.line === desiredLine) {
+                return { action: "none", file: state.file };
+            }
+            state.lines[existing.lineNumber] = desiredLine;
+            state.changed = true;
+            this.rebuildTaskListIndex(state);
+            state.touchedEventIds.add(event.id);
+            return { action: "updated", file: state.file };
+        }
+
+        const insertAt = this.getTaskListInsertIndex(state);
+        state.lines.splice(insertAt, 0, desiredLine);
+        state.changed = true;
+        this.rebuildTaskListIndex(state);
+        state.touchedEventIds.add(event.id);
+        return { action: "created", file: state.file };
     }
 
     // ========================================================================
@@ -867,6 +1130,11 @@ export class AutoCreateService {
     private async canMutateFrontmatterSafely(
         file: TFile,
     ): Promise<{ safe: boolean; reason?: string }> {
+        const normalizedLeading = await this.normalizeDuplicateLeadingFrontmatter(file);
+        if (normalizedLeading) {
+            return { safe: true };
+        }
+
         let content = "";
         try {
             content = await this.app.vault.cachedRead(file);
@@ -910,6 +1178,48 @@ export class AutoCreateService {
         }
 
         return { safe: false, reason: "duplicate leading frontmatter blocks detected" };
+    }
+
+    private async normalizeDuplicateLeadingFrontmatter(file: TFile): Promise<boolean> {
+        let content = "";
+        try {
+            content = await this.app.vault.cachedRead(file);
+        } catch {
+            return false;
+        }
+
+        const normalized = content.replace(/\r\n/g, "\n");
+        const bom = normalized.startsWith("\uFEFF") ? "\uFEFF" : "";
+        const body = bom ? normalized.slice(1) : normalized;
+        if (!body.startsWith("---\n")) return false;
+
+        const firstClose = body.indexOf("\n---\n", 3);
+        if (firstClose === -1) return false;
+
+        const afterFirst = body.slice(firstClose + "\n---\n".length);
+        const trimmedAfterFirst = afterFirst.replace(/^\s*/, "");
+        if (!trimmedAfterFirst.startsWith("---\n")) return false;
+
+        const secondClose = trimmedAfterFirst.indexOf("\n---\n", 4);
+        if (secondClose === -1) return false;
+
+        const secondBody = trimmedAfterFirst.slice(4, secondClose);
+        const hasYamlLikeEntry = secondBody
+            .split("\n")
+            .some((line) => /^[A-Za-z0-9_"'.-]+\s*:/.test(line.trim()));
+        if (!hasYamlLikeEntry) return false;
+
+        const firstBody = body.slice(4, firstClose);
+        const trailing = trimmedAfterFirst.slice(secondClose + "\n---\n".length).replace(/^\n+/, "");
+        const mergedBody = [firstBody.trimEnd(), secondBody.trim()].filter(Boolean).join("\n");
+        const merged = `${bom}---\n${mergedBody}\n---\n${trailing}`;
+
+        if (merged === normalized) return false;
+
+        await this.app.vault.modify(file, merged);
+        this.malformedFrontmatterWarnedPaths.delete(file.path);
+        logger.log("[AutoCreateService] Consolidated duplicate leading frontmatter blocks", { file: file.path });
+        return true;
     }
 
     private findKeyInsensitive(obj: Record<string, any>, key: string): any {

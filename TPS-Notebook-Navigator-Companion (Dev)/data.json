@@ -774,6 +774,38 @@
       ]
     },
     {
+      "id": "rule-1774456694404-znmw70q",
+      "name": "",
+      "enabled": true,
+      "property": "scheduled",
+      "operator": "!is",
+      "value": "",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "lucide:calendar",
+      "color": "#3b586d",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "!within-next-days",
+          "value": "7"
+        }
+      ]
+    },
+    {
       "id": "rule-1773107354131-fo7ry6q",
       "name": "",
       "enabled": true,
@@ -796,6 +828,44 @@
           "field": "priority",
           "operator": "!exists",
           "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "within-next-days",
+          "value": "7"
+        }
+      ]
+    },
+    {
+      "id": "rule-1774456664427-fjko8ia",
+      "name": "",
+      "enabled": true,
+      "property": "scheduled",
+      "operator": "!is",
+      "value": "",
+      "pathPrefix": "Markdown/Action Items",
+      "icon": "lucide:calendar",
+      "color": "#416bbe",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "priority",
+          "operator": "is",
+          "value": "normal"
+        },
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "within-next-days",
+          "value": "7"
         }
       ]
     },
@@ -2263,6 +2333,40 @@
           "source": "frontmatter",
           "field": "parentOf",
           "operator": "!exists",
+          "value": ""
+        }
+      ],
+      "mode": "add",
+      "tagName": "hide"
+    },
+    {
+      "id": "hide-rule-1774109188995",
+      "name": "New Hide Rule",
+      "enabled": true,
+      "match": "all",
+      "conditions": [
+        {
+          "source": "tag",
+          "field": "",
+          "operator": "is-not-empty",
+          "value": ""
+        },
+        {
+          "source": "frontmatter",
+          "field": "parentOf",
+          "operator": "!exists",
+          "value": ""
+        },
+        {
+          "source": "path",
+          "field": "",
+          "operator": "contains",
+          "value": "Action Items"
+        },
+        {
+          "source": "frontmatter",
+          "field": "childOf",
+          "operator": "exists",
           "value": ""
         }
       ],

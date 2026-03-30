@@ -10,6 +10,8 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     syncIntervalMinutes: 15,
     sidebarBasePath: null,
     dailyDateLinkTarget: "daily-note",
+    defaultCreateMode: "note",
+    defaultTaskTargetFile: "",
     primaryControllerId: null,
     priorityValues: PRIORITY_KEYS,
     statusValues: STATUS_KEYS,
@@ -73,6 +75,7 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     showCompletedTaskItems: false,
     taskItemColor: "#f59e0b",
     taskItemFolderFilter: "",
+    hiddenExternalEventsByBase: {},
 };
 
 export function migrateSettings(stored: any): CalendarPluginSettings {
@@ -119,6 +122,8 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
     return {
         enableExternalCalendars: stored?.enableExternalCalendars ?? true,
         sidebarBasePath: stored?.sidebarBasePath ?? null,
+        defaultCreateMode: stored?.defaultCreateMode === "task" ? "task" : "note",
+        defaultTaskTargetFile: typeof stored?.defaultTaskTargetFile === "string" ? stored.defaultTaskTargetFile.trim() : "",
         primaryControllerId: stored?.primaryControllerId ?? null,
 
         priorityValues: stored?.priorityValues ?? PRIORITY_KEYS,
@@ -195,6 +200,15 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         showCompletedTaskItems: stored?.showCompletedTaskItems ?? false,
         taskItemColor: typeof stored?.taskItemColor === "string" && stored.taskItemColor ? stored.taskItemColor : "#f59e0b",
         taskItemFolderFilter: typeof stored?.taskItemFolderFilter === "string" ? stored.taskItemFolderFilter : "",
+        hiddenExternalEventsByBase:
+            stored?.hiddenExternalEventsByBase && typeof stored.hiddenExternalEventsByBase === "object"
+                ? Object.fromEntries(
+                    Object.entries(stored.hiddenExternalEventsByBase as Record<string, unknown>).map(([basePath, value]) => [
+                        String(basePath),
+                        Array.isArray(value) ? value.map((entry) => String(entry)).filter(Boolean) : [],
+                    ]),
+                  )
+                : {},
 
         // Unscheduled view
         enableUnscheduledView: stored?.enableUnscheduledView ?? true,

@@ -46,7 +46,9 @@
   "layoutModeByView": {
     "unknown-base::Subitems": "board",
     "unknown-base::3 day": "board",
-    "unknown-base::View": "board"
+    "unknown-base::View": "board",
+    "unknown-base::Project notes": "list",
+    "unknown-base::Subtasks": "list"
   },
   "dynamicEmptyLaneWidth": false,
   "enableKanbanTaskCards": true,

@@ -12,6 +12,71 @@ export class NoteOperationService {
         this.app = plugin.app;
     }
 
+    public async populateDailyNoteWithScheduledItems(dailyNote: TFile): Promise<void> {
+        let dailyNoteDateStr = '';
+        const parsed = (window as any).moment(dailyNote.basename, [
+            this.plugin.fileNamingService.getDailyNoteDateFormat(),
+            "YYYY-MM-DD", "YYYY_MM_DD", "YYYYMMDD",
+            "MMMM D, YYYY", "MMM D, YYYY"
+        ], true);
+        if (parsed.isValid()) {
+            dailyNoteDateStr = parsed.format('YYYY-MM-DD');
+        } else {
+            return;
+        }
+
+        // Check if the note already has content - don't auto-populate if it does
+        // This prevents repeated expensive scans and modifications
+        const content = await this.plugin.subitemRelationshipSyncService.readMarkdownText(dailyNote);
+        const lines = content.split('\n').filter(line => line.trim() && !line.trim().startsWith('---'));
+        if (lines.length > 5) {
+            // Note already has substantial content, skip auto-populate
+            return;
+        }
+
+        const scheduledFiles: TFile[] = [];
+        for (const file of this.app.vault.getMarkdownFiles()) {
+            if (file.path === dailyNote.path) continue;
+            const cache = this.app.metadataCache.getFileCache(file);
+            const fm = cache?.frontmatter;
+            if (!fm) continue;
+
+            const scheduled = String(fm.scheduled ?? '').trim();
+            if (!scheduled) continue;
+
+            const scheduledDate = (window as any).moment(scheduled);
+            if (scheduledDate.isValid() && scheduledDate.format('YYYY-MM-DD') === dailyNoteDateStr) {
+                // Ignore files that are themselves daily notes
+                if (this.plugin.fileNamingService.isDateOnlyBasename(file.basename)) continue;
+                scheduledFiles.push(file);
+            }
+        }
+
+        if (scheduledFiles.length === 0) return;
+
+        let modified = false;
+
+        for (const childFile of scheduledFiles) {
+            // Check if the file has a status field
+            const cache = this.app.metadataCache.getFileCache(childFile);
+            const fmKeys = Object.keys(cache?.frontmatter || {});
+            const hasStatus = fmKeys.some(k => k.trim().toLowerCase() === 'status');
+
+            const changed = await this.plugin.subitemRelationshipSyncService.insertBodyLink(
+                dailyNote,
+                childFile,
+                hasStatus ? '[ ]' : null,
+            );
+            if (changed) {
+                modified = true;
+            }
+        }
+
+        if (modified) {
+            logger.log(`[TPS GCM] Populated daily note ${dailyNote.basename} with scheduled item(s).`);
+        }
+    }
+
     async addNotesToAnotherNote(files: TFile[]) {
         try {
             if (!files.length) {

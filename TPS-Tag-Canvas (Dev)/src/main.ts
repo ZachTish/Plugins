@@ -2,6 +2,7 @@ import { App, Notice, Plugin, SuggestModal, TAbstractFile, TFile } from "obsidia
 import { DEFAULT_SETTINGS, TagCanvasSettings } from "./types";
 import { CanvasManager } from "./services/canvas-manager";
 import { NNIntegrationService } from "./services/nn-integration";
+import { GraphIntegrationService } from "./services/graph-integration";
 import { TagCanvasSettingTab } from "./settings-tab";
 
 // Global window property under which the plugin API is exposed.
@@ -42,6 +43,8 @@ export default class TagCanvasPlugin extends Plugin {
   settings: TagCanvasSettings = { ...DEFAULT_SETTINGS };
   canvasManager!: CanvasManager;
   private nnIntegration!: NNIntegrationService;
+  private graphIntegration!: GraphIntegrationService;
+  private styleEl: HTMLStyleElement | null = null;
 
   /** Tags pending a sync flush */
   private pendingTags = new Set<string>();
@@ -59,8 +62,13 @@ export default class TagCanvasPlugin extends Plugin {
       this.canvasManager,
       (tag) => this.canvasManager.openTagCanvas(tag),
     );
+    this.graphIntegration = new GraphIntegrationService(
+      this.app,
+      (tag) => this.canvasManager.openTagCanvas(tag),
+    );
 
     this.addSettingTab(new TagCanvasSettingTab(this.app, this));
+    this.injectStyles();
     this.registerVaultEvents();
     this.addCommands();
     this.addRibbonIcon("layers-3", "Tag Canvas: Sync all tag canvases", () =>
@@ -72,6 +80,7 @@ export default class TagCanvasPlugin extends Plugin {
     // This keeps tag canvases up-to-date on app load even before any edits happen.
     this.app.workspace.onLayoutReady(() => {
       this.nnIntegration.start();
+      this.graphIntegration.start();
       this.scheduleFullSync();
     });
 
@@ -84,6 +93,8 @@ export default class TagCanvasPlugin extends Plugin {
       this.syncTimer = null;
     }
     this.nnIntegration.stop();
+    this.graphIntegration.stop();
+    this.removeStyles();
     delete (window as any)[API_PROP];
     this.log("Tag Canvas plugin unloaded.");
   }
@@ -133,6 +144,7 @@ export default class TagCanvasPlugin extends Plugin {
   // ── Debounced sync ────────────────────────────────────────────────────────
 
   private scheduleFileSync(file: TFile): void {
+    if (!this.settings.autoEmbedTaggedFiles) return;
     const cache = this.app.metadataCache.getFileCache(file);
     if (!cache) return;
 
@@ -152,6 +164,7 @@ export default class TagCanvasPlugin extends Plugin {
   }
 
   private scheduleFullSync(): void {
+    if (!this.settings.autoEmbedTaggedFiles) return;
     this.pendingTags.add("__ALL__");
     this.debounce();
   }
@@ -177,6 +190,48 @@ export default class TagCanvasPlugin extends Plugin {
       // Refresh NN indicators after any sync
       this.nnIntegration.refresh();
     }, this.settings.syncDelayMs);
+  }
+
+  private injectStyles(): void {
+    if (this.styleEl) return;
+    const style = document.createElement("style");
+    style.id = "tps-tag-canvas-styles";
+    style.textContent = `
+      .nn-navitem.nn-tag.tps-has-tag-canvas .nn-navitem-name,
+      .nn-navitem.nn-tag.tps-has-tag-canvas .nn-file-tag {
+        color: var(--text-accent);
+        text-decoration: underline;
+        text-underline-offset: 0.14em;
+        cursor: pointer;
+      }
+
+      .nn-navitem.nn-tag .tps-tag-canvas-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1rem;
+        height: 1rem;
+        margin-inline-start: 0.35rem;
+        color: var(--text-muted);
+        cursor: pointer;
+        vertical-align: text-bottom;
+      }
+
+      .nn-navitem.nn-tag.tps-has-tag-canvas .tps-tag-canvas-icon {
+        color: var(--text-accent);
+      }
+
+      .nn-navitem.nn-tag.tps-canvas-pending .tps-tag-canvas-icon {
+        opacity: 0.65;
+      }
+    `;
+    document.head.appendChild(style);
+    this.styleEl = style;
+  }
+
+  private removeStyles(): void {
+    this.styleEl?.remove();
+    this.styleEl = null;
   }
 
   // ── Commands ──────────────────────────────────────────────────────────────

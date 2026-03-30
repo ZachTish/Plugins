@@ -1,5 +1,5 @@
 {
-  "enableLogging": false,
+  "enableLogging": true,
   "enableInlinePersistentMenus": true,
   "enableInLivePreview": true,
   "enableInPreview": true,
@@ -370,7 +370,7 @@
     "blocked"
   ],
   "recurrenceDefaultStatus": "",
-  "recurringTemplateFolder": "_recurringtemplates",
+  "recurringTemplateFolder": "/",
   "enableAutoRename": true,
   "autoSyncTitleFromFilename": true,
   "autoSaveFolderPath": true,
@@ -428,30 +428,81 @@
       ]
     }
   ],
-  "systemCommands": [
-    "bookmark",
-    "duplicate",
-    "get-relative-path"
-  ],
-  "enableTaskCheckboxCycle": true,
   "enableChecklistCompletionProperty": true,
   "checklistCompletionPropertyKey": "checklistDone",
   "checklistFinalPromptStatuses": [
     "complete",
     "wont-do"
   ],
+  "enableLinkedSubitemCheckboxes": true,
+  "linkedSubitemCheckboxStyle": "soft-link",
+  "linkedSubitemCheckboxMappings": [
+    {
+      "checkboxState": "[ ]",
+      "statuses": [
+        "todo"
+      ],
+      "toggleTargetStatus": "complete",
+      "icon": "square",
+      "label": "Todo"
+    },
+    {
+      "checkboxState": "[x]",
+      "statuses": [
+        "complete"
+      ],
+      "toggleTargetStatus": "todo",
+      "icon": "check",
+      "label": "Complete"
+    },
+    {
+      "checkboxState": "[\\]",
+      "statuses": [
+        "working"
+      ],
+      "toggleTargetStatus": "complete",
+      "icon": "slash",
+      "label": "Working"
+    },
+    {
+      "checkboxState": "[?]",
+      "statuses": [
+        "holding"
+      ],
+      "toggleTargetStatus": "todo",
+      "icon": "help-circle",
+      "label": "Holding"
+    },
+    {
+      "checkboxState": "[-]",
+      "statuses": [
+        "wont-do"
+      ],
+      "toggleTargetStatus": "todo",
+      "icon": "minus",
+      "label": "Won’t Do"
+    }
+  ],
+  "linkedSubitemDefaultOpenState": "[ ]",
+  "linkedSubitemUncheckedStatuses": [
+    "todo",
+    "working",
+    "holding",
+    "note"
+  ],
+  "linkedSubitemCheckedStatuses": [
+    "complete"
+  ],
+  "linkedSubitemCanceledStatuses": [
+    "wont-do"
+  ],
+  "linkedSubitemToggleCheckedStatus": "complete",
+  "linkedSubitemToggleUncheckedStatus": "todo",
   "enableArchiveTagMove": true,
   "archiveTag": "archive",
   "archiveFolderPath": "Archive",
   "archiveUseDailyFolder": false,
-  "lastArchiveTagSweepDate": "2026-03-20",
-  "enablePomodoro": false,
-  "pomodoroWorkDuration": 25,
-  "pomodoroBreakDuration": 5,
-  "pomodoroLongBreakDuration": 15,
-  "pomodoroLongBreakInterval": 4,
-  "pomodoroEventFolder": "Action Items/Events",
-  "pomodoroDefaultTags": "pomodoro, timebox",
+  "lastArchiveTagSweepDate": "2026-03-30",
   "workspaceRibbonButtons": false,
   "workspaceRibbonIcons": {
     "Calendar": "calendar"
@@ -461,10 +512,16 @@
   "enableTopParentNav": true,
   "ignoreEmbeddedChildrenInTopLinks": true,
   "dailyNavShowToday": false,
+  "enableAutoPopulateDailyNotes": true,
   "ignoredBacklinksFrontmatterKeys": [
     "dateModified",
     "sort",
     "icon"
+  ],
+  "ignoredSubitemTags": [
+    "hide",
+    "dailynote",
+    "project"
   ],
   "subitems_IgnoreRules": [
     {
@@ -498,22 +555,18 @@
       ]
     }
   ],
-  "enableSubitemsPanel": false,
-  "showChecklistInSubitemsPanel": false,
-  "showReferencesInSubitemsPanel": false,
-  "showMentionsInSubitemsPanel": false,
-  "showInlineNoteGraph": false,
-  "noteGraphDepth": 3,
-  "noteGraphMaxIncoming": 8,
-  "noteGraphMaxOutgoing": 8,
-  "noteGraphMaxMentions": 4,
-  "subitemsPanelPosition": "below",
-  "subitemsPanelAutoCollapse": true,
+  "autoEmbedIgnoreFolders": [
+    "Archive"
+  ],
+  "autoEmbedIgnoreTags": [
+    "archive"
+  ],
+  "enableAutoInsertBlankLineOnOpen": false,
   "defaultAttachmentsPath": "Markdown/Notes",
   "defaultSubitemsPath": "Markdown/Action Items",
   "defaultNewSubitemStatus": "",
   "defaultNewSubitemPriority": "",
-  "checklistPromotionBehavior": "remove",
+  "checklistPromotionBehavior": "link-only",
   "menuTextScale": 0.95,
   "buttonScale": 1,
   "controlScale": 1,
@@ -533,6 +586,30 @@
     "buttonScale": "local",
     "liveMenuOffsetY": "local"
   },
+  "systemCommands": [
+    "bookmark",
+    "duplicate",
+    "get-relative-path"
+  ],
+  "enableTaskCheckboxCycle": true,
+  "enablePomodoro": false,
+  "pomodoroWorkDuration": 25,
+  "pomodoroBreakDuration": 5,
+  "pomodoroLongBreakDuration": 15,
+  "pomodoroLongBreakInterval": 4,
+  "pomodoroEventFolder": "Action Items/Events",
+  "pomodoroDefaultTags": "pomodoro, timebox",
+  "enableSubitemsPanel": false,
+  "showChecklistInSubitemsPanel": false,
+  "showReferencesInSubitemsPanel": false,
+  "showMentionsInSubitemsPanel": false,
+  "showInlineNoteGraph": false,
+  "noteGraphDepth": 3,
+  "noteGraphMaxIncoming": 8,
+  "noteGraphMaxOutgoing": 8,
+  "noteGraphMaxMentions": 4,
+  "subitemsPanelPosition": "below",
+  "subitemsPanelAutoCollapse": true,
   "enableStrictMode": false,
   "enableShiftClickCancel": true,
   "headerTextScale": 0.7,

@@ -14,7 +14,8 @@
           "dailynote"
         ],
         "requirePropertyEmpty": "parentOf"
-      }
+      },
+      "initialState": "expanded"
     },
     {
       "id": "rule-1773800108173",
@@ -31,7 +32,8 @@
       "enabled": true,
       "conditions": {
         "requireProperty": "parentOf"
-      }
+      },
+      "initialState": "expanded"
     }
   ],
   "excludeFiles": "",
@@ -46,7 +48,7 @@
     "Project feed.base": true,
     "Scheduled Task Calendar.base": false,
     "Project Note feed.base": false,
-    "Project Task List.base": true,
+    "Project Task List.base": false,
     "Area Note Feed.base": false,
     "Scheduled Task list.base": false,
     "Area Task List.base": false,

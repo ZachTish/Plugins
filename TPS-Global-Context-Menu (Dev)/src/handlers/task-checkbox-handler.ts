@@ -4,10 +4,10 @@ import type TPSGlobalContextMenuPlugin from '../main';
 import { StatusChoiceModal } from '../modals/status-choice-modal';
 
 /**
- * Handles the task checkbox state cycle ([ ] → [x] → [?] → [-] → [ ])
- * and the automatic checklist block reordering that follows a state change.
+ * Handles task checkbox context actions and long-press state selection.
  *
- * Extracted from main.ts to keep the main class under 500 lines.
+ * Direct click-to-cycle behavior has been removed; state changes now go
+ * through the explicit selector opened by right-click or long-press.
  */
 export class TaskCheckboxHandler {
     private app: App;
@@ -20,47 +20,6 @@ export class TaskCheckboxHandler {
 
     constructor(private plugin: TPSGlobalContextMenuPlugin) {
         this.app = plugin.app;
-    }
-
-    async handleClick(evt: MouseEvent): Promise<void> {
-        if (!this.plugin.settings.enableTaskCheckboxCycle) return;
-        if (this.bypassNextTaskCycleClick) return;
-        if (Date.now() < this.suppressSyntheticClickUntil) return;
-        if (evt.button !== 0) return;
-
-        const targetEl = evt.target instanceof HTMLElement ? evt.target : null;
-        if (!targetEl) return;
-
-        const checkboxEl = this.resolveTaskCheckboxTarget(targetEl);
-        if (!checkboxEl) return;
-
-        const view = this.resolveMarkdownViewForElement(checkboxEl);
-        const file = view?.file;
-        if (!view || !file) return;
-
-        const isReadingView = !!checkboxEl.closest('.markdown-reading-view, .markdown-preview-view');
-        const lineNumber = this.findTaskLineNumber(checkboxEl, view, isReadingView);
-        if (lineNumber < 0) return;
-
-        if (this.isRecentTaskCycleClick(file.path, lineNumber)) return;
-        this.setRecentTaskCycleClick(file.path, lineNumber);
-
-        evt.preventDefault();
-        evt.stopPropagation();
-        evt.stopImmediatePropagation();
-
-        try {
-            const shouldUseVaultWrite = isReadingView;
-            const updated = await this.cycleTaskState(file, view, lineNumber, shouldUseVaultWrite, isReadingView);
-            if (!updated) {
-                this.recentTaskCycleClicks.delete(`${file.path}:${lineNumber}`);
-                this.triggerNativeCheckboxClick(checkboxEl);
-            }
-        } catch (error) {
-            this.recentTaskCycleClicks.delete(`${file.path}:${lineNumber}`);
-            logger.warn('[TPS GCM] Checkbox cycle failed', { file: file.path, lineNumber, error });
-            this.triggerNativeCheckboxClick(checkboxEl);
-        }
     }
 
     dispose(): void {
@@ -79,7 +38,6 @@ export class TaskCheckboxHandler {
     }
 
     async handleContextMenu(evt: MouseEvent): Promise<void> {
-        if (!this.plugin.settings.enableTaskCheckboxCycle) return;
         const targetEl = evt.target instanceof HTMLElement ? evt.target : null;
         if (!targetEl) return;
         const checkboxEl = this.resolveTaskCheckboxTarget(targetEl);
@@ -99,7 +57,6 @@ export class TaskCheckboxHandler {
     }
 
     handleTouchStart(evt: TouchEvent): void {
-        if (!this.plugin.settings.enableTaskCheckboxCycle) return;
         if (evt.touches.length !== 1) return;
         const targetEl = evt.target instanceof HTMLElement ? evt.target : null;
         if (!targetEl) return;
@@ -137,6 +94,40 @@ export class TaskCheckboxHandler {
         this.cancelLongPress();
     }
 
+    getTaskContextFromElement(targetEl: HTMLElement): {
+        view: MarkdownView;
+        file: TFile;
+        lineNumber: number;
+        isReadingView: boolean;
+    } | null {
+        const checkboxEl = this.resolveTaskCheckboxTarget(targetEl);
+        if (!checkboxEl) return null;
+        const view = this.resolveMarkdownViewForElement(checkboxEl);
+        const file = view?.file;
+        if (!view || !file) return null;
+        const isReadingView = !!checkboxEl.closest('.markdown-reading-view, .markdown-preview-view');
+        const lineNumber = this.findTaskLineNumber(checkboxEl, view, isReadingView);
+        if (lineNumber < 0) return null;
+        return { view, file, lineNumber, isReadingView };
+    }
+
+    getTaskSourceLineFromElement(targetEl: HTMLElement): {
+        view: MarkdownView;
+        file: TFile;
+        lineNumber: number;
+        isReadingView: boolean;
+        rawLine: string;
+    } | null {
+        const context = this.getTaskContextFromElement(targetEl);
+        if (!context) return null;
+        const source = this.getViewSourceText(context.view);
+        const lines = source.split('\n');
+        return {
+            ...context,
+            rawLine: lines[context.lineNumber] ?? '',
+        };
+    }
+
     private cancelLongPress(): void {
         if (this.longPressTimerId !== null) {
             window.clearTimeout(this.longPressTimerId);
@@ -146,16 +137,28 @@ export class TaskCheckboxHandler {
 
     // ── Target resolution ──────────────────────────────────────────────────
 
+    private isTaskLineHost(targetEl: HTMLElement): boolean {
+        if (!targetEl.classList.contains('cm-line')) return false;
+        const text = targetEl.textContent || '';
+        return /^[ \t]*([-*+]|\d+\.)\s+\[[^\]]*\]\s+/.test(text);
+    }
+
     private resolveTaskCheckboxTarget(targetEl: HTMLElement): HTMLElement | null {
         const candidate = targetEl.closest('input.task-list-item-checkbox, .task-list-item-checkbox, .cm-formatting-task');
-        if (!(candidate instanceof HTMLElement)) return null;
-        if (candidate instanceof HTMLInputElement) {
-            if (candidate.type !== 'checkbox') return null;
-            if (!candidate.classList.contains('task-list-item-checkbox')) return null;
-            return candidate;
+        if (candidate instanceof HTMLElement) {
+            if (candidate instanceof HTMLInputElement) {
+                if (candidate.type !== 'checkbox') return null;
+                if (!candidate.classList.contains('task-list-item-checkbox')) return null;
+                return candidate;
+            }
+            if (candidate.classList.contains('task-list-item-checkbox') || candidate.classList.contains('cm-formatting-task')) {
+                return candidate;
+            }
         }
-        if (candidate.classList.contains('task-list-item-checkbox') || candidate.classList.contains('cm-formatting-task')) {
-            return candidate;
+
+        const lineHost = targetEl.closest('.cm-line');
+        if (lineHost instanceof HTMLElement && this.isTaskLineHost(lineHost)) {
+            return lineHost;
         }
         return null;
     }

@@ -119,10 +119,13 @@ export class CalendarAutomationService {
                 .map((c) => [
                     normalizeCalendarUrl(c.url),
                     {
+                        mode: c.autoCreateMode || "note",
                         typeFolder: c.autoCreateTypeFolder || "",
                         folder: c.autoCreateFolder || "",
                         tag: normalizeCalendarTag(c.autoCreateTag || ""),
                         template: c.autoCreateTemplate || "",
+                        taskListPath: c.autoCreateTaskListPath || "",
+                        taskListHeading: c.autoCreateTaskListHeading || "",
                         autoCreateEnabled: c.autoCreateEnabled !== false,
                     },
                 ])
@@ -166,6 +169,16 @@ export class CalendarAutomationService {
 
         addRoot(archiveFolder);
         for (const calendar of calendars || []) {
+            if ((calendar?.autoCreateMode || "note") === "task-list") {
+                const taskFilePath = this.normalizeScanRoot(calendar?.autoCreateTaskListPath);
+                if (taskFilePath) {
+                    const slashIndex = taskFilePath.lastIndexOf("/");
+                    if (slashIndex > 0) {
+                        roots.add(taskFilePath.slice(0, slashIndex));
+                    }
+                }
+                continue;
+            }
             addRoot(calendar?.autoCreateFolder);
             addRoot(calendar?.autoCreateTypeFolder);
         }

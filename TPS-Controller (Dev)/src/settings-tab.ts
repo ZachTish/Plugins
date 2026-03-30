@@ -132,10 +132,13 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         color: "#3b82f6",
                         enabled: true,
                         autoCreateEnabled: true,
+                        autoCreateMode: "note",
                         autoCreateTypeFolder: "",
                         autoCreateFolder: "",
                         autoCreateTag: "",
-                        autoCreateTemplate: ""
+                        autoCreateTemplate: "",
+                        autoCreateTaskListPath: "",
+                        autoCreateTaskListHeading: "",
                     });
                     await this.plugin.saveSettings();
                     this.renderExternalCalendars(calendarsContainer);
@@ -705,6 +708,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             ignoreTags: [],
             ignoreStatuses: [],
             allDayFilter: 'any',
+            includeUnmatchedExternalEvents: false,
         };
     }
 
@@ -905,6 +909,17 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         rem.mode = value as 'task' | 'timeblock';
                         await this.plugin.saveSettings();
+                    }));
+
+            new Setting(ruleContent)
+                .setName('Include unmatched external events')
+                .setDesc('Also evaluate enabled external calendar events that do not have a synced local note or task yet.')
+                .addToggle(toggle => toggle
+                    .setValue(!!rem.includeUnmatchedExternalEvents)
+                    .onChange(async (value) => {
+                        rem.includeUnmatchedExternalEvents = value;
+                        await this.plugin.saveSettings();
+                        descSpan.textContent = this.buildRuleDesc(rem);
                     }));
 
             new Setting(ruleContent)
@@ -1153,6 +1168,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         if (rem.requiredStatuses?.length) parts.push(rem.requiredStatuses.join('/'));
         if (rem.triggerAtEnd) parts.push('at end');
         if (rem.mode && rem.mode !== 'task') parts.push(rem.mode);
+        if (rem.includeUnmatchedExternalEvents) parts.push('external gaps');
         return parts.join(' • ');
     }
 
@@ -1268,48 +1284,84 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     }));
 
             new Setting(acContent)
-                .setName("Type Folder")
-                .setDesc("High-level folder categorization (optional).")
-                .addText(t => t
-                    .setValue(calendar.autoCreateTypeFolder || "")
-                    .setPlaceholder("Meetings/External")
-                    .onChange(async (val) => {
-                        calendar.autoCreateTypeFolder = val;
-                        await save();
+                .setName("Sync Mode")
+                .setDesc("Create one note per event, or store events as checklist items in a shared task file.")
+                .addDropdown(drop => drop
+                    .addOption("note", "Note per event")
+                    .addOption("task-list", "Task list")
+                    .setValue(calendar.autoCreateMode || "note")
+                    .onChange(async (val: "note" | "task-list") => {
+                        calendar.autoCreateMode = val;
+                        await save(true);
                     }));
 
-            new Setting(acContent)
-                .setName("Folder")
-                .setDesc("Where to create notes (e.g. 01 Action Items/Meetings)")
-                .addText(t => t
-                    .setValue(calendar.autoCreateFolder || "")
-                    .setPlaceholder("Folder/Path")
-                    .onChange(async (val) => {
-                        calendar.autoCreateFolder = val;
-                        await save();
-                    }));
+            if ((calendar.autoCreateMode || "note") === "task-list") {
+                new Setting(acContent)
+                    .setName("Task List File")
+                    .setDesc("Markdown file that should receive one checklist item per imported event.")
+                    .addText(t => t
+                        .setValue(calendar.autoCreateTaskListPath || "")
+                        .setPlaceholder("Calendar/Work Events.md")
+                        .onChange(async (val) => {
+                            calendar.autoCreateTaskListPath = val.trim();
+                            await save();
+                        }));
 
-            new Setting(acContent)
-                .setName("Tag")
-                .setDesc("Tag to append (e.g. #meeting)")
-                .addText(t => t
-                    .setValue(calendar.autoCreateTag || "")
-                    .setPlaceholder("#tag")
-                    .onChange(async (val) => {
-                        calendar.autoCreateTag = val;
-                        await save();
-                    }));
+                new Setting(acContent)
+                    .setName("Section Heading")
+                    .setDesc("Optional heading to place imported events under inside the task list file.")
+                    .addText(t => t
+                        .setValue(calendar.autoCreateTaskListHeading || "")
+                        .setPlaceholder("Work Calendar")
+                        .onChange(async (val) => {
+                            calendar.autoCreateTaskListHeading = val.trim();
+                            await save();
+                        }));
+            } else {
+                new Setting(acContent)
+                    .setName("Type Folder")
+                    .setDesc("High-level folder categorization (optional).")
+                    .addText(t => t
+                        .setValue(calendar.autoCreateTypeFolder || "")
+                        .setPlaceholder("Meetings/External")
+                        .onChange(async (val) => {
+                            calendar.autoCreateTypeFolder = val;
+                            await save();
+                        }));
 
-            new Setting(acContent)
-                .setName("Template")
-                .setDesc("Path to template file")
-                .addText(t => t
-                    .setValue(calendar.autoCreateTemplate || "")
-                    .setPlaceholder("Templates/Meeting.md")
-                    .onChange(async (val) => {
-                        calendar.autoCreateTemplate = val;
-                        await save();
-                    }));
+                new Setting(acContent)
+                    .setName("Folder")
+                    .setDesc("Where to create notes (e.g. 01 Action Items/Meetings)")
+                    .addText(t => t
+                        .setValue(calendar.autoCreateFolder || "")
+                        .setPlaceholder("Folder/Path")
+                        .onChange(async (val) => {
+                            calendar.autoCreateFolder = val;
+                            await save();
+                        }));
+
+                new Setting(acContent)
+                    .setName("Tag")
+                    .setDesc("Tag to append (e.g. #meeting)")
+                    .addText(t => t
+                        .setValue(calendar.autoCreateTag || "")
+                        .setPlaceholder("#tag")
+                        .onChange(async (val) => {
+                            calendar.autoCreateTag = val;
+                            await save();
+                        }));
+
+                new Setting(acContent)
+                    .setName("Template")
+                    .setDesc("Path to template file")
+                    .addText(t => t
+                        .setValue(calendar.autoCreateTemplate || "")
+                        .setPlaceholder("Templates/Meeting.md")
+                        .onChange(async (val) => {
+                            calendar.autoCreateTemplate = val;
+                            await save();
+                        }));
+            }
         });
     }
 

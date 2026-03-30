@@ -23,7 +23,7 @@ export class FileNamingService {
         /\btemplater\b/i,
     ];
 
-    private getDailyNoteDateFormat(): string {
+    public getDailyNoteDateFormat(): string {
         const configured = String((this.plugin as any)?.settings?.dailyNoteDateFormat || '').trim();
         if (configured) return configured;
         const dailyNotesFormat = String((this.plugin.app as any)?.internalPlugins?.plugins?.["daily-notes"]?.instance?.options?.format || '').trim();
@@ -37,7 +37,7 @@ export class FileNamingService {
         return this.inferredDailyNoteFormat;
     }
 
-    private isDateOnlyBasename(value: string): boolean {
+    public isDateOnlyBasename(value: string): boolean {
         const basename = String(value || '').trim();
         if (!basename) return false;
         if (FULL_DATE_REGEX.test(basename)) return true;
@@ -118,11 +118,15 @@ export class FileNamingService {
                 });
             }
 
-            // Check if filename needs updating (if enabled)
             if (this.plugin.settings.enableAutoRename) {
                 await this.updateFilenameIfNeeded(liveFile, {
                     bypassCreationGrace: options.bypassCreationGrace,
                 });
+            }
+
+            // Populate daily note with scheduled items if applicable
+            if (this.plugin.settings.enableAutoPopulateDailyNotes && this.isDateOnlyBasename(liveFile.basename)) {
+                await this.plugin.noteOperationService.populateDailyNoteWithScheduledItems(liveFile);
             }
         } catch (error) {
             logger.error('[TPS GCM] Error processing file on open:', error);
@@ -135,22 +139,22 @@ export class FileNamingService {
      * Public method to sync folder path on demand (e.g. after move/rename)
      */
     async syncFolderPath(file: TFile): Promise<void> {
-        logger.log(`[FILE-DRAG] syncFolderPath called for: ${file.path}`);
+        logger.debug(`[FILE-DRAG] syncFolderPath called for: ${file.path}`);
         if (!this.plugin.settings.autoSaveFolderPath) {
-            logger.log(`[FILE-DRAG] autoSaveFolderPath disabled, skipping`);
+            logger.debug(`[FILE-DRAG] autoSaveFolderPath disabled, skipping`);
             return;
         }
         if (!this.shouldProcess(file)) {
-            logger.log(`[FILE-DRAG] shouldProcess returned false, skipping`);
+            logger.debug(`[FILE-DRAG] shouldProcess returned false, skipping`);
             return;
         }
         const liveFile = this.getLiveFile(file);
         if (!liveFile || !this.shouldProcess(liveFile)) {
-            logger.log(`[FILE-DRAG] liveFile check failed, skipping`);
+            logger.debug(`[FILE-DRAG] liveFile check failed, skipping`);
             return;
         }
         if (this.shouldSkipAutoFrontmatterWrite(liveFile)) {
-            logger.log(`[FILE-DRAG] shouldSkipAutoFrontmatterWrite true, skipping`);
+            logger.debug(`[FILE-DRAG] shouldSkipAutoFrontmatterWrite true, skipping`);
             return;
         }
         const lockKey = liveFile.path;
@@ -158,29 +162,29 @@ export class FileNamingService {
         // Use internal helper to avoid duplicate processing checks if called directly
         // But we should still use the lock to prevent races
         if (this.processingFiles.has(lockKey)) {
-            logger.log(`[FILE-DRAG] Already processing ${lockKey}, skipping`);
+            logger.debug(`[FILE-DRAG] Already processing ${lockKey}, skipping`);
             return;
         }
         this.processingFiles.add(lockKey);
-        logger.log(`[FILE-DRAG] Acquired lock for ${lockKey}`);
+        logger.debug(`[FILE-DRAG] Acquired lock for ${lockKey}`);
 
         try {
             await this._syncFolderPath(liveFile);
         } finally {
             this.processingFiles.delete(lockKey);
-            logger.log(`[FILE-DRAG] Released lock for ${lockKey}`);
+            logger.debug(`[FILE-DRAG] Released lock for ${lockKey}`);
         }
     }
 
     private async _syncFolderPath(file: TFile): Promise<void> {
-        logger.log(`[FILE-DRAG] _syncFolderPath: ${file.path}`);
+        logger.debug(`[FILE-DRAG] _syncFolderPath: ${file.path}`);
         const liveFile = this.getLiveFile(file);
         if (!liveFile) {
-            logger.log(`[FILE-DRAG] No live file found`);
+            logger.debug(`[FILE-DRAG] No live file found`);
             return;
         }
         if (this.shouldSkipAutoFrontmatterWrite(liveFile)) {
-            logger.log(`[FILE-DRAG] Skipping frontmatter write`);
+            logger.debug(`[FILE-DRAG] Skipping frontmatter write`);
             return;
         }
         if (!(await this.plugin.bulkEditService.canMutateFrontmatterSafely(liveFile))) {
@@ -197,21 +201,21 @@ export class FileNamingService {
             return normalized === 'type' || normalized === 'types';
         });
 
-        logger.log(`[FILE-DRAG] currentFolder=${currentFolder}, existingFolderPath=${existingFolderPath}, persistedFolderPath=${persistedFolderPath}, hasLegacyTypeKeys=${hasLegacyTypeKeys}`);
+        logger.debug(`[FILE-DRAG] currentFolder=${currentFolder}, existingFolderPath=${existingFolderPath}, persistedFolderPath=${persistedFolderPath}, hasLegacyTypeKeys=${hasLegacyTypeKeys}`);
 
         if (this.hasRecentFolderPathWrite(liveFile.path, currentFolder)) {
-            logger.log(`[FILE-DRAG] Skipping repeated folderPath write for ${liveFile.path}`);
+            logger.debug(`[FILE-DRAG] Skipping repeated folderPath write for ${liveFile.path}`);
             return;
         }
 
         const effectiveFolderPath = persistedFolderPath || existingFolderPath;
         if (effectiveFolderPath === currentFolder && !hasLegacyTypeKeys) {
-            logger.log(`[FILE-DRAG] No update needed`);
+            logger.debug(`[FILE-DRAG] No update needed`);
             return;
         }
 
         try {
-            logger.log(`[FILE-DRAG] Writing folderPath to frontmatter: ${currentFolder}`);
+            logger.debug(`[FILE-DRAG] Writing folderPath to frontmatter: ${currentFolder}`);
             await this.plugin.bulkEditService.runSerializedFrontmatterWrite(liveFile, async () => {
                 await this.plugin.app.fileManager.processFrontMatter(liveFile, (frontmatter) => {
                     frontmatter.folderPath = currentFolder;
@@ -224,14 +228,14 @@ export class FileNamingService {
                 });
             });
             this.rememberRecentFolderPathWrite(liveFile.path, currentFolder);
-            logger.log(`[FILE-DRAG] Frontmatter updated successfully`);
+            logger.debug(`[FILE-DRAG] Frontmatter updated successfully`);
         } catch (error) {
             if (this.isLikelyMissingFileError(error)) {
-                logger.log(`[FILE-DRAG] Missing file error (expected during move)`);
+                logger.debug(`[FILE-DRAG] Missing file error (expected during move)`);
                 return;
             }
             if (this.isDuplicateYamlKeyError(error)) {
-                logger.log(`[FILE-DRAG] Duplicate YAML key error`);
+                logger.debug(`[FILE-DRAG] Duplicate YAML key error`);
                 return;
             }
             logger.error(`[FILE-DRAG] Unexpected error:`, error);
