@@ -148,7 +148,7 @@ export class BadgeRenderer {
               item.setTitle('(none)')
                 .setChecked(allWithoutKey)
                 .onClick(async () => {
-                  await this.plugin.bulkEditService.removeFrontmatterKey(files, prop.key);
+                  await this.plugin.bulkEditService.removeFrontmatterKey(files, prop.key, { userInitiated: true });
                   (e.target as HTMLElement).remove();
                 });
             });
@@ -156,7 +156,7 @@ export class BadgeRenderer {
               item.setTitle('(empty)')
                 .setChecked(allEmpty)
                 .onClick(async () => {
-                  await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: '' });
+                  await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: '' }, { userInitiated: true });
                   (e.target as HTMLElement).remove();
                 });
             });
@@ -166,7 +166,7 @@ export class BadgeRenderer {
                 item.setTitle(opt)
                   .setChecked(this.getValueCaseInsensitive(fm, prop.key) === opt)
                   .onClick(async () => {
-                    await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: opt });
+                    await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: opt }, { userInitiated: true });
                     (e.target as HTMLElement).textContent = opt;
                     (e.target as HTMLElement).className = `tps-gcm-badge tps-gcm-badge-${prop.key} tps-gcm-badge-${opt}`;
                   });
@@ -178,6 +178,12 @@ export class BadgeRenderer {
         }
       } else if (prop.type === 'list') {
         const listValues = this.getValueCaseInsensitive(fm, prop.key);
+
+        const addBadge = createBadge('+', 'add-tag', null, (e) => {
+          e.stopPropagation();
+          this.delegates.openAddTagModal(entries, prop.key);
+        });
+        tagBadges.push(addBadge);
 
         if (listValues && listValues !== false && listValues !== null) {
           const rawItems = Array.isArray(listValues) ? listValues : [listValues];
@@ -224,13 +230,6 @@ export class BadgeRenderer {
             }));
           }
         }
-
-        // Add the "+" button AFTER the tags
-        const addBadge = createBadge('+', 'add-tag', null, (e) => {
-          e.stopPropagation();
-          this.delegates.openAddTagModal(entries, prop.key);
-        });
-        tagBadges.push(addBadge);
       } else if (prop.type === 'recurrence') {
         const recurrence = this.delegates.getRecurrenceValue(fm);
         if (recurrence) {
@@ -255,8 +254,8 @@ export class BadgeRenderer {
           }));
         }
       } else if (prop.type === 'folder') {
-        const folderPath = file.parent?.path || '/';
-        nonTagBadges.push(createBadge(folderPath, 'folder', null, (e) => {
+        const typeLabel = file.basename || file.name || '/';
+        nonTagBadges.push(createBadge(typeLabel, 'folder', null, (e) => {
           e.stopPropagation();
           this.delegates.openTypeSubmenu(e, entries);
         }));

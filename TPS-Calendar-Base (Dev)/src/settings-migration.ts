@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     sidebarBasePath: null,
     dailyDateLinkTarget: "daily-note",
     defaultCreateMode: "note",
+    defaultCreateDestination: "",
     defaultTaskTargetFile: "",
     primaryControllerId: null,
     priorityValues: PRIORITY_KEYS,
@@ -59,6 +60,7 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     allDayStickyScroll: true,
     dayHeaderFormat: "short",
     dayHeaderShowDate: true,
+    showSingleDayDateLabel: true,
     timeFormat: "12h",
     slotDuration: 30,
     minEventHeight: 20,
@@ -73,7 +75,6 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     showTaskItems: false,
     taskDateField: "any",
     showCompletedTaskItems: false,
-    taskItemColor: "#f59e0b",
     taskItemFolderFilter: "",
     hiddenExternalEventsByBase: {},
 };
@@ -123,6 +124,7 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         enableExternalCalendars: stored?.enableExternalCalendars ?? true,
         sidebarBasePath: stored?.sidebarBasePath ?? null,
         defaultCreateMode: stored?.defaultCreateMode === "task" ? "task" : "note",
+        defaultCreateDestination: typeof stored?.defaultCreateDestination === "string" ? stored.defaultCreateDestination.trim() : "",
         defaultTaskTargetFile: typeof stored?.defaultTaskTargetFile === "string" ? stored.defaultTaskTargetFile.trim() : "",
         primaryControllerId: stored?.primaryControllerId ?? null,
 
@@ -181,6 +183,7 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         allDayStickyScroll: stored?.allDayStickyScroll ?? true,
         dayHeaderFormat: ["short", "long", "narrow"].includes(stored?.dayHeaderFormat) ? stored.dayHeaderFormat : "short",
         dayHeaderShowDate: stored?.dayHeaderShowDate ?? true,
+        showSingleDayDateLabel: stored?.showSingleDayDateLabel ?? true,
         timeFormat: stored?.timeFormat === "24h" ? "24h" : "12h",
         slotDuration: [15, 30, 60].includes(stored?.slotDuration) ? stored.slotDuration : 30,
         minEventHeight,
@@ -198,7 +201,6 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         showTaskItems: stored?.showTaskItems ?? false,
         taskDateField: ["any", "due", "scheduled", "start"].includes(stored?.taskDateField) ? stored.taskDateField : "any",
         showCompletedTaskItems: stored?.showCompletedTaskItems ?? false,
-        taskItemColor: typeof stored?.taskItemColor === "string" && stored.taskItemColor ? stored.taskItemColor : "#f59e0b",
         taskItemFolderFilter: typeof stored?.taskItemFolderFilter === "string" ? stored.taskItemFolderFilter : "",
         hiddenExternalEventsByBase:
             stored?.hiddenExternalEventsByBase && typeof stored.hiddenExternalEventsByBase === "object"

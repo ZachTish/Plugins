@@ -18,7 +18,7 @@ import {
   EventMountArg,
   DatesSetArg,
 } from "@fullcalendar/core";
-import { BasesEntry, BasesPropertyId, Platform, Value, App } from "obsidian";
+import { BasesEntry, BasesPropertyId, Platform, Value, App, normalizePath } from "obsidian";
 import { useApp } from "./hooks";
 import * as logger from "./logger";
 import {
@@ -38,7 +38,20 @@ import { useCalendarEvents, normalizeValue, tryGetValue } from "./hooks/useCalen
 import { useEventRenderer } from "./components/EventRenderer";
 import { CalendarNavigation } from "./components/CalendarNavigation";
 import { ContinuousScrollView } from "./components/ContinuousScrollView";
-import { parseDateFromFilename } from "../../tps/src/utils/daily-file-date";
+
+const TASK_REFERENCE_DRAG_TYPE = "application/x-tps-card-reference";
+import { parseDateFromFilename } from "./utils/daily-file-date";
+
+const buildTaskSourceWikilink = (rawPath: string, rawTitle: string): string => {
+  const path = normalizePath(String(rawPath || "").trim()).replace(/\.md$/i, "");
+  const title = String(rawTitle || "")
+    .replace(/\r?\n+/g, " ")
+    .replace(/\|/g, " ")
+    .replace(/\]\]/g, "")
+    .trim();
+  if (!path || !title) return "";
+  return `[[${path}|${title}]]`;
+};
 
 const DEFAULT_SLOT_MIN_TIME = "00:00:00";
 const DEFAULT_SLOT_MAX_TIME = "24:00:00";
@@ -251,12 +264,16 @@ export interface CalendarEntry {
   iconColor?: string;
   isTask?: boolean;
   taskTimed?: boolean;
+  taskCheckboxState?: string;
+  taskInlineProperties?: Record<string, string>;
+  taskIsDone?: boolean;
 }
 
 interface CalendarReactViewProps {
   entries: CalendarEntry[];
   weekStartDay: number;
   properties: BasesPropertyId[];
+  titlePropertyId?: BasesPropertyId | null;
   onEntryClick: (entry: CalendarEntry, isModEvent: boolean) => void;
   onEntryContextMenu: (evt: React.MouseEvent, entry: BasesEntry) => void;
   onEventDrop?: (
@@ -311,6 +328,7 @@ interface CalendarReactViewProps {
   allDayStickyScroll?: boolean;
   dayHeaderFormatSetting?: "short" | "long" | "narrow";
   dayHeaderShowDate?: boolean;
+  showSingleDayDateLabel?: boolean;
   timeFormatSetting?: "12h" | "24h";
   slotDurationMinutes?: number;
   minEventHeight?: number;
@@ -324,6 +342,10 @@ interface CalendarReactViewProps {
   doneStatuses?: string[];
   /** Optional user daily-note date format (passed from host view) */
   dailyNoteDateFormat?: string;
+  /** Unscheduled entries to show in the nav popover */
+  unscheduledEntries?: { file: { path: string; basename: string }; title: string }[];
+  /** Called when an unscheduled entry is clicked */
+  onUnscheduledEntryClick?: (file: { path: string }) => void;
 }
 
 const normalizeDisplayTitle = (raw: string): string => {
@@ -394,10 +416,6 @@ const applyActiveNoteEventHighlight = (eventEl: HTMLElement, shouldHighlight: bo
   };
   const writeSnapshot = () => {
     const snapshot: Record<string, string | null> = {
-      background: eventEl.style.getPropertyValue("background") || null,
-      backgroundImage: eventEl.style.getPropertyValue("background-image") || null,
-      borderColor: eventEl.style.getPropertyValue("border-color") || null,
-      priorityColor: eventEl.style.getPropertyValue("--priority-color") || null,
       opacity: eventEl.style.getPropertyValue("opacity") || null,
       boxShadow: eventEl.style.getPropertyValue("box-shadow") || null,
       filter: eventEl.style.getPropertyValue("filter") || null,
@@ -412,10 +430,6 @@ const applyActiveNoteEventHighlight = (eventEl: HTMLElement, shouldHighlight: bo
       if (value) eventEl.style.setProperty(prop, value);
       else eventEl.style.removeProperty(prop);
     };
-    restore("background", snapshot.background);
-    restore("background-image", snapshot.backgroundImage);
-    restore("border-color", snapshot.borderColor);
-    restore("--priority-color", snapshot.priorityColor);
     restore("opacity", snapshot.opacity);
     restore("box-shadow", snapshot.boxShadow);
     restore("filter", snapshot.filter);
@@ -428,25 +442,15 @@ const applyActiveNoteEventHighlight = (eventEl: HTMLElement, shouldHighlight: bo
     if (!eventEl.hasAttribute(snapshotAttr)) {
       writeSnapshot();
     }
-    eventEl.style.setProperty(
-      "background",
-      "color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 82%, black 18%)",
-      "important",
-    );
-    eventEl.style.setProperty("background-image", "none", "important");
-    eventEl.style.setProperty(
-      "border-color",
-      "color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 65%, white 35%)",
-      "important",
-    );
-    eventEl.style.setProperty("--priority-color", "var(--tps-active-note-highlight-color, var(--interactive-accent))");
     eventEl.style.setProperty("opacity", "1", "important");
     eventEl.style.setProperty(
       "box-shadow",
-      "inset 0 0 0 1px color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 72%, white 28%), 0 0 0 2px color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 45%, transparent), 0 8px 20px color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 26%, black 74%)",
+      "inset 0 0 0 1px color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 74%, white 26%), 0 0 0 2px color-mix(in srgb, var(--tps-active-note-highlight-color, var(--interactive-accent)) 40%, transparent), 0 8px 20px rgba(0, 0, 0, 0.28)",
       "important",
     );
-    eventEl.style.setProperty("filter", "saturate(1.08)");
+    // Keep the event's own visual color and icon. Active-note emphasis should
+    // be additive, not repaint the task/event to the accent color.
+    eventEl.style.setProperty("filter", "brightness(1.03) saturate(1.04)");
     eventEl.style.setProperty("z-index", "140", "important");
   } else {
     restoreSnapshot();
@@ -525,6 +529,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   entries,
   weekStartDay,
   properties,
+  titlePropertyId,
   onEntryClick,
   onEntryContextMenu,
   onEventDrop,
@@ -563,6 +568,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   allDayStickyScroll = true,
   dayHeaderFormatSetting = "short",
   dayHeaderShowDate = true,
+  showSingleDayDateLabel = true,
   timeFormatSetting = "12h",
   slotDurationMinutes = 30,
   minEventHeight = 20,
@@ -574,6 +580,8 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   activeEventHighlightColor = "#3b82f6",
   doneStatuses,
   dailyNoteDateFormat,
+  unscheduledEntries,
+  onUnscheduledEntryClick,
 }) => {
   const app = useApp() || ((window as any).app as App);
   const calendarRef = useRef<FullCalendar>(null);
@@ -1203,6 +1211,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
     app,
     sanitizedProperties,
     basesEntryMap,
+    titlePropertyId: titlePropertyId ?? null,
   });
 
   // --- Sync effects ---
@@ -1806,13 +1815,26 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
         const shouldHighlight = pathsLikelyMatch(event.extendedProps.entryPath, activeFilePathRef.current);
         applyActiveNoteEventHighlight(element, shouldHighlight);
         element.setAttribute("draggable", "true");
-        const dragPath = String(event.extendedProps.entryPath || "").trim();
+        const dragPath = String(event.extendedProps.sourceLinkPath || event.extendedProps.entryPath || "").trim();
         const handleDragStart = (dragEvent: DragEvent) => {
           if (!dragEvent.dataTransfer || !dragPath) return;
+          const dragTitle = String(event.extendedProps.calEntryTitle || event.title || "").trim();
+          const wikilink = buildTaskSourceWikilink(dragPath, dragTitle);
           dragEvent.dataTransfer.effectAllowed = "copy";
-          dragEvent.dataTransfer.setData("obsidian/file", dragPath);
-          dragEvent.dataTransfer.setData("text/plain", dragPath);
-          dragEvent.dataTransfer.setData("text/uri-list", `obsidian://open?file=${encodeURIComponent(dragPath)}`);
+          if (dragTitle) {
+            const cardRefPayload: Record<string, string> = {
+              title: dragTitle,
+              linkPath: dragPath,
+            };
+            if (event.extendedProps.isTask) {
+              cardRefPayload.isTask = "1";
+              cardRefPayload.checkboxState = event.extendedProps.taskIsDone ? "[x]" : "[ ]";
+            }
+            dragEvent.dataTransfer.setData(TASK_REFERENCE_DRAG_TYPE, JSON.stringify(cardRefPayload));
+          }
+          if (wikilink) {
+            dragEvent.dataTransfer.setData("text/plain", wikilink);
+          }
         };
         const previousDragStartHandler = (element as any)._tpsDragStartHandler as ((dragEvent: DragEvent) => void) | undefined;
         if (previousDragStartHandler) {
@@ -2732,6 +2754,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
       )}
 
       <CalendarNavigation
+        isMobile={isMobile}
         showNavButtons={showNavButtons}
         navigationLocked={navigationLocked}
         canNavigatePrev={canNavigatePrev}
@@ -2745,8 +2768,10 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
         onPrevClick={handlePrevClick}
         onNextClick={handleNextClick}
         onTodayCentered={handleTodayCentered}
-        mobileNavHidden={mobileNavHidden}
+        mobileNavHidden={mobileNavHidden || navScrollHidden}
         floatingNavStyle={floatingNavStyle}
+        unscheduledEntries={unscheduledEntries}
+        onUnscheduledEntryClick={onUnscheduledEntryClick}
       />
 
       {shouldEnableScrollHoursToggle && !hiddenTimeVisible && (
@@ -2802,7 +2827,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
               contentHeight={fullCalendarContentHeight}
               expandRows={resolvedFilterViewMode === "month" && !isMobile}
               plugins={activePlugins}
-              key={`calendar-${resolvedFilterViewMode}-${resolvedShowFullDay}-${effectiveCondenseLevel}-${slotDurationMinutes}-${snapDurationMinutes}-${dayHeaderFormatSetting}-${dayHeaderShowDate}-${timeFormatSetting}-${defaultScrollTimeSetting}-${showNowIndicator}`}
+              key={`calendar-${resolvedFilterViewMode}-${resolvedShowFullDay}-${effectiveCondenseLevel}-${slotDurationMinutes}-${snapDurationMinutes}-${dayHeaderFormatSetting}-${dayHeaderShowDate}-${showSingleDayDateLabel}-${timeFormatSetting}-${defaultScrollTimeSetting}-${showNowIndicator}`}
               ref={calendarRef}
               initialView={viewName}
               initialDate={safeInitialDate}
@@ -2842,6 +2867,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
               eventResizeStop={handleDragStop}
 
               nowIndicator={showNowIndicator}
+              dayHeaders={resolvedFilterViewMode === "day" ? showSingleDayDateLabel : true}
               dayHeaderFormat={
                 resolvedFilterViewMode === "month"
                   ? { weekday: dayHeaderFormatSetting }

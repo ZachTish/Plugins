@@ -1,10 +1,7 @@
-import { App, ColorComponent, PluginSettingTab, Setting, TextComponent } from "obsidian";
+import { App, PluginSettingTab, Setting, TextComponent } from "obsidian";
 import NotebookNavigatorCompanionPlugin from "./main";
 import { DebounceMap } from "./utils/debounce";
-import { RulesSectionRenderer } from "./settings/rules-section";
-import { BucketSectionRenderer } from "./settings/bucket-section";
-import { HideSectionRenderer } from "./settings/hide-section";
-import { BindCommittedText, SettingsSectionContext } from "./settings/ui-common";
+import { BindCommittedText } from "./settings/ui-common";
 
 const TEXT_COMMIT_DEBOUNCE_MS = 300;
 const SETTINGS_STYLE_ID = "tps-nn-companion-settings-style";
@@ -31,6 +28,24 @@ const createCollapsibleSection = (
   }
 
   return details.createDiv({ cls: "tps-collapsible-section-content" });
+};
+
+const createSettingsGroup = (
+  parent: HTMLElement,
+  title: string,
+  description?: string,
+): HTMLElement => {
+  const group = parent.createDiv({ cls: 'tps-settings-flat-group' });
+  group.style.marginBottom = '18px';
+  group.style.padding = '14px 16px';
+  group.style.border = '1px solid var(--background-modifier-border)';
+  group.style.borderRadius = '12px';
+  group.style.background = 'var(--background-secondary)';
+  group.createEl('h3', { text: title });
+  if (description) {
+    group.createEl('p', { text: description, cls: 'setting-item-description' });
+  }
+  return group;
 };
 
 export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
@@ -65,40 +80,10 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
       text: "Data steward for Notebook Navigator. Applies frontmatter icon/color plus optional computed sort key for consistent sorting/grouping."
     });
 
-    const createMainCategory = (title: "Features" | "Rules" | "Interaction" | "UI Display", defaultOpen = true): HTMLElement => {
-      const details = containerEl.createEl("details", { cls: "tps-settings-main-category" });
-      if (defaultOpen) details.setAttr("open", "true");
-      const summary = details.createEl("summary", { cls: "tps-settings-main-summary" });
-      summary.createEl("h3", { text: title });
-      return details.createDiv({ cls: "tps-settings-main-content" });
-    };
+    const featuresCategory = createSettingsGroup(containerEl, 'Automation', 'Core rule application and click-driven Notebook Navigator behavior.');
+    const automationCategory = createSettingsGroup(containerEl, 'Pages and Metadata', 'On-demand page creation plus higher-impact metadata integration settings.');
 
-    const featuresCategory = createMainCategory("Features");
-    const rulesCategory = createMainCategory("Rules");
-    const interactionCategory = createMainCategory("Interaction");
-    const uiDisplayCategory = createMainCategory("UI Display");
-
-    this.renderGeneralSettings(featuresCategory, interactionCategory, uiDisplayCategory);
-
-    if (!this.plugin.settings.enabled) {
-      rulesCategory.createEl("p", {
-        cls: "setting-item-description",
-        text: "Automation is disabled. Enable Companion automation to configure rules, buckets, and hide logic.",
-      });
-      this.restoreSettingsViewState(containerEl);
-      return;
-    }
-
-    const sectionContext: SettingsSectionContext = {
-      plugin: this.plugin,
-      bindCommittedText: this.bindCommittedText.bind(this),
-      refresh: () => this.display(),
-      persistRuleChange: (applyActive = false) => this.persistRuleChange(applyActive)
-    };
-
-    new BucketSectionRenderer(sectionContext).render(rulesCategory);
-    new HideSectionRenderer(sectionContext).render(rulesCategory);
-    new RulesSectionRenderer(sectionContext).render(rulesCategory);
+    this.renderGeneralSettings(featuresCategory, automationCategory);
     this.restoreSettingsViewState(containerEl);
   }
 
@@ -118,11 +103,7 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
     if (!this.hasRenderedSettings) {
       detailsEls.forEach((detailsEl) => {
         const details = detailsEl as HTMLDetailsElement;
-        if (details.classList.contains("tps-settings-main-category")) {
-          details.setAttr("open", "true");
-        } else {
-          details.removeAttribute("open");
-        }
+        details.removeAttribute("open");
       });
       this.hasRenderedSettings = true;
       containerEl.scrollTop = 0;
@@ -138,7 +119,7 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
     containerEl.scrollTop = this.settingsScrollTop;
   }
 
-  private renderGeneralSettings(featuresContainer: HTMLElement, interactionContainer: HTMLElement, uiDisplayContainer: HTMLElement): void {
+  private renderGeneralSettings(featuresContainer: HTMLElement, automationContainer: HTMLElement): void {
     const automationSection = createCollapsibleSection(
       featuresContainer,
       "Core Automation",
@@ -221,176 +202,123 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
           });
       });
 
-    const frontmatterSection = createCollapsibleSection(
-      uiDisplayContainer,
-      "Frontmatter Keys",
-      "Group the written metadata keys together so the field names are easy to find and change.",
+    const statusFlowSection = createCollapsibleSection(
+      automationContainer,
+      "Status Click Flow",
+      "Configure how clicking the Notebook Navigator status icon advances frontmatter status. Leave blank to keep Navigator's default cycle. Values not listed here are left unchanged.",
       false
     );
 
-    new Setting(frontmatterSection)
-      .setName("Frontmatter icon field")
-      .setDesc("Frontmatter key used to store icon value.")
+    new Setting(statusFlowSection)
+      .setName("Status click flow")
+      .setDesc("Comma or newline separated values, in order. Example: complete, todo")
       .addText((text) => {
-        text.setPlaceholder("icon");
-        this.bindCommittedText(text, this.plugin.settings.frontmatterIconField, async (value) => {
-          this.plugin.settings.frontmatterIconField = value.trim().replace(/\s+/g, "") || "icon";
-        }, false, true);
+        text.setPlaceholder("complete, todo");
+        this.bindCommittedText(text, this.plugin.settings.statusClickFlow.join(", "), async (value) => {
+          this.plugin.settings.statusClickFlow = value
+            .split(/[\n,]+/)
+            .map((entry) => entry.trim())
+            .filter(Boolean);
+        });
       });
 
-    new Setting(frontmatterSection)
-      .setName("Frontmatter color field")
-      .setDesc("Frontmatter key used to store color value.")
-      .addText((text) => {
-        text.setPlaceholder("color");
-        this.bindCommittedText(text, this.plugin.settings.frontmatterColorField, async (value) => {
-          this.plugin.settings.frontmatterColorField = value.trim().replace(/\s+/g, "") || "color";
-        }, false, true);
-      });
-
-    const basesFieldsSection = createCollapsibleSection(
-      uiDisplayContainer,
-      "Bases Icon Fields",
-      "Optional helper fields for Obsidian Bases. Related settings stay together and remain lower-priority.",
+    const tagPagesSection = createCollapsibleSection(
+      automationContainer,
+      "Tag Pages",
+      "Open a tag page when you click a tag in Notebook Navigator or a graph view. Companion only opens or creates the page on demand — it does not auto-sync tag content.",
       false
     );
 
-    new Setting(basesFieldsSection)
-      .setName("Write Bases icon fields")
-      .setDesc("Generate colored icon helper fields for Obsidian Bases table/card display.")
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.writeBasesIconFields)
+    new Setting(tagPagesSection)
+      .setName("Tag page folder")
+      .setDesc("Vault-relative folder where tag pages are stored. Leave blank to store them at the vault root.")
+      .addText((text) => {
+        text.setPlaceholder("Tag Pages or blank for root");
+        this.bindCommittedText(text, this.plugin.settings.tagPageFolder, async (value) => {
+          this.plugin.settings.tagPageFolder = value.trim().replace(/^\/+|\/+$/g, "");
+        });
+      });
+
+    new Setting(tagPagesSection)
+      .setName("Tag page file type")
+      .setDesc("Choose the file type created for missing tag pages.")
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("canvas", "Canvas")
+          .addOption("markdown", "Markdown")
+          .addOption("base", "Base")
+          .setValue(this.plugin.settings.tagPageFileType)
           .onChange(async (value) => {
-            this.plugin.settings.writeBasesIconFields = value;
-            await this.plugin.saveSettings();
-            await this.plugin.applyRulesToActiveFile(false);
+            if (value === "canvas" || value === "markdown" || value === "base") {
+              this.plugin.settings.tagPageFileType = value;
+              await this.plugin.saveSettings();
+            }
           });
       });
 
-    if (this.plugin.settings.writeBasesIconFields) {
-      new Setting(basesFieldsSection)
-        .setName("Bases icon markdown field")
-        .setDesc("Frontmatter key that stores markdown image output for the colored icon.")
-        .addText((text) => {
-          text.setPlaceholder("iconDisplay");
-          this.bindCommittedText(text, this.plugin.settings.basesIconMarkdownField, async (value) => {
-            this.plugin.settings.basesIconMarkdownField = value.trim().replace(/\s+/g, "") || "iconDisplay";
-          }, false, true);
-        });
-
-      new Setting(basesFieldsSection)
-        .setName("Bases icon URI field")
-        .setDesc("Frontmatter key that stores raw data URI output for the colored icon.")
-        .addText((text) => {
-          text.setPlaceholder("iconDisplayUri");
-          this.bindCommittedText(text, this.plugin.settings.basesIconUriField, async (value) => {
-            this.plugin.settings.basesIconUriField = value.trim().replace(/\s+/g, "") || "iconDisplayUri";
-          }, false, true);
-        });
-    }
-
-    const visualOverridesSection = createCollapsibleSection(
-      uiDisplayContainer,
-      "Visual Overrides",
-      "Appearance-adjacent overrides that are nice to have, but less frequently changed.",
-      false
-    );
-
-    let checkboxColorText: TextComponent | null = null;
-    let checkboxColorPicker: ColorComponent | null = null;
-
-    new Setting(visualOverridesSection)
-      .setName('Navigator "note includes checkboxes" icon color')
-      .setDesc(
-        'Overrides Notebook Navigator system icon color for notes with checkboxes (`interfaceIcons["file-unfinished-task"]`). Leave blank to use Navigator default.'
-      )
-      .addColorPicker((picker) => {
-        checkboxColorPicker = picker;
-        picker.setValue(this.toPickerHexColor(this.plugin.settings.noteCheckboxIconColor) ?? "#7a7a7a");
-        picker.onChange(async (value) => {
-          this.plugin.settings.noteCheckboxIconColor = value;
-          if (checkboxColorText) {
-            checkboxColorText.setValue(value);
-          }
-          await this.plugin.saveSettings();
-        });
-      })
-      .addText((text) => {
-        checkboxColorText = text;
-        text.setPlaceholder("#4caf50 or var(--interactive-accent)");
-        this.bindCommittedText(text, this.plugin.settings.noteCheckboxIconColor, async (value) => {
-          const normalized = value.trim();
-          this.plugin.settings.noteCheckboxIconColor = normalized;
-          const pickerHex = this.toPickerHexColor(normalized);
-          if (pickerHex && checkboxColorPicker) {
-            checkboxColorPicker.setValue(pickerHex);
-          }
-        });
-      });
-
-    const cleanupSection = createCollapsibleSection(
-      uiDisplayContainer,
-      "Cleanup Behavior",
-      "Optional removal behavior when no rules match.",
-      false
-    );
-
-    new Setting(cleanupSection)
-      .setName("Clear icon when no match")
-      .setDesc("Remove icon field when no icon rule matches.")
+    new Setting(tagPagesSection)
+      .setName("Create missing tag pages on open")
+      .setDesc("If enabled, clicking a tag creates the page if it doesn't exist yet.")
       .addToggle((toggle) => {
         toggle
-          .setValue(this.plugin.settings.clearIconWhenNoMatch)
+          .setValue(this.plugin.settings.createTagPageOnOpen)
           .onChange(async (value) => {
-            this.plugin.settings.clearIconWhenNoMatch = value;
+            this.plugin.settings.createTagPageOnOpen = value;
             await this.plugin.saveSettings();
-            await this.plugin.applyRulesToActiveFile(false);
           });
       });
 
-    new Setting(cleanupSection)
-      .setName("Clear color when no match")
-      .setDesc("Remove color field when no color rule matches.")
+    const propertyPagesSection = createCollapsibleSection(
+      automationContainer,
+      "Property Pages",
+      "Open or create a page for Notebook Navigator properties on demand. Companion only opens or creates the page on demand — it does not auto-sync property content.",
+      false
+    );
+
+    new Setting(propertyPagesSection)
+      .setName("Property page folder")
+      .setDesc("Vault-relative folder where property pages are stored. Leave blank to store them at the vault root.")
+      .addText((text) => {
+        text.setPlaceholder("Property Pages or blank for root");
+        this.bindCommittedText(text, this.plugin.settings.propertyPageFolder, async (value) => {
+          this.plugin.settings.propertyPageFolder = value.trim().replace(/^\/+|\/+$/g, "");
+        });
+      });
+
+    new Setting(propertyPagesSection)
+      .setName("Property page default file type")
+      .setDesc("Default file type used for automatic property page creation.")
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("canvas", "Canvas")
+          .addOption("markdown", "Markdown")
+          .addOption("base", "Base")
+          .setValue(this.plugin.settings.propertyPageFileType)
+          .onChange(async (value) => {
+            if (value === "canvas" || value === "markdown" || value === "base") {
+              this.plugin.settings.propertyPageFileType = value;
+              await this.plugin.saveSettings();
+            }
+          });
+      });
+
+    new Setting(propertyPagesSection)
+      .setName("Create missing property pages on open")
+      .setDesc("If enabled, clicking a property creates the page if it doesn't exist yet.")
       .addToggle((toggle) => {
         toggle
-          .setValue(this.plugin.settings.clearColorWhenNoMatch)
+          .setValue(this.plugin.settings.createPropertyPageOnOpen)
           .onChange(async (value) => {
-            this.plugin.settings.clearColorWhenNoMatch = value;
+            this.plugin.settings.createPropertyPageOnOpen = value;
             await this.plugin.saveSettings();
-            await this.plugin.applyRulesToActiveFile(false);
           });
       });
 
     const advancedSection = createCollapsibleSection(
-      interactionContainer,
+      automationContainer,
       "Advanced Metadata",
       "These are higher-impact write paths and integration settings. Change them only if you need Companion to own metadata beyond icon/color rules."
     );
-
-    new Setting(advancedSection)
-      .setName("Sync title from filename")
-      .setDesc("Update frontmatter `title` when a file is renamed. Disabled by default to avoid surprise metadata writes.")
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.syncTitleFromFilename)
-          .onChange(async (value) => {
-            this.plugin.settings.syncTitleFromFilename = value;
-            await this.plugin.saveSettings();
-          });
-      });
-
-    new Setting(advancedSection)
-      .setName("Sync filename from title")
-      .setDesc("Rename files when frontmatter `title` changes. Disabled by default because it is a high-impact write path.")
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.syncFilenameFromTitle)
-          .onChange(async (value) => {
-            this.plugin.settings.syncFilenameFromTitle = value;
-            await this.plugin.saveSettings();
-          });
-      });
 
     new Setting(advancedSection)
       .setName("Upstream link keys")
@@ -409,21 +337,6 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
           false,
           false
         );
-      });
-
-    new Setting(advancedSection)
-      .setName("Frontmatter write exclusions")
-      .setDesc(
-        "Skip companion frontmatter writes for matching files. One pattern per line. Supports exact paths, folder prefixes (end with /), wildcards (*), name:<basename>, and re:<regex>."
-      )
-      .addTextArea((text) => {
-        text
-          .setValue(this.plugin.settings.frontmatterWriteExclusions || "")
-          .setPlaceholder("System/Templates/\nSystem/*\nname:daily-template\nre:^System/")
-          .onChange(async (value) => {
-            this.plugin.settings.frontmatterWriteExclusions = value;
-            await this.plugin.saveSettings();
-          });
       });
 
     new Setting(advancedSection)

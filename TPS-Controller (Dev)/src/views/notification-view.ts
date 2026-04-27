@@ -1,6 +1,7 @@
-import { ItemView, WorkspaceLeaf, TFile, IconName, Menu, setIcon, debounce, moment } from 'obsidian';
+import { ItemView, WorkspaceLeaf, TFile, IconName, Menu, setIcon, debounce, moment, Plugin } from 'obsidian';
 import type { OverdueItem } from '../types';
 import { SnoozeModal } from '../modals/snooze-modal';
+import { getPluginById } from '../core';
 
 export const NOTIFICATION_VIEW_TYPE = 'tps-notification-view';
 
@@ -15,6 +16,22 @@ export interface TPSControllerRemindersAPI {
     markFileWontDo(file: TFile): Promise<void>;
     markOverdueItemComplete?(item: OverdueItem): Promise<void>;
     markOverdueItemWontDo?(item: OverdueItem): Promise<void>;
+}
+
+interface GcmPluginSettings {
+    properties?: Array<{ key?: string; options?: string[] }>;
+    recurrenceCompletionStatuses?: string[];
+}
+
+interface GcmPluginAPI {
+    settings?: GcmPluginSettings;
+    applyCalendarFrontmatterMutation?: (input: {
+        file: TFile;
+        updates?: Record<string, unknown>;
+        deletes?: string[];
+        folderPath?: string | null;
+        userInitiated?: boolean;
+    }) => Promise<boolean>;
 }
 
 export class NotificationView extends ItemView {
@@ -147,14 +164,27 @@ export class NotificationView extends ItemView {
             noteIconEl.style.flexShrink = '0';
             noteIconEl.style.fontSize = '16px';
             noteIconEl.style.lineHeight = '1';
-            // Strip optional provider prefix (e.g. "lucide:circle" → "circle")
-            const rawIcon = (item.icon && item.icon.trim()) ? item.icon.trim() : '';
-            const iconName = rawIcon.includes(':') ? rawIcon.split(':').pop()! : (rawIcon || 'file-text');
+
+            let iconName: string;
+            let iconColor: string;
+            const checkboxState = item.checkboxState ?? '';
+            const checkboxIconMap: Record<string, [string, string]> = {
+                '':   ['square', 'var(--text-muted)'],
+                'x':  ['check-square', 'var(--text-success)'],
+                '/':  ['play', 'var(--text-accent)'],
+                '?':  ['help-circle', 'var(--text-warning)'],
+                '-':  ['x-circle', 'var(--text-error)'],
+            };
+            if ((item.sourceType === 'task-item' || item.sourceType === 'kanban-task') && checkboxIconMap[checkboxState] !== undefined) {
+                [iconName, iconColor] = checkboxIconMap[checkboxState];
+            } else {
+                const rawIcon = (item.icon && item.icon.trim()) ? item.icon.trim() : '';
+                iconName = rawIcon.includes(':') ? rawIcon.split(':').pop()! : (rawIcon || 'file-text');
+                iconColor = (item.color && item.color.trim() && item.color.trim() !== 'undefined')
+                    ? item.color.trim()
+                    : 'var(--text-muted)';
+            }
             noteIconEl.setAttribute('title', iconName);
-            // Apply color — ensure it's a valid CSS value (not empty / "undefined")
-            const iconColor = (item.color && item.color.trim() && item.color.trim() !== 'undefined')
-                ? item.color.trim()
-                : 'var(--text-muted)';
             noteIconEl.style.color = iconColor;
             setIcon(noteIconEl, iconName);
 
@@ -174,6 +204,9 @@ export class NotificationView extends ItemView {
             let displayName = item.file.basename;
             if (!/^\d{4}-\d{2}-\d{2}$/.test(displayName)) {
                 displayName = displayName.replace(/ \d{4}-\d{2}-\d{2}$/, '');
+            }
+            if ((item.sourceType === 'task-item' || item.sourceType === 'kanban-task') && item.taskText) {
+                displayName = item.taskText;
             }
             const title = topRow.createEl('span', { text: displayName });
             title.style.fontWeight = '600';
@@ -197,7 +230,6 @@ export class NotificationView extends ItemView {
                 let nextStr: string;
                 if (item.isRepeating) {
                     const intervalMins = item.nextReminderIntervalMinutes ?? item.reminder.repeatIntervalMinutes ?? 1;
-                    console.log(`[TPS Subtitle] ${item.file.basename} repeating: nextTime=${item.nextTriggerTime} (${new Date(item.nextTriggerTime).toLocaleTimeString()}), nextReminderIntervalMinutes=${item.nextReminderIntervalMinutes}, reminderRepeatInterval=${item.reminder.repeatIntervalMinutes}, intervalMins=${intervalMins}, isRepeating=${item.isRepeating}`);
                     // Prefer showing the concrete next trigger time when available,
                     // falling back to the generic "every X min" wording.
                     if (item.nextTriggerTime !== undefined) {
@@ -240,12 +272,13 @@ export class NotificationView extends ItemView {
             actions.style.gap = '4px';
 
             // Clickable status pill — always visible even when empty
-            const gcmPlugin = (this.app as any).plugins?.plugins?.['tps-global-context-menu'];
+            const gcmPlugin = getPluginById(this.app, 'tps-global-context-menu') as (Plugin & GcmPluginAPI) | null;
             const statusOptions: string[] = gcmPlugin?.settings?.properties
                 ?.find((p: any) => p.key === 'status')?.options
                 ?? ['open', 'working', 'blocked', 'wont-do', 'complete'];
 
             const currentStatus = item.status || '';
+            const isTaskItem = item.sourceType === 'task-item' || item.sourceType === 'kanban-task';
             const statusPill = actions.createDiv({ cls: 'tps-status-pill', text: currentStatus || '—' });
             statusPill.style.cursor = 'pointer';
             statusPill.style.padding = '2px 8px';
@@ -268,41 +301,66 @@ export class NotificationView extends ItemView {
                     ...(gcmPlugin?.settings?.recurrenceCompletionStatuses ?? ['complete', 'wont-do'])
                         .map((s: string) => String(s || '').trim().toLowerCase()),
                 ]);
-                const nowStamp = () => (window as any).moment
-                    ? (window as any).moment().format('YYYY-MM-DD HH:mm:ss')
-                    : new Date().toISOString().replace('T', ' ').slice(0, 19);
-                const writeStatus = async (newStatus: string | null) => {
-                    await this.app.fileManager.processFrontMatter(item.file, (fm) => {
-                        if (newStatus == null) {
-                            delete fm.status;
-                            // Clear completedDate when status cleared
-                            const cdKey = Object.keys(fm).find((k) => k.toLowerCase() === 'completeddate');
-                            if (cdKey) delete fm[cdKey];
-                        } else {
-                            fm.status = newStatus;
-                            if (doneStatuses.has(newStatus.trim().toLowerCase())) {
-                                fm.completedDate = nowStamp();
-                            } else {
-                                const cdKey = Object.keys(fm).find((k) => k.toLowerCase() === 'completeddate');
-                                if (cdKey) delete fm[cdKey];
-                            }
+                const nowStamp = () => moment().format('YYYY-MM-DD HH:mm:ss');
+
+                const writeCheckboxState = async (newCheckboxState: string) => {
+                    if (item.taskLineNumber == null) return;
+                    const editor = this.getEditorForFile(item.file);
+                    if (editor) {
+                        const line = editor.getLine(item.taskLineNumber);
+                        editor.setLine(item.taskLineNumber, line.replace(/\[([^\]]*)\]/, `[${newCheckboxState}]`));
+                    } else {
+                        const content = await this.app.vault.read(item.file);
+                        const lines = content.split('\n');
+                        if (item.taskLineNumber < lines.length) {
+                            lines[item.taskLineNumber] = lines[item.taskLineNumber].replace(/\[([^\]]*)\]/, `[${newCheckboxState}]`);
+                            await this.app.vault.modify(item.file, lines.join('\n'));
                         }
-                    });
-                    (this.app.workspace as any).trigger('tps-gcm-files-updated', [item.file.path]);
+                    }
                 };
-                menu.addItem((i) => i.setTitle('(none)').setChecked(!currentStatus).onClick(async () => {
-                    await writeStatus(null);
+
+                const writeFileStatus = async (newStatus: string | null) => {
+                    if (!gcmPlugin?.applyCalendarFrontmatterMutation) {
+                        throw new Error('TPS Global Context Menu API unavailable for notification status mutation');
+                    }
+                    await gcmPlugin.applyCalendarFrontmatterMutation({
+                        file: item.file,
+                        updates: newStatus == null
+                            ? {}
+                            : {
+                                status: newStatus,
+                                ...(doneStatuses.has(newStatus.trim().toLowerCase()) ? { completedDate: nowStamp() } : {}),
+                            },
+                        deletes: newStatus == null || !doneStatuses.has((newStatus || '').trim().toLowerCase())
+                            ? ['completedDate', ...(newStatus == null ? ['status'] : [])]
+                            : [],
+                        folderPath: item.file.parent?.path || '/',
+                        userInitiated: true,
+                    });
+                };
+
+                const statusToCheckbox: Record<string, string> = {
+                    'complete': 'x',
+                    'wont-do': '-',
+                    'working': '/',
+                    'holding': '?',
+                    'todo': ' ',
+                    'open': ' ',
+                };
+
+                const handleStatusChange = async (newStatus: string | null) => {
+                    if (isTaskItem && newStatus && statusToCheckbox[newStatus.trim().toLowerCase()]) {
+                        await writeCheckboxState(statusToCheckbox[newStatus.trim().toLowerCase()]);
+                    } else {
+                        await writeFileStatus(newStatus);
+                    }
                     await this.refresh();
-                }));
-                menu.addItem((i) => i.setTitle('(empty)').setChecked(currentStatus === '').onClick(async () => {
-                    await writeStatus('');
-                    await this.refresh();
-                }));
+                };
+
+                menu.addItem((i) => i.setTitle('(none)').setChecked(!currentStatus).onClick(() => handleStatusChange(null)));
+                menu.addItem((i) => i.setTitle('(empty)').setChecked(currentStatus === '').onClick(() => handleStatusChange('')));
                 statusOptions.forEach((opt) => {
-                    menu.addItem((i) => i.setTitle(opt).setChecked(currentStatus === opt).onClick(async () => {
-                        await writeStatus(opt);
-                        await this.refresh();
-                    }));
+                    menu.addItem((i) => i.setTitle(opt).setChecked(currentStatus === opt).onClick(() => handleStatusChange(opt)));
                 });
                 menu.showAtMouseEvent(e);
             });
@@ -342,8 +400,66 @@ export class NotificationView extends ItemView {
     }
 
     private showContextMenu(e: MouseEvent, item: OverdueItem) {
-        const menu = new Menu();
-        this.app.workspace.trigger('file-menu', menu, item.file, 'tps-notification-view', this.leaf);
-        menu.showAtMouseEvent(e);
+        const isTaskItem = item.sourceType === 'task-item' || item.sourceType === 'kanban-task';
+
+        if (isTaskItem && item.taskLineNumber != null) {
+            const menu = new Menu();
+
+            const states: Array<{ char: string; label: string }> = [
+                { char: " ", label: "Todo [ ]" },
+                { char: "/", label: "Working [/]" },
+                { char: "x", label: "Complete [x]" },
+                { char: "?", label: "Holding [?]" },
+                { char: "-", label: "Won't Do [-]" },
+            ];
+            const currentState = item.checkboxState ?? "";
+            for (const s of states) {
+                const isActive = currentState === s.char;
+                menu.addItem((i) => i.setTitle(s.label).setChecked(isActive).onClick(async () => {
+                    const editor = this.getEditorForFile(item.file);
+                    if (editor) {
+                        const line = editor.getLine(item.taskLineNumber!);
+                        editor.setLine(item.taskLineNumber!, line.replace(/\[([^\]]*)\]/, `[${s.char}]`));
+                    } else {
+                        const content = await this.app.vault.read(item.file);
+                        const lines = content.split('\n');
+                        if (item.taskLineNumber! < lines.length) {
+                            lines[item.taskLineNumber!] = lines[item.taskLineNumber!].replace(/\[([^\]]*)\]/, `[${s.char}]`);
+                            await this.app.vault.modify(item.file, lines.join('\n'));
+                        }
+                    }
+                    await this.refresh();
+                }));
+            }
+
+            menu.addSeparator();
+            menu.addItem((i) => i.setTitle("Go to task line").setIcon("list").onClick(async () => {
+                const leaf = this.app.workspace.getLeaf(false);
+                await leaf.openFile(item.file);
+                const view = leaf.view as any;
+                if (view?.editor) {
+                    const line = item.taskLineNumber!;
+                    view.editor.setCursor({ line, ch: 0 });
+                    view.editor.scrollIntoView({ from: { line, ch: 0 }, to: { line: line + 1, ch: 0 } }, true);
+                }
+            }));
+
+            menu.showAtMouseEvent(e);
+        } else {
+            const menu = new Menu();
+            this.app.workspace.trigger('file-menu', menu, item.file, 'tps-notification-view', this.leaf);
+            menu.showAtMouseEvent(e);
+        }
+    }
+
+    private getEditorForFile(file: TFile): any | null {
+        const leaves = this.app.workspace.getLeavesOfType('markdown');
+        for (const leaf of leaves) {
+            const view = leaf.view as any;
+            if (view?.file?.path === file.path && view?.editor) {
+                return view.editor;
+            }
+        }
+        return null;
     }
 }

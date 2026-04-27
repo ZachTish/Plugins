@@ -4,7 +4,7 @@
  */
 import { BasesEntry, BasesPropertyId, Value } from "obsidian";
 import * as logger from "../logger";
-import { parseDateFromFilename } from "../../../tps/src/utils/daily-file-date";
+import { parseDateFromFilename } from "./daily-file-date";
 
 export function extractDate(entry: BasesEntry, propId: BasesPropertyId, userFormat?: string): Date | null {
   try {

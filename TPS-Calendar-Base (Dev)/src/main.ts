@@ -84,27 +84,6 @@ export default class ObsidianCalendarPlugin
       await this.openDefaultBaseInSidebar();
     });
 
-    // Auto-focus sidebar panel based on active leaf type
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", (leaf) => {
-        if (!leaf) return;
-        const viewType = leaf.view.getViewType();
-        if (viewType === "markdown" && this.settings.autoFocusBacklinksOnMdOpen) {
-          const backlinkLeaves = this.app.workspace.getLeavesOfType("backlink");
-          if (backlinkLeaves.length > 0) {
-            this.app.workspace.revealLeaf(backlinkLeaves[0]);
-          } else {
-            const rightLeaf = this.app.workspace.getRightLeaf(false);
-            if (rightLeaf) {
-              rightLeaf.setViewState({ type: "backlink", active: true }).then(() => {
-                this.app.workspace.revealLeaf(rightLeaf);
-              });
-            }
-          }
-        }
-      })
-    );
-
     // Listen for file deletions to remove parent-child links
     this.registerEvent(
       this.app.vault.on("delete", async (file) => {
@@ -140,6 +119,15 @@ export default class ObsidianCalendarPlugin
   async loadSettings() {
     const stored = await this.loadData();
     this.settings = migrateSettings(stored);
+    if (this.settings.defaultCreateMode !== "task" && this.settings.defaultCreateMode !== "note") {
+      this.settings.defaultCreateMode = "note";
+    }
+    if (typeof this.settings.defaultCreateDestination !== "string") {
+      this.settings.defaultCreateDestination = "";
+    }
+    if (typeof this.settings.defaultTaskTargetFile !== "string") {
+      this.settings.defaultTaskTargetFile = "";
+    }
     logger.setLoggingEnabled(this.settings.enableLogging);
   }
 
@@ -258,40 +246,68 @@ export default class ObsidianCalendarPlugin
   }
 
   async openDefaultBaseInSidebar(): Promise<void> {
+    await this.openBaseInSidebar({ revealLeaf: true, reuseExistingSplit: false });
+  }
+
+  private isRightSidebarLeaf(leaf: any): boolean {
+    const container = leaf?.containerEl as HTMLElement | undefined;
+    if (!container) return false;
+    return !!container.closest('.workspace-split.mod-right-split, .workspace-sidedock.mod-right-split');
+  }
+
+  private async openBaseInSidebar(options: { revealLeaf: boolean; reuseExistingSplit: boolean }): Promise<boolean> {
     const path = this.settings.sidebarBasePath?.trim();
     if (!path) {
-      new Notice("Set a default calendar base path in settings first.");
-      return;
+      return false;
     }
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!file) {
-      new Notice(`File not found: ${path}`);
-      return;
+      if (options.revealLeaf) {
+        new Notice(`File not found: ${path}`);
+      }
+      return false;
     }
     if (!(file as any).extension) {
-      new Notice("Default calendar base must be a file.");
-      return;
+      if (options.revealLeaf) {
+        new Notice("Default calendar base must be a file.");
+      }
+      return false;
     }
 
     let existingLeaf: any = null;
     this.app.workspace.iterateAllLeaves((leaf) => {
-      if ((leaf.view as any).file?.path === path) {
+      const viewFilePath = (leaf.view as any).file?.path;
+      const viewState = typeof leaf.getViewState === 'function' ? (leaf.getViewState() as any) : null;
+      const stateFilePath = typeof viewState?.state?.file === 'string' ? viewState.state.file : null;
+      if ((viewFilePath === path || stateFilePath === path) && this.isRightSidebarLeaf(leaf)) {
         existingLeaf = leaf;
         return true;
       }
     });
 
     if (existingLeaf) {
-      this.app.workspace.revealLeaf(existingLeaf);
-      return;
+      if (options.revealLeaf) {
+        this.app.workspace.revealLeaf(existingLeaf);
+      }
+      return true;
     }
 
-    const leaf = this.app.workspace.getRightLeaf(false);
+    const leaf = this.app.workspace.getRightLeaf(!options.reuseExistingSplit);
     if (!leaf) {
-      new Notice("Open the right sidebar first, then run this command.");
-      return;
+      if (options.revealLeaf) {
+        new Notice("Open the right sidebar first, then run this command.");
+      }
+      return false;
     }
     await (leaf as any).openFile(file, { active: false });
-    this.app.workspace.revealLeaf(leaf);
+    try {
+      (leaf as any).setPinned?.(true);
+    } catch {
+      // Ignore if this Obsidian build or leaf type does not support pinning.
+    }
+    if (options.revealLeaf) {
+      this.app.workspace.revealLeaf(leaf);
+    }
+    return true;
   }
 }

@@ -3,32 +3,27 @@ import ObsidianCalendarPlugin from "./main";
 import { normalizeCalendarUrl } from "./utils";
 import { getPluginById } from "./core";
 import { renderListWithControls } from "./utils/list-renderer";
+import { createTPSCollapsibleSection } from "./utils/settings-layout";
 
 const createCalendarId = () =>
   `calendar-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
 
-const createCollapsibleSection = (
+const createSettingsGroup = (
   parent: HTMLElement,
   title: string,
   description?: string,
-  defaultOpen = false
 ): HTMLElement => {
-  const details = parent.createEl("details", { cls: "tps-collapsible-section" });
-  if (defaultOpen) {
-    details.setAttr("open", "true");
-  }
-
-  const summary = details.createEl("summary", { cls: "tps-collapsible-section-summary" });
-  summary.createSpan({ cls: "tps-collapsible-section-title", text: title });
-
+  const group = parent.createDiv({ cls: 'tps-settings-flat-group' });
+  group.style.marginBottom = '18px';
+  group.style.padding = '14px 16px';
+  group.style.border = '1px solid var(--background-modifier-border)';
+  group.style.borderRadius = '12px';
+  group.style.background = 'var(--background-secondary)';
+  group.createEl('h3', { text: title });
   if (description) {
-    details.createEl("p", {
-      cls: "tps-collapsible-section-description",
-      text: description,
-    });
+    group.createEl('p', { text: description, cls: 'setting-item-description' });
   }
-
-  return details.createDiv({ cls: "tps-collapsible-section-content" });
+  return group;
 };
 
 export class CalendarPluginSettingsTab extends PluginSettingTab {
@@ -51,18 +46,10 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "TPS Calendar Settings" });
 
-    const createMainCategory = (title: "Features" | "Rules" | "Interaction" | "UI Display", defaultOpen = true): HTMLElement => {
-      const details = containerEl.createEl('details', { cls: 'tps-settings-main-category' });
-      if (defaultOpen) details.setAttr('open', 'true');
-      const summary = details.createEl('summary', { cls: 'tps-settings-main-summary' });
-      summary.createEl('h3', { text: title });
-      return details.createDiv({ cls: 'tps-settings-main-content' });
-    };
-
-    const featuresCategory = createMainCategory("Features");
-    const rulesCategory = createMainCategory("Rules");
-    const interactionCategory = createMainCategory("Interaction");
-    const uiDisplayCategory = createMainCategory("UI Display");
+    const featuresCategory = createSettingsGroup(containerEl, 'Daily Use', 'Core calendar behavior, sources, and note creation defaults.');
+    const automationCategory = createSettingsGroup(containerEl, 'Automation', 'Sync behavior, generated data, and background calendar processing.');
+    const rulesCategory = createSettingsGroup(containerEl, 'Rules', 'Matching rules and calendar-specific automation rules.');
+    const appearanceCategory = createSettingsGroup(containerEl, 'Appearance', 'Visual layout and rendering preferences.');
 
     // Check for Controller override
     const controller = getPluginById(this.app, "tps-controller") as any;
@@ -76,7 +63,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
     }
 
     // 1. Calendars Section (Top Priority)
-    const calendarsSection = createCollapsibleSection(
+    const calendarsSection = createTPSCollapsibleSection(
       featuresCategory,
       "Calendars & Sources",
       "Source feeds and quick import. This is the highest-priority setup area for the calendar plugin.",
@@ -213,8 +200,8 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
     }
 
     // 2. General Settings
-    const generalSection = createCollapsibleSection(
-      interactionCategory,
+    const generalSection = createTPSCollapsibleSection(
+      featuresCategory,
       "General",
       "Primary interaction settings that most users are likely to change.",
       false
@@ -249,9 +236,22 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           }),
       );
 
+    new Setting(generalSection)
+      .setName("Default calendar creation destination")
+      .setDesc("Optional folder for notes or file for tasks. Leave blank to keep the base-derived destination.")
+      .addText((text) =>
+        text
+          .setPlaceholder("Markdown/04 Lists/Calendar or Markdown/04 Lists/Hca Calendar.md")
+          .setValue(this.plugin.settings.defaultCreateDestination || "")
+          .onChange(async (value) => {
+            this.plugin.settings.defaultCreateDestination = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
     const taskTargetSetting = new Setting(generalSection)
-      .setName("Task creation target file")
-      .setDesc("File to append new calendar-created tasks into. Leave blank to use that day's daily note.")
+      .setName("Task creation target file fallback")
+      .setDesc("Legacy fallback file for task mode when the generic destination is blank.")
       .addText((text) =>
         text
           .setPlaceholder("Markdown/Action Items/Hca-Outlook.md")
@@ -288,20 +288,8 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(generalSection)
-      .setName("Auto-focus backlinks panel on note open")
-      .setDesc("When you open a markdown note, automatically reveal the Backlinks panel in the sidebar.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.autoFocusBacklinksOnMdOpen ?? false)
-          .onChange(async (value) => {
-            this.plugin.settings.autoFocusBacklinksOnMdOpen = value;
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    const viewBehaviorSection = createCollapsibleSection(
-      interactionCategory,
+    const viewBehaviorSection = createTPSCollapsibleSection(
+      rulesCategory,
       "Calendar View Defaults",
       "Default navigation and visible time-range behavior.",
       false
@@ -309,7 +297,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
 
     new Setting(viewBehaviorSection)
       .setName("Default view mode")
-      .setDesc("Applies to all calendar views.")
+      .setDesc("Default view for calendars without a per-view mode set. Select 'Filter-based (Auto)' to auto-select the day span from the visible event date range.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("day", "Day")
@@ -330,7 +318,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
 
     new Setting(viewBehaviorSection)
       .setName("Auto view mode from visible local events")
-      .setDesc("Automatically switch day span based on the currently visible non-external events.")
+      .setDesc("Only applies when view mode is 'Filter-based (Auto)'. Ignored when a specific mode (Day, 3d, Week, etc.) is selected.")
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.filterRangeAuto ?? false)
@@ -459,47 +447,14 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(viewBehaviorSection)
-      .setName("Earliest hour")
-      .setDesc("Leave blank for full-day range. Examples: 6, 06:00, 06:00:00")
-      .addText((text) =>
-        text
-          .setPlaceholder("06:00")
-          .setValue(this.plugin.settings.minHour || "")
-          .onChange(async (value) => {
-            this.plugin.settings.minHour = value.trim();
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(viewBehaviorSection)
-      .setName("Latest hour")
-      .setDesc("Leave blank for full-day range. Examples: 20, 20:00, 20:00:00")
-      .addText((text) =>
-        text
-          .setPlaceholder("20:00")
-          .setValue(this.plugin.settings.maxHour || "")
-          .onChange(async (value) => {
-            this.plugin.settings.maxHour = value.trim();
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(viewBehaviorSection)
-      .setName("Show hidden-hours toggle button")
-      .setDesc("Show a button to temporarily reveal all hours when a custom time range is active.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.showHiddenHoursToggle ?? true)
-          .onChange(async (value) => {
-            this.plugin.settings.showHiddenHoursToggle = value;
-            await this.plugin.saveSettings();
-          }),
-      );
+    viewBehaviorSection.createEl("p", {
+      text: "Hidden-hour range is now configured per Calendar Base view in that view's options instead of globally here.",
+      cls: "setting-item-description",
+    });
 
     // 3. Event Handling (UI-related settings only)
-    const handlingSection = createCollapsibleSection(
-      rulesCategory,
+    const handlingSection = createTPSCollapsibleSection(
+      automationCategory,
       "Event Handling",
       "Linking and status behavior for calendar-created notes.",
       false
@@ -563,7 +518,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     // 4. Task Items
-    const taskItemsSection = createCollapsibleSection(
+    const taskItemsSection = createTPSCollapsibleSection(
       featuresCategory,
       "Task Items",
       "Optional task rendering. Related settings stay hidden until the feature is enabled.",
@@ -617,18 +572,6 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     new Setting(taskItemDetails)
-      .setName("Task color")
-      .setDesc("Default background color for task events.")
-      .addColorPicker((picker) =>
-        picker
-          .setValue(this.plugin.settings.taskItemColor)
-          .onChange(async (value) => {
-            this.plugin.settings.taskItemColor = value;
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(taskItemDetails)
       .setName("Folder filter")
       .setDesc("Only scan notes in these folders (comma-separated). Leave blank to scan all notes.")
       .addText((text) =>
@@ -642,8 +585,8 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     // 5. Appearance
-    const appearanceSection = createCollapsibleSection(
-      uiDisplayCategory,
+    const appearanceSection = createTPSCollapsibleSection(
+      appearanceCategory,
       "Appearance",
       "Lower-priority visual tuning and optional style rules.",
       false
@@ -808,6 +751,18 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     new Setting(appearanceSection)
+      .setName("Show Single-Day Date Label")
+      .setDesc("Show the built-in date label at the top of day view. Turn this off if you want the daily note itself to act as the day label.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showSingleDayDateLabel ?? true)
+          .onChange(async (value) => {
+            this.plugin.settings.showSingleDayDateLabel = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(appearanceSection)
       .setName("Time Format")
       .addDropdown((dropdown) =>
         dropdown
@@ -820,14 +775,14 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     // 5. Advanced / Developer
-    const advancedSection = createCollapsibleSection(
+    const advancedSection = createTPSCollapsibleSection(
       rulesCategory,
       "Advanced & Frontmatter",
       "Shared key names and lower-frequency advanced behavior.",
       false
     );
 
-    const frontmatterKeysSection = createCollapsibleSection(
+    const frontmatterKeysSection = createTPSCollapsibleSection(
       advancedSection,
       "Frontmatter Keys",
       "All calendar frontmatter key names are grouped here, including the note color/icon fields used for event rendering.",
@@ -858,8 +813,8 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
     });
 
     // 6. Debug
-    const debugSection = createCollapsibleSection(
-      interactionCategory,
+    const debugSection = createTPSCollapsibleSection(
+      automationCategory,
       "Debug",
       "Low-frequency troubleshooting controls.",
       false
@@ -893,11 +848,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
     if (!this.hasRenderedSettings) {
       detailsEls.forEach((detailsEl) => {
         const details = detailsEl as HTMLDetailsElement;
-        if (details.classList.contains("tps-settings-main-category")) {
-          details.setAttr("open", "true");
-        } else {
-          details.removeAttribute("open");
-        }
+        details.removeAttribute("open");
       });
       this.hasRenderedSettings = true;
       containerEl.scrollTop = 0;

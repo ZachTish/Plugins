@@ -106,9 +106,10 @@ export interface OverdueItem {
     diff: string;
     id: string;
     sourceKey?: string;
-    sourceType?: "file" | "kanban-task" | "external-event";
+    sourceType?: "file" | "kanban-task" | "task-item" | "external-event";
     taskLineNumber?: number;
     taskText?: string;
+    checkboxState?: string;
     title?: string;
     body?: string;
     snoozedUntil?: number;
@@ -129,12 +130,13 @@ export interface OverdueItem {
 export interface TPSControllerSettings {
     // Calendar Sync
     syncIntervalMinutes: number;
-    noLossSyncMode: boolean;
-    syncOnEventDelete: "delete" | "archive" | "nothing";
     archiveFolder: string;
+    archiveNotePath: string;
     canceledStatusValue: string;
+    orphanArchiveGraceCycles: number;
     externalCalendarFilter: string;
     externalCalendars: ExternalCalendarConfig[];
+    syncBackfillDays: number;
 
 
     // Frontmatter Key Names (shared with Calendar for sync)
@@ -143,15 +145,22 @@ export interface TPSControllerSettings {
     titleKey: string;
     statusKey: string;
     previousStatusKey: string;
+    scheduledDateProperty: string;
+    scheduledStartProperty: string;
+    scheduledEndProperty: string;
     startProperty: string;
     endProperty: string;
 
     // Notification Rules
     pollMinutes: number;
     enableReminders: boolean;
+    notificationPresentationMode: "sidebar" | "modal";
     reminders: PropertyReminder[];
     alertState: AlertState;
     batchNotifications: boolean;
+    editorDropLinkEnabled: boolean;
+    editorDropLinkHeadingLevel: number;
+    editorDropLinkTemplate: string;
     globalIgnorePaths: string[];
     globalIgnoreTags: string[];
     globalIgnoreStatuses: string[];
@@ -176,12 +185,13 @@ export interface TPSControllerSettings {
 export const DEFAULT_CONTROLLER_SETTINGS: TPSControllerSettings = {
     // Calendar Sync
     syncIntervalMinutes: 5,
-    noLossSyncMode: true,
-    syncOnEventDelete: "nothing",
-    archiveFolder: "",
+    archiveFolder: "Archive",
+    archiveNotePath: "Archive/Archive.md",
     canceledStatusValue: "cancelled",
+    orphanArchiveGraceCycles: 5,
     externalCalendarFilter: "",
     externalCalendars: [],
+    syncBackfillDays: 0,
 
 
     // Frontmatter Keys
@@ -190,15 +200,22 @@ export const DEFAULT_CONTROLLER_SETTINGS: TPSControllerSettings = {
     titleKey: "title",
     statusKey: "status",
     previousStatusKey: "tpsCalendarPrevStatus",
+    scheduledDateProperty: "",
+    scheduledStartProperty: "",
+    scheduledEndProperty: "",
     startProperty: "scheduled",
     endProperty: "timeEstimate",
 
     // Notification Rules
     pollMinutes: 0.5,
     enableReminders: true,
+    notificationPresentationMode: "sidebar",
     reminders: [],
     alertState: {},
     batchNotifications: true,
+    editorDropLinkEnabled: true,
+    editorDropLinkHeadingLevel: 2,
+    editorDropLinkTemplate: "{{heading}} {{wikilink}}",
     globalIgnorePaths: ["System/"],
     globalIgnoreTags: ["archive", "template"],
     globalIgnoreStatuses: ["complete", "wont-do"],

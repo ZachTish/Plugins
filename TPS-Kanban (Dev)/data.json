@@ -3,6 +3,8 @@
   "colorKey": "color",
   "frontmatterColorTarget": "both",
   "ungroupedPosition": "first",
+  "defaultCreateMode": "task",
+  "defaultCreateDestination": "",
   "laneOrderByView": {
     "unknown-base::HCA unscheduled Kanban": [
       "ungrouped",
@@ -39,6 +41,30 @@
       "key:blocked",
       "key:complete",
       "key:wont-do"
+    ],
+    "unknown-base::Table": [
+      "key:low",
+      "ungrouped",
+      "key:medium",
+      "key:high"
+    ],
+    "unknown-base::View": [
+      "key:todo",
+      "key:working",
+      "key:complete"
+    ],
+    "unknown-base::List": [
+      "key:todo",
+      "key:working",
+      "key:complete",
+      "key:wont-do"
+    ],
+    "unknown-base::Kanban": [
+      "ungrouped",
+      "key:todo",
+      "key:working",
+      "key:complete",
+      "key:wont-do"
     ]
   },
   "kanbanTaskCardPosition": "top",
@@ -48,7 +74,10 @@
     "unknown-base::3 day": "board",
     "unknown-base::View": "board",
     "unknown-base::Project notes": "list",
-    "unknown-base::Subtasks": "list"
+    "unknown-base::Subtasks": "list",
+    "unknown-base::List": "board",
+    "unknown-base::list": "list",
+    "unknown-base::Kanban": "list"
   },
   "dynamicEmptyLaneWidth": false,
   "enableKanbanTaskCards": true,

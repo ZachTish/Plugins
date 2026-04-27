@@ -1,44 +1,25 @@
 {
   "enabled": true,
-  "enableCanvasEmbeds": true,
-  "enableCanvasNodeEmbeds": false,
-  "renderMode": "floating",
+  "enableCanvasEmbeds": false,
+  "enableCanvasNodeEmbeds": true,
+  "debugLogging": true,
+  "renderMode": "inline",
   "inlinePlacement": "after-title",
   "rules": [
     {
-      "id": "rule-1773748857727",
-      "basePath": "Area Task List.base",
+      "id": "rule-1777240667810",
+      "basePath": "Untitled.base",
       "enabled": true,
       "conditions": {
-        "excludeTags": [
-          "dailynote"
-        ],
-        "requirePropertyEmpty": "parentOf"
+        "requireProperty": "projects"
       },
-      "initialState": "expanded"
-    },
-    {
-      "id": "rule-1773800108173",
-      "basePath": "Relative Calendar.base",
-      "enabled": true,
-      "conditions": {
-        "requireProperty": "scheduled"
-      },
-      "initialState": "expanded"
-    },
-    {
-      "id": "rule-1773801915163",
-      "basePath": "Project Task List.base",
-      "enabled": true,
-      "conditions": {
-        "requireProperty": "parentOf"
-      },
-      "initialState": "expanded"
+      "renderPlacement": "after-title"
     }
   ],
   "excludeFiles": "",
   "defaultExpanded": true,
-  "accordionMode": true,
+  "accordionMode": false,
+  "alwaysExpanded": true,
   "manualExpansionState": {
     "Stretched 5d calendar.base": true,
     "Tagpage base.base": true,
@@ -52,6 +33,7 @@
     "Area Note Feed.base": false,
     "Scheduled Task list.base": false,
     "Area Task List.base": false,
-    "Relative Calendar.base": false
+    "Relative Calendar.base": false,
+    "scheduled on same day.base": true
   }
 }

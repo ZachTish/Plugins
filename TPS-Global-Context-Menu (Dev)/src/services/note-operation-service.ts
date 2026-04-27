@@ -2,6 +2,10 @@ import { App, TFile, Notice, FuzzySuggestModal, Modal, parseYaml, stringifyYaml,
 import TPSGlobalContextMenuPlugin from "../main";
 import * as logger from "../logger";
 import { mergeNormalizedTags, normalizeTagValue } from "../utils/tag-utils";
+import { setValueCaseInsensitive } from "../core/record-utils";
+import { getArchiveBucketPath, normalizeArchiveFolderMode, resolveArchiveTargetInfo } from "../utils/archive-path";
+import { getDailyNoteResolver } from "../../../TPS-Controller (Dev)/src/utils/daily-note-resolver";
+import { ensureDailyNoteFile } from "../../../TPS-Controller (Dev)/src/utils/daily-note-create";
 
 export class NoteOperationService {
     app: App;
@@ -13,15 +17,11 @@ export class NoteOperationService {
     }
 
     public async populateDailyNoteWithScheduledItems(dailyNote: TFile): Promise<void> {
-        let dailyNoteDateStr = '';
-        const parsed = (window as any).moment(dailyNote.basename, [
-            this.plugin.fileNamingService.getDailyNoteDateFormat(),
-            "YYYY-MM-DD", "YYYY_MM_DD", "YYYYMMDD",
-            "MMMM D, YYYY", "MMM D, YYYY"
-        ], true);
-        if (parsed.isValid()) {
-            dailyNoteDateStr = parsed.format('YYYY-MM-DD');
-        } else {
+        const resolver = getDailyNoteResolver(this.app, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        });
+        const dailyNoteDateStr = resolver.parseFilenameToDateKey(dailyNote.basename);
+        if (!dailyNoteDateStr) {
             return;
         }
 
@@ -138,9 +138,8 @@ export class NoteOperationService {
             }
 
             const existing = await this.app.vault.read(picker);
-            const spacer = existing.endsWith("\n") ? "\n" : "\n\n";
-            logger.log(`[NoteOperationService] Appending ${sections.length} note(s) → "${picker.basename}"`);
-            await this.app.vault.modify(picker, `${existing}${spacer}${sections.join("\n")}`);
+            logger.log(`[NoteOperationService] Prepending ${sections.length} note(s) → "${picker.basename}"`);
+            await this.app.vault.modify(picker, this.insertContentAtTopOfBody(existing, sections.join("\n")));
 
             const archiveResult = await this.archiveSourceNotes(appendedSources, new Set([picker.path]));
             const archivedSuffix = archiveResult.archived > 0
@@ -196,21 +195,20 @@ export class NoteOperationService {
                     dailyTargetPaths.add(daily.path);
 
                     const existing = await this.app.vault.read(daily);
-                    const spacer = existing.endsWith("\n") ? "\n" : "\n\n";
                     await this.app.vault.modify(
                         daily,
-                        `${existing}${spacer}${items.map((item) => item.section).join("\n")}`,
+                        this.insertContentAtTopOfBody(existing, items.map((item) => item.section).join("\n")),
                     );
                     for (const item of items) {
                         appendedSourcePaths.add(item.source.path);
                     }
                 } catch (err) {
-                    logger.error("Failed to append to daily note", date, err);
+                logger.error("Failed to prepend to daily note", date, err);
                 }
             }
 
             if (appendedSourcePaths.size === 0) {
-                new Notice("Unable to append notes to daily notes");
+            new Notice("Unable to add notes to daily notes");
                 return;
             }
 
@@ -272,6 +270,45 @@ export class NoteOperationService {
         if (!bodyBlock.trim()) bodyBlock = "_(empty)_";
 
         return `## ${title}\n\n### Frontmatter\n${fmBlock}\n\n### Body\n${bodyBlock}\n`;
+    }
+
+    private insertContentAtTopOfBody(content: string, inserted: string): string {
+        const normalizedContent = String(content || "").replace(/\r\n/g, "\n");
+        const normalizedInserted = String(inserted || "").replace(/\r\n/g, "\n").trimEnd();
+        if (!normalizedContent) return `${normalizedInserted}\n`;
+        if (!normalizedInserted) return normalizedContent;
+
+        const lines = normalizedContent.split("\n");
+        if (lines[0]?.trim() !== '---') {
+            const separator = normalizedContent.endsWith('\n') ? '' : '\n';
+            return `${normalizedInserted}${separator}${normalizedContent}`;
+        }
+
+        let frontmatterEndIndex = -1;
+        for (let i = 1; i < lines.length; i += 1) {
+            if (lines[i]?.trim() === '---') {
+                frontmatterEndIndex = i;
+                break;
+            }
+        }
+
+        if (frontmatterEndIndex < 0) {
+            const separator = normalizedContent.endsWith('\n') || normalizedContent.length === 0 ? '' : '\n';
+            return `${normalizedContent}${separator}${normalizedInserted}\n`;
+        }
+
+        const beforeInsert = lines.slice(0, frontmatterEndIndex + 1);
+        const afterFrontmatter = lines.slice(frontmatterEndIndex + 1);
+        const hasLeadingBlank = afterFrontmatter.length > 0 && afterFrontmatter[0]?.trim() === '';
+        const remaining = hasLeadingBlank ? afterFrontmatter.slice(1) : afterFrontmatter;
+        const resultLines = [...beforeInsert, '', normalizedInserted];
+        if (remaining.length > 0) {
+            resultLines.push('');
+            resultLines.push(...remaining);
+        }
+        let result = resultLines.join('\n');
+        if (!result.endsWith('\n')) result += '\n';
+        return result;
     }
 
     private serializeFrontmatterForSection(fm: any): string {
@@ -367,32 +404,35 @@ export class NoteOperationService {
     }
 
     private async ensureDailyNote(dateStr: string): Promise<TFile | null> {
-        // Read from Core Daily Notes plugin settings
-        let folder = "System/Dailynotes";
-        let templatePath = "System/Dailynotes/Daily Note Template.md";
+        const targetDate = (window as any)?.moment?.(dateStr, "YYYY-MM-DD", true);
+        if (!targetDate?.isValid?.()) return null;
 
-        try {
-            const dailyNotesPlugin = (this.app as any).internalPlugins?.plugins?.["daily-notes"];
-            if (dailyNotesPlugin?.enabled && dailyNotesPlugin?.instance?.options) {
-                const opts = dailyNotesPlugin.instance.options;
-                if (opts.folder) folder = opts.folder;
-                if (opts.template) templatePath = opts.template;
-                if (!templatePath.endsWith(".md")) templatePath += ".md";
-            }
-        } catch (err) {
-            logger.warn("Failed to read core Daily Notes settings", err);
-        }
-
-        const path = normalizePath(`${folder}/${dateStr}.md`);
+        const resolver = getDailyNoteResolver(this.app, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        });
+        const date = targetDate.toDate();
+        const folder = resolver.folder || "System/Dailynotes";
+        let templatePath = resolver.template || "System/Dailynotes/Daily Note Template.md";
+        if (templatePath && !templatePath.endsWith(".md")) templatePath += ".md";
+        const titleValue = resolver.formatFilename(date);
+        const path = resolver.buildPath(date, "md");
         const adapter = this.app.vault.adapter;
 
         if (await adapter.exists(path)) {
             const existing = this.app.vault.getAbstractFileByPath(path);
             if (existing instanceof TFile) {
-                await this.normalizeCreatedDailyNote(existing, dateStr, folder);
+                await this.normalizeCreatedDailyNote(existing, titleValue, folder, dateStr);
                 return existing;
             }
             return null;
+        }
+
+        const createdViaShared = await ensureDailyNoteFile(this.app as any, date, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        });
+        if (createdViaShared instanceof TFile) {
+            await this.normalizeCreatedDailyNote(createdViaShared, titleValue, folder, dateStr);
+            return createdViaShared;
         }
 
         // Create if missing
@@ -416,12 +456,12 @@ export class NoteOperationService {
         }
 
         if (!content) {
-            content = `---\ntitle: ${dateStr}\ntags: [dailynote]\n---\n\n`;
+            content = `---\ntitle: ${titleValue}\ntags: [dailynote]\n---\n\n`;
         } else if (hasFrontmatter) {
             // Preserve template text exactly; update title via processFrontMatter after create.
             shouldWriteTitleViaFrontmatterApi = true;
         } else {
-            content = `---\ntitle: ${dateStr}\ntags: [dailynote]\n---\n\n${content}`;
+            content = `---\ntitle: ${titleValue}\ntags: [dailynote]\n---\n\n${content}`;
         }
 
         let created: TFile | null = null;
@@ -444,30 +484,53 @@ export class NoteOperationService {
 
         if (shouldWriteTitleViaFrontmatterApi) {
             try {
-                await this.app.fileManager.processFrontMatter(created, (fm: any) => {
-                    fm.title = dateStr;
+                await this.plugin.frontmatterMutationService.process(created, (fm: any) => {
+                    fm.title = titleValue;
                 });
             } catch (error) {
                 logger.warn("Failed setting daily note title via processFrontMatter", error);
             }
         }
 
-        await this.normalizeCreatedDailyNote(created, dateStr, folder);
+        await this.normalizeCreatedDailyNote(created, titleValue, folder, dateStr);
 
         return created;
     }
 
-    private async normalizeCreatedDailyNote(file: TFile, titleValue: string, folder: string): Promise<void> {
+    private async normalizeCreatedDailyNote(file: TFile, titleValue: string, folder: string, scheduledDateKey?: string): Promise<void> {
         const targetFolder = String(folder || file.parent?.path || '/').trim() || '/';
+        const resolver = getDailyNoteResolver(this.app, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        });
+        const resolvedScheduledDateKey = scheduledDateKey
+            || resolver.parseFilenameToDateKey(file.basename)
+            || resolver.parseFilenameToDateKey(titleValue)
+            || '';
 
         await this.normalizeLeadingWhitespaceBeforeFrontmatter(file);
 
         try {
-            await this.app.fileManager.processFrontMatter(file, (fm: any) => {
+            await this.plugin.frontmatterMutationService.process(file, (fm: any) => {
                 fm.title = titleValue;
-                const scheduled = String(fm?.scheduled ?? '').trim();
-                if (!scheduled || /<%[\s\S]*%>/.test(scheduled) || /\{\{[\s\S]*\}\}/.test(scheduled)) {
-                    fm.scheduled = titleValue;
+                const mergedTags = mergeNormalizedTags(fm.tags, "dailynote");
+                setValueCaseInsensitive(fm, 'tags', mergedTags);
+                if (this.plugin.settings.enableDailyNoteScheduledNormalization !== false) {
+                    const existingScheduled = String((fm?.scheduled ?? fm?.Scheduled ?? '')).trim();
+                    const existingScheduledMoment = existingScheduled ? window.moment(existingScheduled) : null;
+                    const existingScheduledKey = existingScheduledMoment?.isValid()
+                        ? existingScheduledMoment.format('YYYY-MM-DD')
+                        : '';
+                    const shouldNormalizeScheduled =
+                        !!resolvedScheduledDateKey && (
+                            !existingScheduled
+                            || /<%[\s\S]*%>/.test(existingScheduled)
+                            || /\{\{[\s\S]*\}\}/.test(existingScheduled)
+                            || !existingScheduledMoment?.isValid?.()
+                            || existingScheduledKey !== resolvedScheduledDateKey
+                        );
+                    if (shouldNormalizeScheduled) {
+                        setValueCaseInsensitive(fm, 'scheduled', resolvedScheduledDateKey);
+                    }
                 }
                 fm.folderPath = targetFolder;
             });
@@ -486,6 +549,22 @@ export class NoteOperationService {
             await companion?.api?.applyRulesToFile?.(file);
         } catch (error) {
             logger.warn('Failed applying NN rules to created daily note', { file: file.path, error });
+        }
+
+        try {
+            await this.plugin.frontmatterMutationService.process(file, (fm: any) => {
+                const tags = Array.isArray(fm?.tags)
+                    ? fm.tags.map((value: unknown) => String(value || '').trim().replace(/^#/, '').toLowerCase()).filter(Boolean)
+                    : typeof fm?.tags === 'string'
+                        ? fm.tags.split(/[\s,]+/).map((value: string) => value.trim().replace(/^#/, '').toLowerCase()).filter(Boolean)
+                        : [];
+                const status = String(fm?.status ?? '').trim().toLowerCase();
+                if (tags.includes('dailynote') && status === 'note') {
+                    delete fm.status;
+                }
+            });
+        } catch (error) {
+            logger.warn('Failed clearing unintended daily note status', { file: file.path, error });
         }
     }
 
@@ -589,23 +668,24 @@ export class NoteOperationService {
         }
     }
 
-    private getUniqueArchiveTargetPath(file: TFile, archiveFolder: string): string {
-        const targetBase = normalizePath(`${archiveFolder}/${file.name}`);
-        let targetPath = targetBase;
-        let counter = 1;
-        while (this.app.vault.getAbstractFileByPath(targetPath)) {
-            targetPath = normalizePath(`${archiveFolder}/${file.basename} ${counter}.${file.extension}`);
-            counter += 1;
-        }
-        return targetPath;
+    private getArchiveTargetInfo(file: TFile, archiveFolder: string): { targetFolder: string; targetPath: string } {
+        const mode = normalizeArchiveFolderMode(
+            this.plugin.settings.archiveFolderMode ?? (this.plugin.settings.archiveUseDailyFolder ? "daily" : "none")
+        );
+        const archiveBucket = getArchiveBucketPath(archiveFolder, mode);
+        const { targetFolder, targetPath } = resolveArchiveTargetInfo(
+            file,
+            archiveBucket,
+            (path) => !!this.app.vault.getAbstractFileByPath(path),
+        );
+        return { targetFolder, targetPath };
     }
 
     private getEffectiveArchiveFolder(baseArchiveFolder: string): string {
-        if (!this.plugin.settings.archiveUseDailyFolder) {
-            return baseArchiveFolder;
-        }
-        const today = window.moment().format("YYYY-MM-DD");
-        return normalizePath(`${baseArchiveFolder}/${today}`);
+        return getArchiveBucketPath(
+            baseArchiveFolder,
+            normalizeArchiveFolderMode(this.plugin.settings.archiveFolderMode ?? (this.plugin.settings.archiveUseDailyFolder ? "daily" : "none"))
+        );
     }
 
     private flattenTagValues(value: unknown): string[] {
@@ -658,7 +738,26 @@ export class NoteOperationService {
                 }
 
                 try {
-                    const targetPath = this.getUniqueArchiveTargetPath(liveFile, targetArchiveFolder);
+                    if (liveFile.extension?.toLowerCase() === "md") {
+                        try {
+                            await this.plugin.frontmatterMutationService.process(liveFile, (frontmatter: any) => {
+                                const originalFolder = liveFile.parent?.path ?? "";
+                                if (!Array.isArray(frontmatter.activity)) {
+                                    frontmatter.activity = [];
+                                }
+                                frontmatter.activity.push({
+                                    type: "archive",
+                                    folder: originalFolder,
+                                    ts: Math.floor(Date.now() / 1000),
+                                });
+                            });
+                        } catch (err) {
+                            logger.error("[TPS GCM] Failed recording archive activity during sweep", liveFile.path, err);
+                        }
+                    }
+
+                    const { targetFolder, targetPath } = this.getArchiveTargetInfo(liveFile, archiveRoot);
+                    await this.ensureFolderPath(targetFolder);
                     await this.app.fileManager.renameFile(liveFile, targetPath);
                     archived += 1;
                 } catch (err) {
@@ -703,8 +802,18 @@ export class NoteOperationService {
 
                 if (liveFile.extension?.toLowerCase() === "md") {
                     try {
-                        await this.app.fileManager.processFrontMatter(liveFile, (frontmatter: any) => {
-                            frontmatter.tags = mergeNormalizedTags(frontmatter.tags, archiveTag);
+                        await this.plugin.frontmatterMutationService.process(liveFile, (frontmatter: any) => {
+                            const mergedTags = mergeNormalizedTags(frontmatter.tags, archiveTag);
+                            setValueCaseInsensitive(frontmatter, 'tags', mergedTags);
+                            const originalFolder = liveFile.parent?.path ?? "";
+                            if (!Array.isArray(frontmatter.activity)) {
+                                frontmatter.activity = [];
+                            }
+                            frontmatter.activity.push({
+                                type: "archive",
+                                folder: originalFolder,
+                                ts: Math.floor(Date.now() / 1000),
+                            });
                         });
                     } catch (err) {
                         logger.error("[TPS GCM] Failed adding archive tag after add-to-note", liveFile.path, err);
@@ -717,7 +826,8 @@ export class NoteOperationService {
                 }
 
                 try {
-                    const targetPath = this.getUniqueArchiveTargetPath(liveFile, archiveFolder);
+                    const { targetFolder, targetPath } = this.getArchiveTargetInfo(liveFile, archiveRoot);
+                    await this.ensureFolderPath(targetFolder);
                     await this.app.fileManager.renameFile(liveFile, targetPath);
                     archived += 1;
                 } catch (err) {

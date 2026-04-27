@@ -2,6 +2,7 @@ import { App, Menu, TFile, MarkdownView } from 'obsidian';
 import * as logger from '../logger';
 import type TPSGlobalContextMenuPlugin from '../main';
 import { StatusChoiceModal } from '../modals/status-choice-modal';
+import { CheckboxPatterns, type CheckboxStateChar } from '../core';
 
 /**
  * Handles task checkbox context actions and long-press state selection.
@@ -12,7 +13,6 @@ import { StatusChoiceModal } from '../modals/status-choice-modal';
 export class TaskCheckboxHandler {
     private app: App;
     private pendingChecklistReorderTimers: Map<string, number> = new Map();
-    private pendingPropertyUpdateTimers: Map<string, number> = new Map();
     private bypassNextTaskCycleClick = false;
     private recentTaskCycleClicks: Map<string, number> = new Map();
     private longPressTimerId: number | null = null;
@@ -27,10 +27,6 @@ export class TaskCheckboxHandler {
             window.clearTimeout(timerId);
         }
         this.pendingChecklistReorderTimers.clear();
-        for (const timerId of this.pendingPropertyUpdateTimers.values()) {
-            window.clearTimeout(timerId);
-        }
-        this.pendingPropertyUpdateTimers.clear();
         if (this.longPressTimerId !== null) {
             window.clearTimeout(this.longPressTimerId);
             this.longPressTimerId = null;
@@ -140,7 +136,7 @@ export class TaskCheckboxHandler {
     private isTaskLineHost(targetEl: HTMLElement): boolean {
         if (!targetEl.classList.contains('cm-line')) return false;
         const text = targetEl.textContent || '';
-        return /^[ \t]*([-*+]|\d+\.)\s+\[[^\]]*\]\s+/.test(text);
+        return CheckboxPatterns.TASK_LINE.test(text) && /\[[^\]]*\]/.test(text);
     }
 
     private resolveTaskCheckboxTarget(targetEl: HTMLElement): HTMLElement | null {
@@ -297,7 +293,6 @@ export class TaskCheckboxHandler {
         if (updatedContent === content) return false;
         await this.app.vault.modify(file, updatedContent);
         await this.maybePromptToCompleteNote(file, previousState, next.nextState, lines);
-        this.scheduleChecklistPropertyUpdate(file);
         this.scheduleChecklistReorder(file);
         return true;
     }
@@ -306,7 +301,7 @@ export class TaskCheckboxHandler {
         file: TFile,
         view: MarkdownView,
         lineNumber: number,
-        targetState: ' ' | 'x' | '?' | '-',
+        targetState: CheckboxStateChar,
         preferVaultWrite = false,
         strictLine = false,
     ): Promise<boolean> {
@@ -329,15 +324,14 @@ export class TaskCheckboxHandler {
         if (updatedContent === content) return false;
         await this.app.vault.modify(file, updatedContent);
         await this.maybePromptToCompleteNote(file, previousState, targetState, lines);
-        this.scheduleChecklistPropertyUpdate(file);
         this.scheduleChecklistReorder(file);
         return true;
     }
 
-    private applySpecificTaskStateToLine(line: string, targetState: ' ' | 'x' | '?' | '-'): string | null {
-        const match = line.match(/^(\s*(?:[-*+]|\d+\.)\s*)\[( |x|X|\?|-)\](.*)$/);
+    private applySpecificTaskStateToLine(line: string, targetState: CheckboxStateChar): string | null {
+        const match = line.match(CheckboxPatterns.CHECKBOX_LINE_CAPTURE);
         if (!match) return null;
-        return `${match[1]}[${targetState}]${match[3]}`;
+        return `${match[1]}[${targetState}] ${match[3] || ''}`.replace(/\s+$/, ' ');
     }
 
     private showTaskStateSelectorMenu(
@@ -349,11 +343,12 @@ export class TaskCheckboxHandler {
         isReadingView: boolean,
     ): void {
         const menu = new Menu();
-        const options: Array<{ state: ' ' | 'x' | '?' | '-'; label: string }> = [
-            { state: ' ', label: 'Open [ ]' },
+        const options: Array<{ state: ' ' | 'x' | '?' | '-' | '/'; label: string }> = [
+            { state: ' ', label: 'Todo [ ]' },
+            { state: '/', label: 'Working [/]' },
+            { state: '?', label: 'Holding [?]' },
             { state: 'x', label: 'Complete [x]' },
-            { state: '?', label: 'Question [?]' },
-            { state: '-', label: 'Canceled [-]' },
+            { state: '-', label: "Won\u2019t Do [-]" },
         ];
 
         for (const option of options) {
@@ -364,13 +359,29 @@ export class TaskCheckboxHandler {
             });
         }
 
+        menu.addSeparator();
+        menu.addItem((item) => {
+            item.setTitle('Start Time Tracking')
+                .setIcon('timer')
+                .onClick(() => {
+                    void this.plugin.timeTrackingService.startFromTaskLine(file, view, lineNumber, isReadingView);
+                });
+        });
+        menu.addItem((item) => {
+            item.setTitle('Stop Timer on This Line')
+                .setIcon('square')
+                .onClick(() => {
+                    void this.plugin.timeTrackingService.stopTimerAtLine(file, view, lineNumber, isReadingView);
+                });
+        });
+
         menu.showAtPosition({ x, y });
     }
 
     private async maybePromptToCompleteNote(
         file: TFile,
-        previousState: ' ' | 'x' | 'X' | '?' | '-' | null,
-        nextState: ' ' | 'x' | '?' | '-',
+        previousState: CheckboxStateChar | null,
+        nextState: CheckboxStateChar,
         updatedLines: string[],
     ): Promise<void> {
         // Prompt only when an open checklist item [ ] is moved to any non-open state.
@@ -385,7 +396,7 @@ export class TaskCheckboxHandler {
         const chosenStatus = await this.promptForFinalChecklistStatus(statusChoices);
         if (!chosenStatus) return;
         try {
-            await this.plugin.bulkEditService.setStatus([file], chosenStatus);
+            await this.plugin.bulkEditService.setStatus([file], chosenStatus, { userInitiated: true });
         } catch (error) {
             logger.warn('[TPS GCM] Failed auto-completing note after last checkbox completion', { file: file.path, error });
         }
@@ -399,17 +410,16 @@ export class TaskCheckboxHandler {
      */
     async handleExternalChecklistStateMutation(
         file: TFile,
-        previousState: ' ' | 'x' | 'X' | '?' | '-' | null,
-        nextState: ' ' | 'x' | '?' | '-',
+        previousState: CheckboxStateChar | null,
+        nextState: CheckboxStateChar,
         updatedLines: string[],
     ): Promise<void> {
         await this.maybePromptToCompleteNote(file, previousState, nextState, updatedLines);
-        this.scheduleChecklistPropertyUpdate(file);
         this.scheduleChecklistReorder(file);
     }
 
     private hasOpenChecklistItems(lines: string[]): boolean {
-        return lines.some((line) => /^\s*(?:[-*+]|\d+\.)\s*\[ \]/.test(line));
+        return lines.some((line) => CheckboxPatterns.OPEN_CHECKBOX.test(line));
     }
 
     private getChecklistFinalPromptStatuses(): string[] {
@@ -429,61 +439,6 @@ export class TaskCheckboxHandler {
         });
     }
 
-    // ── Checklist completion property ─────────────────────────────────────
-
-    scheduleChecklistPropertyUpdate(file: TFile): void {
-        const key = file.path;
-        const existing = this.pendingPropertyUpdateTimers.get(key);
-        if (typeof existing === 'number') window.clearTimeout(existing);
-        const timerId = window.setTimeout(() => {
-            this.pendingPropertyUpdateTimers.delete(key);
-            void this.runChecklistPropertyUpdate(key);
-        }, 300);
-        this.pendingPropertyUpdateTimers.set(key, timerId);
-    }
-
-    private async runChecklistPropertyUpdate(filePath: string): Promise<void> {
-        if (!this.plugin.settings.enableChecklistCompletionProperty) return;
-        const propKey = this.plugin.settings.checklistCompletionPropertyKey?.trim();
-        if (!propKey) return;
-
-        const af = this.plugin.app.vault.getAbstractFileByPath(filePath);
-        if (!(af instanceof TFile) || af.extension !== 'md') return;
-
-        let content: string;
-        try {
-            content = await this.plugin.app.vault.cachedRead(af);
-        } catch (error) {
-            logger.warn('[TPS GCM] Failed to read file for checklist property update', { filePath, error });
-            return;
-        }
-
-        const lines = content.split('\n');
-        const checklistStates: string[] = [];
-        for (const line of lines) {
-            const match = line.match(/^\s*(?:[-*+]|\d+\.)\s*\[( |x|X|\?|-)\]/);
-            if (match) checklistStates.push(match[1]);
-        }
-
-        if (checklistStates.length === 0) return;
-
-        const allDone = checklistStates.every((s) => s === 'x' || s === 'X' || s === '-');
-
-        // Guard against infinite loop: skip if frontmatter already has the correct value
-        const cache = this.plugin.app.metadataCache.getFileCache(af);
-        if (cache?.frontmatter?.[propKey] === allDone) return;
-
-        try {
-            await this.plugin.bulkEditService.runSerializedFrontmatterWrite(af, async () => {
-                await this.plugin.app.fileManager.processFrontMatter(af, (fm) => {
-                    fm[propKey] = allDone;
-                });
-            });
-        } catch (error) {
-            logger.warn('[TPS GCM] Failed to write checklist completion property', { filePath, error });
-        }
-    }
-
     private resolveCandidateTaskLine(lines: string[], preferredLine: number): number {
         if (preferredLine >= 0 && preferredLine < lines.length && this.applyNextTaskStateToLine(lines[preferredLine])) return preferredLine;
         for (let offset = 1; offset <= 3; offset++) {
@@ -495,16 +450,17 @@ export class TaskCheckboxHandler {
         return -1;
     }
 
-    private applyNextTaskStateToLine(line: string): { nextLine: string; nextState: ' ' | 'x' | '?' | '-' } | null {
-        const match = line.match(/^(\s*(?:[-*+]|\d+\.)\s*)\[( |x|X|\?|-)\](.*)$/);
+    private applyNextTaskStateToLine(line: string): { nextLine: string; nextState: CheckboxStateChar } | null {
+        const match = line.match(CheckboxPatterns.CHECKBOX_LINE_CAPTURE);
         if (!match) return null;
         const nextState = this.getNextTaskState(match[2]);
         if (!nextState) return null;
-        return { nextLine: `${match[1]}[${nextState}]${match[3]}`, nextState };
+        return { nextLine: `${match[1]}[${nextState}] ${match[3] || ''}`.replace(/\s+$/, ' '), nextState };
     }
 
-    private getNextTaskState(currentState: string): ' ' | 'x' | '?' | '-' | null {
-        if (currentState === ' ') return 'x';
+    private getNextTaskState(currentState: string): CheckboxStateChar | null {
+        if (currentState === ' ') return '/';
+        if (currentState === '/') return 'x';
         if (currentState === 'x' || currentState === 'X') return '?';
         if (currentState === '?') return '-';
         if (currentState === '-') return ' ';
@@ -513,21 +469,22 @@ export class TaskCheckboxHandler {
 
     // ── Checklist reordering ───────────────────────────────────────────────
 
-    private getTaskLineState(line: string): ' ' | 'x' | 'X' | '?' | '-' | null {
-        const match = line.match(/^\s*(?:[-*+]|\d+\.)\s*\[( |x|X|\?|-)\]/);
-        return match ? (match[1] as ' ' | 'x' | 'X' | '?' | '-') : null;
+    private getTaskLineState(line: string): CheckboxStateChar | null {
+        const match = line.match(CheckboxPatterns.CHECKBOX_WITH_STATE);
+        return match ? (match[1] as CheckboxStateChar) : null;
     }
 
     private getTaskLineIndent(line: string): string | null {
-        const match = line.match(/^(\s*)(?:[-*+]|\d+\.)\s*\[(?: |x|X|\?|-)\]/);
+        const match = line.match(CheckboxPatterns.CHECKBOX_LINE_CAPTURE);
         return match ? match[1] : null;
     }
 
-    private getTaskSortRank(state: ' ' | 'x' | 'X' | '?' | '-'): number {
+    private getTaskSortRank(state: CheckboxStateChar): number {
         if (state === '?') return 0;
         if (state === ' ') return 1;
-        if (state === '-') return 2;
-        return 3;
+        if (state === '/') return 2;
+        if (state === '-') return 3;
+        return 4;
     }
 
     scheduleChecklistReorder(file: TFile): void {

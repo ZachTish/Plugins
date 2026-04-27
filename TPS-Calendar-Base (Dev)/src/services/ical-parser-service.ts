@@ -268,7 +268,10 @@ export class ICalParserService {
 
     private normalizeTime(icalTime: ICAL.Time, explicitTzid: string | null): Date {
         if (icalTime.isDate) {
-            return icalTime.toJSDate();
+            // Date-only values (e.g., DTSTART;VALUE=DATE:20260330) have no time component.
+            // Construct local-midnight explicitly from iCal calendar date components to avoid
+            // UTC interpretation issues with toJSDate() in certain timezone configurations.
+            return new Date(icalTime.year, icalTime.month - 1, icalTime.day);
         }
 
         if (icalTime.zone && icalTime.zone.toString() !== 'floating' && !explicitTzid) {

@@ -1,6 +1,7 @@
 import { App, TFile } from 'obsidian';
 import { ChecklistPromptModal } from '../modals/checklist-prompt-modal';
 import * as logger from '../logger';
+import { CheckboxPatterns } from '../core';
 
 export class ChecklistHandler {
   private app: App;
@@ -18,12 +19,10 @@ export class ChecklistHandler {
       const lines = content.split('\n');
       const incompleteItems: string[] = [];
 
-      const regex = /^\s*[-*+]\s*\[ \]\s*(.*)$/;
-
       for (const line of lines) {
-        const match = line.match(regex);
-        if (match) {
-          incompleteItems.push(match[1].trim());
+        const match = line.match(CheckboxPatterns.CHECKBOX_LINE_CAPTURE);
+        if (match && match[2] === ' ') {
+          incompleteItems.push(match[3].trim());
         }
       }
       return incompleteItems;

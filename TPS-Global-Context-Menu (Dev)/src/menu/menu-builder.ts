@@ -4,6 +4,8 @@ import { TextInputModal } from '../modals/text-input-modal';
 import { FileSuggestModal } from '../modals/FileSuggestModal';
 import { MultiFileSelectModal } from '../modals/MultiFileSelectModal';
 import { mergeNormalizedTags, normalizeTagValue } from '../utils/tag-utils';
+import { setValueCaseInsensitive } from '../core/record-utils';
+import { getArchiveBucketPath, normalizeArchiveFolderMode, resolveArchiveTargetInfo } from '../utils/archive-path';
 import * as logger from '../logger';
 import { resolveCustomProperties } from '../resolve-profiles';
 import { ViewModeService } from '../services/view-mode-service';
@@ -160,6 +162,14 @@ export class MenuBuilder {
         });
     });
 
+    menu.addItem((sub) => {
+      sub.setTitle('Migrate linked children...')
+        .setIcon('move-right')
+        .onClick(() => {
+          void this.plugin.linkedSubitemMigrationService.promptAndMigrateLinkedChildren(file);
+        });
+    });
+
     menu.addSeparator();
 
     if (childFiles.length === 0) {
@@ -218,22 +228,13 @@ export class MenuBuilder {
     frontmatter[existingKey ?? key] = value;
   }
 
-  private getUniqueArchiveTargetPath(file: TFile, archiveFolder: string): string {
-    // If daily folder is enabled, append YYYY-MM-DD to the archive path
-    let finalFolder = archiveFolder;
-    if (this.plugin.settings.archiveUseDailyFolder) {
-      const today = window.moment().format('YYYY-MM-DD');
-      finalFolder = normalizePath(`${archiveFolder}/${today}`);
-    }
-
-    const targetBase = normalizePath(`${finalFolder}/${file.name}`);
-    let targetPath = targetBase;
-    let counter = 1;
-    while (this.app.vault.getAbstractFileByPath(targetPath)) {
-      targetPath = normalizePath(`${finalFolder}/${file.basename} ${counter}.${file.extension}`);
-      counter += 1;
-    }
-    return targetPath;
+  private getArchiveTargetInfo(file: TFile, archiveFolder: string): { targetFolder: string; targetPath: string } {
+    const mode = normalizeArchiveFolderMode(
+      this.plugin.settings.archiveFolderMode ?? (this.plugin.settings.archiveUseDailyFolder ? 'daily' : 'none')
+    );
+    const archiveBucket = getArchiveBucketPath(archiveFolder, mode);
+    const { targetFolder, targetPath } = resolveArchiveTargetInfo(file, archiveBucket, (path) => !!this.app.vault.getAbstractFileByPath(path));
+    return { targetFolder, targetPath };
   }
 
   private async archiveFiles(files: TFile[]): Promise<void> {
@@ -244,7 +245,11 @@ export class MenuBuilder {
       return;
     }
 
-    await this.ensureFolderPath(archiveFolder);
+    const archiveTargetRoot = getArchiveBucketPath(
+      archiveFolder,
+      normalizeArchiveFolderMode(this.plugin.settings.archiveFolderMode ?? (this.plugin.settings.archiveUseDailyFolder ? 'daily' : 'none'))
+    );
+    await this.ensureFolderPath(archiveTargetRoot);
 
     let archivedCount = 0;
     await this.plugin.runQueuedMove(files, async () => {
@@ -262,8 +267,9 @@ export class MenuBuilder {
         // Add tag and log activity
         if (file.extension?.toLowerCase() === 'md') {
           try {
-            await this.app.fileManager.processFrontMatter(file, (frontmatter: any) => {
-              frontmatter.tags = mergeNormalizedTags(frontmatter.tags, archiveTag);
+           await this.plugin.frontmatterMutationService.process(file, (frontmatter: any) => {
+              const mergedTags = mergeNormalizedTags(frontmatter.tags, archiveTag);
+              setValueCaseInsensitive(frontmatter, 'tags', mergedTags);
 
               // Lightweight activity log: only store what's needed for recovery
               if (!Array.isArray(frontmatter.activity)) {
@@ -282,7 +288,8 @@ export class MenuBuilder {
 
         // Move to archive
         try {
-          const targetPath = this.getUniqueArchiveTargetPath(file, archiveFolder);
+          const { targetFolder, targetPath } = this.getArchiveTargetInfo(file, archiveFolder);
+          await this.ensureFolderPath(targetFolder);
           await this.app.fileManager.renameFile(file, targetPath);
           archivedCount += 1;
         } catch (err) {
@@ -315,7 +322,7 @@ export class MenuBuilder {
         // Remove tag and find original folder from activity
         if (file.extension?.toLowerCase() === 'md') {
           try {
-            await this.app.fileManager.processFrontMatter(file, (frontmatter: any) => {
+           await this.plugin.frontmatterMutationService.processUserInitiated(file, (frontmatter: any) => {
               // Find most recent archive entry with stored folder
               if (Array.isArray(frontmatter.activity)) {
                 for (let i = frontmatter.activity.length - 1; i >= 0; i--) {
@@ -328,11 +335,12 @@ export class MenuBuilder {
               }
 
               // Remove archive tag
-              const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags : [];
-              frontmatter.tags = tags.filter((tag: any) => {
+             const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags : [];
+              const filteredTags = tags.filter((tag: any) => {
                 const normalized = normalizeTagValue(String(tag));
                 return normalized !== archiveTag;
               });
+              setValueCaseInsensitive(frontmatter, 'tags', filteredTags);
 
               // No need to log unarchive - the archive entry already tells us the history
             });
@@ -547,7 +555,7 @@ export class MenuBuilder {
                   if (newVal !== null && newVal !== undefined) {
                     const finalVal = prop.type === 'number' ? Number(newVal) : newVal;
                     const files = markdownEntries.map(e => e.file);
-                    await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: finalVal });
+                    await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: finalVal }, { userInitiated: true });
 
                     const normalizedKey = String(prop?.key || '').trim().toLowerCase();
                     if (normalizedKey === 'title') {
@@ -602,8 +610,29 @@ export class MenuBuilder {
               }).open();
             });
         });
+
       }
 
+    }
+
+    if (file.extension?.toLowerCase() === 'md') {
+      menu.addItem((item) => {
+        item.setTitle('Start Time Tracking')
+          .setIcon('timer')
+          .setSection('tps-props')
+          .onClick(() => {
+            void this.plugin.timeTrackingService.startForNote(file);
+          });
+      });
+
+      menu.addItem((item) => {
+        item.setTitle('Stop Running Timer')
+          .setIcon('square')
+          .setSection('tps-props')
+          .onClick(() => {
+            void this.plugin.timeTrackingService.stopFirstRunningTimer(file);
+          });
+      });
     }
 
     // Archive / Unarchive
@@ -694,14 +723,14 @@ export class MenuBuilder {
         sub.setTitle('(none)')
           .setChecked(allWithoutKey)
           .onClick(async () => {
-            await this.plugin.bulkEditService.removeFrontmatterKey(files, prop.key);
+            await this.plugin.bulkEditService.removeFrontmatterKey(files, prop.key, { userInitiated: true });
           });
       });
       subMenu.addItem((sub: any) => {
         sub.setTitle('(empty)')
           .setChecked(allEmpty)
           .onClick(async () => {
-            await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: '' });
+            await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: '' }, { userInitiated: true });
           });
       });
       subMenu.addSeparator();
@@ -711,7 +740,7 @@ export class MenuBuilder {
           sub.setTitle(opt)
             .setChecked(current === opt)
             .onClick(async () => {
-              await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: opt });
+              await this.plugin.bulkEditService.updateFrontmatter(files, { [prop.key]: opt }, { userInitiated: true });
             });
         });
       });

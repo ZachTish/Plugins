@@ -1,17 +1,28 @@
 import { App } from "obsidian";
 
+interface GcmItemSemanticsApi {
+    parseInlineProperties?: (text: string) => Record<string, string>;
+    extractInlineProperty?: (text: string, ...keys: string[]) => string | null;
+    extractInlineNumberProperty?: (text: string, ...keys: string[]) => number | null;
+    cleanTaskText?: (text: string) => string;
+}
+
 /**
  * A parsed inline task item extracted from a vault note.
  */
 export interface ParsedTaskItem {
     /** Task text with date emojis stripped. */
     text: string;
+    /** Inline tags found on the task line, normalized without leading #. */
+    tags: string[];
     /** Vault-relative file path. */
     filePath: string;
     /** 0-based line number within the source file. */
     lineNumber: number;
     /** True if the checkbox status is `[x]` or `[X]`. */
     isCompleted: boolean;
+    /** Raw checkbox state character(s) from the task marker. */
+    checkboxState: string;
     /** Parsed value of the 📅 due-date annotation, or null. */
     dueDate: Date | null;
     /** Parsed value of the ⏳ scheduled-date annotation, or null. */
@@ -20,6 +31,8 @@ export interface ParsedTaskItem {
     hasScheduledTime: boolean;
     /** Parsed inline duration in minutes, or null. */
     durationMinutes: number | null;
+    /** Raw Dataview-style inline properties from the task line. */
+    inlineProperties: Record<string, string>;
     /** Inline external event identity for synced task-list events. */
     externalEventId: string | null;
     /** Inline calendar UID for synced task-list events. */
@@ -106,6 +119,12 @@ function extractInlineNumberProperty(text: string, ...keys: string[]): number | 
     return null;
 }
 
+function getGcmItemSemanticsApi(app?: App | null): GcmItemSemanticsApi | null {
+    const pluginApi = (app as any)?.plugins?.getPlugin?.("tps-global-context-menu")?.api
+        || (app as any)?.plugins?.plugins?.["TPS-Global-Context-Menu (Dev)"]?.api;
+    return pluginApi || null;
+}
+
 function extractInlineStringProperty(text: string, ...keys: string[]): string | null {
     const keySet = new Set(keys.map(k => k.toLowerCase()));
     INLINE_DATE_RE.lastIndex = 0;
@@ -117,6 +136,32 @@ function extractInlineStringProperty(text: string, ...keys: string[]): string | 
         if (value) return value;
     }
     return null;
+}
+
+function extractInlineTags(text: string): string[] {
+    const tags = new Set<string>();
+    const re = /(^|\s)#([^\s#]+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(text)) !== null) {
+        const normalized = String(match[2] ?? '').trim().replace(/^#+/, '').replace(/\s+/g, '-').toLowerCase();
+        if (normalized) {
+            tags.add(normalized);
+        }
+    }
+    return Array.from(tags);
+}
+
+function extractAllInlineProperties(text: string): Record<string, string> {
+    const properties: Record<string, string> = {};
+    INLINE_DATE_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = INLINE_DATE_RE.exec(text)) !== null) {
+        const key = String(match[1] ?? '').trim().toLowerCase();
+        const value = String(match[2] ?? '').trim();
+        if (!key || !value) continue;
+        properties[key] = value;
+    }
+    return properties;
 }
 
 function extractKanbanScheduledDate(text: string): Date | null {
@@ -174,7 +219,8 @@ function cleanText(raw: string): string {
         .replace(/➕\s*\d{4}-\d{2}-\d{2}/g, "")
         .replace(/❌\s*\d{4}-\d{2}-\d{2}/g, "")
         .replace(/🔁\s*\S+/g, "")
-        .replace(/\[(?:due|scheduled|start|completion|created|cancelled)::\s*[^\]]+\]/gi, "")
+        .replace(/\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, "")
+        .replace(/\s{2,}/g, " ")
         .trim();
 }
 
@@ -186,6 +232,7 @@ export function parseTasksFromContent(
     content: string,
     filePath: string,
     isKanbanBoard: boolean = false,
+    semanticsApi?: GcmItemSemanticsApi | null,
 ): ParsedTaskItem[] {
     const results: ParsedTaskItem[] = [];
     const lines = content.split("\n");
@@ -195,7 +242,7 @@ export function parseTasksFromContent(
         const bulletMatch = isKanbanBoard ? lines[i].match(BULLET_LINE_RE) : null;
         if (!taskMatch && !bulletMatch) continue;
 
-        const statusChar = taskMatch?.[1] ?? "";
+        const statusChar = String(taskMatch?.[1] ?? "").trim();
         const isCompleted = taskMatch ? /^[xX]$/.test(statusChar) : false;
         const rawText = taskMatch ? taskMatch[2] : (bulletMatch?.[1] ?? "");
         if (!rawText) continue;
@@ -226,27 +273,37 @@ export function parseTasksFromContent(
         const startDate =
             extractEmojiDate(rawText, START_RE)
             ?? extractInlineDateProperty(rawText, 'start', 'startdate', 'start-date');
-        const durationMinutes =
-            extractInlineNumberProperty(rawText, 'timeestimate', 'duration', 'durationminutes', 'time-estimate');
-        const externalEventId =
-            extractInlineStringProperty(rawText, 'externaleventid', 'external-event-id');
-        const calendarUid =
-            extractInlineStringProperty(rawText, 'tpscalendaruid', 'calendaruid', 'calendar-uid');
-        const calendarSourceUrl =
-            extractInlineStringProperty(rawText, 'tpscalendarsourceurl', 'calendarsourceurl', 'calendar-source-url');
+        const durationMinutes = semanticsApi?.extractInlineNumberProperty
+            ? semanticsApi.extractInlineNumberProperty(rawText, 'timeestimate', 'duration', 'durationminutes', 'time-estimate')
+            : extractInlineNumberProperty(rawText, 'timeestimate', 'duration', 'durationminutes', 'time-estimate');
+        const inlineProperties = semanticsApi?.parseInlineProperties
+            ? semanticsApi.parseInlineProperties(rawText)
+            : extractAllInlineProperties(rawText);
+        const externalEventId = semanticsApi?.extractInlineProperty
+            ? semanticsApi.extractInlineProperty(rawText, 'externaleventid', 'external-event-id')
+            : extractInlineStringProperty(rawText, 'externaleventid', 'external-event-id');
+        const calendarUid = semanticsApi?.extractInlineProperty
+            ? semanticsApi.extractInlineProperty(rawText, 'tpscalendaruid', 'calendaruid', 'calendar-uid')
+            : extractInlineStringProperty(rawText, 'tpscalendaruid', 'calendaruid', 'calendar-uid');
+        const calendarSourceUrl = semanticsApi?.extractInlineProperty
+            ? semanticsApi.extractInlineProperty(rawText, 'tpscalendarsourceurl', 'calendarsourceurl', 'calendar-source-url')
+            : extractInlineStringProperty(rawText, 'tpscalendarsourceurl', 'calendarsourceurl', 'calendar-source-url');
 
         // Only keep tasks that have at least one recognised date annotation.
         if (!dueDate && !scheduledDate && !startDate) continue;
 
         results.push({
-            text: cleanText(rawText),
+            text: semanticsApi?.cleanTaskText ? semanticsApi.cleanTaskText(rawText) : cleanText(rawText),
+            tags: extractInlineTags(rawText),
             filePath,
             lineNumber: i,
             isCompleted,
+            checkboxState: statusChar,
             dueDate,
             scheduledDate,
             hasScheduledTime,
             durationMinutes,
+            inlineProperties,
             externalEventId,
             calendarUid,
             calendarSourceUrl,
@@ -277,6 +334,7 @@ export async function parseAllTaskItems(
     app: App,
     folderFilter: string,
     allowedFilePaths?: Set<string> | null,
+    explicitIncludeFilePaths?: Set<string> | null,
 ): Promise<ParsedTaskItem[]> {
     const prefixes = folderFilter
         .split(",")
@@ -287,12 +345,14 @@ export async function parseAllTaskItems(
         .filter(Boolean);
 
     const results: ParsedTaskItem[] = [];
+    const semanticsApi = getGcmItemSemanticsApi(app);
 
     for (const file of app.vault.getMarkdownFiles()) {
         if (allowedFilePaths && !allowedFilePaths.has(file.path)) continue;
+        const isExplicitlyIncluded = explicitIncludeFilePaths?.has(file.path) ?? false;
 
         // Apply optional folder filter.
-        if (prefixes.length > 0) {
+        if (!isExplicitlyIncluded && prefixes.length > 0) {
             const lp = file.path.toLowerCase();
             if (!prefixes.some((p) => lp.startsWith(p))) continue;
         }
@@ -306,7 +366,7 @@ export async function parseAllTaskItems(
 
         try {
             const content = await app.vault.cachedRead(file);
-            results.push(...parseTasksFromContent(content, file.path, isKanbanBoard));
+            results.push(...parseTasksFromContent(content, file.path, isKanbanBoard, semanticsApi));
         } catch {
             // skip unreadable files
         }

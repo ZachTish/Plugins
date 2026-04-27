@@ -43,11 +43,13 @@ export async function migrateSettingsFromPlugins(
         const cs = (calendarPlugin as any)?.settings;
         if (cs) {
             if (typeof cs.syncIntervalMinutes === 'number') settings.syncIntervalMinutes = cs.syncIntervalMinutes;
-            if (cs.syncOnEventDelete) settings.syncOnEventDelete = cs.syncOnEventDelete;
             if (typeof cs.archiveFolder === 'string') settings.archiveFolder = cs.archiveFolder;
             if (typeof cs.externalCalendarFilter === 'string') settings.externalCalendarFilter = cs.externalCalendarFilter;
             if (typeof cs.startProperty === 'string') settings.startProperty = cs.startProperty;
             if (typeof cs.endProperty === 'string') settings.endProperty = cs.endProperty;
+            if (typeof cs.scheduledDateProperty === 'string') settings.scheduledDateProperty = cs.scheduledDateProperty;
+            if (typeof cs.scheduledStartProperty === 'string') settings.scheduledStartProperty = cs.scheduledStartProperty;
+            if (typeof cs.scheduledEndProperty === 'string') settings.scheduledEndProperty = cs.scheduledEndProperty;
             if (typeof cs.eventIdKey === 'string') settings.eventIdKey = cs.eventIdKey;
             if (typeof cs.uidKey === 'string') settings.uidKey = cs.uidKey;
             if (typeof cs.titleKey === 'string') settings.titleKey = cs.titleKey;

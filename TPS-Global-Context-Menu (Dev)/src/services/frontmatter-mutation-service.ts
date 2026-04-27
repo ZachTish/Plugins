@@ -3,20 +3,35 @@ import type TPSGlobalContextMenuPlugin from '../main';
 import * as logger from '../logger';
 import { casefold, deleteValueCaseInsensitive, findKeyCaseInsensitive, setValueCaseInsensitive } from '../core';
 import { getCompatibleMarkdownViewFromLeaf, pickBestMarkdownLeaf } from './leaf-resolver';
+import { mergeNormalizedTags } from '../utils/tag-utils';
 
 type FrontmatterRecord = Record<string, unknown>;
 type FrontmatterMutator = (frontmatter: FrontmatterRecord) => void | Promise<void>;
+export type WriteOptions = { userInitiated?: boolean };
 
 export class FrontmatterMutationService {
   private writeChains = new Map<string, Promise<void>>();
   private warnedPaths = new Set<string>();
+  private recentWrites = new Map<string, number>();
   private static readonly PARSE_RETRY_DELAYS_MS = [40, 120, 250];
+  private static readonly RECENT_WRITE_IGNORE_MS = 2000;
 
   constructor(private readonly plugin: TPSGlobalContextMenuPlugin) {}
 
-  async process(file: TFile, mutator: FrontmatterMutator): Promise<boolean> {
+  async process(file: TFile, mutator: FrontmatterMutator, options?: WriteOptions): Promise<boolean> {
     if (!(file instanceof TFile) || file.extension.toLowerCase() !== 'md') return false;
+    if (!options?.userInitiated && !this.plugin.isInitialSyncSettled()) {
+      return false;
+    }
 
+    return this.executeMutation(file, mutator);
+  }
+
+  async processUserInitiated(file: TFile, mutator: FrontmatterMutator): Promise<boolean> {
+    return this.process(file, mutator, { userInitiated: true });
+  }
+
+  private async executeMutation(file: TFile, mutator: FrontmatterMutator): Promise<boolean> {
     let changed = false;
     await this.runSerialized(file, async () => {
       const attempt = await this.readParsedWithRetries(file);
@@ -32,6 +47,7 @@ export class FrontmatterMutationService {
       const frontmatter = parsed.frontmatter;
       const before = stringifyYaml(this.sortFrontmatter(frontmatter)).trimEnd();
       await mutator(frontmatter);
+      this.enforceDailyNoteTag(file, frontmatter);
       this.removeEmptyValues(frontmatter);
       const sorted = this.sortFrontmatter(frontmatter);
       const after = stringifyYaml(sorted).trimEnd();
@@ -50,11 +66,47 @@ export class FrontmatterMutationService {
           return;
         }
         await this.writeContent(file, nextContent);
+        this.markRecentWrite(file.path);
+        this.refreshOpenFileUi(file);
         changed = true;
       }
     });
 
     return changed;
+  }
+
+  async writeContentSafely(file: TFile, content: string, options?: WriteOptions): Promise<boolean> {
+    if (!(file instanceof TFile)) return false;
+    if (!options?.userInitiated && !this.plugin.isInitialSyncSettled()) {
+      return false;
+    }
+    await this.runSerialized(file, async () => {
+      await this.plugin.app.vault.modify(file, content);
+      this.markRecentWrite(file.path);
+      this.refreshOpenFileUi(file);
+    });
+    return true;
+  }
+
+  wasRecentlyWritten(path: string): boolean {
+    const key = String(path || '').trim();
+    if (!key) return false;
+
+    const until = this.recentWrites.get(key);
+    if (!until) return false;
+
+    if (Date.now() > until) {
+      this.recentWrites.delete(key);
+      return false;
+    }
+
+    return true;
+  }
+
+  isWriteInProgress(path: string): boolean {
+    const key = String(path || '').trim();
+    if (!key) return false;
+    return this.writeChains.has(key);
   }
 
   async updateValues(files: TFile[], updates: Record<string, unknown>): Promise<TFile[]> {
@@ -171,6 +223,26 @@ export class FrontmatterMutationService {
     }
   }
 
+  private markRecentWrite(path: string): void {
+    const key = String(path || '').trim();
+    if (!key) return;
+    this.recentWrites.set(key, Date.now() + FrontmatterMutationService.RECENT_WRITE_IGNORE_MS);
+  }
+
+  private refreshOpenFileUi(file: TFile): void {
+    const liveFile = this.plugin.app.vault.getAbstractFileByPath(file.path);
+    if (!(liveFile instanceof TFile)) return;
+
+    this.plugin.menuController?.panelBuilder?.clearFileTitleCache(liveFile.path);
+    this.plugin.persistentMenuManager?.refreshMenusForFile(liveFile, true, { rebuildInlineSubitems: true });
+
+    window.setTimeout(() => {
+      const latest = this.plugin.app.vault.getAbstractFileByPath(liveFile.path);
+      if (!(latest instanceof TFile)) return;
+      this.plugin.persistentMenuManager?.refreshMenusForFile(latest, true, { rebuildInlineSubitems: true });
+    }, 40);
+  }
+
   private async readNormalized(file: TFile): Promise<{ bom: string; content: string; fullContent: string } | null> {
     try {
       const openView = this.getOpenMarkdownViewForFile(file);
@@ -280,13 +352,17 @@ export class FrontmatterMutationService {
     const working = trimmedLeading.startsWith('---\n') ? trimmedLeading : content;
 
     if (!working.startsWith('---\n')) {
+      const recovered = this.tryRecoverMissingOpeningDelimiter(working);
+      if (recovered) {
+        return recovered;
+      }
       return { ok: true, frontmatter: {}, body: working };
     }
 
     const blocks: string[] = [];
     let cursor = 0;
     while (working.startsWith('---\n', cursor)) {
-      const closeIndex = working.indexOf('\n---\n', cursor + 4);
+      const closeIndex = working.indexOf('\n---\n', cursor + 3);
       if (closeIndex === -1) {
         return { ok: false, reason: 'unterminated-frontmatter' };
       }
@@ -310,6 +386,29 @@ export class FrontmatterMutationService {
       ok: true,
       frontmatter: this.tryMergeFrontmatterBlocks(blocks),
       body: working.slice(cursor),
+    };
+  }
+
+  private tryRecoverMissingOpeningDelimiter(content: string): { ok: true; frontmatter: FrontmatterRecord; body: string } | null {
+    const closeIndex = content.indexOf('\n---\n');
+    if (closeIndex <= 0) return null;
+
+    const candidateBlock = content.slice(0, closeIndex).trim();
+    if (!candidateBlock) return null;
+
+    const lines = candidateBlock
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length === 0) return null;
+
+    const yamlLike = lines.every((line) => /^[A-Za-z0-9_"'.-]+\s*:/.test(line));
+    if (!yamlLike) return null;
+
+    return {
+      ok: true,
+      frontmatter: this.tryMergeFrontmatterBlocks([candidateBlock]),
+      body: content.slice(closeIndex + '\n---\n'.length),
     };
   }
 
@@ -358,7 +457,7 @@ export class FrontmatterMutationService {
 
   private removeEmptyValues(frontmatter: FrontmatterRecord): void {
     for (const [key, value] of Object.entries(frontmatter)) {
-      if (value === undefined || value === null) {
+      if (value === undefined) {
         delete frontmatter[key];
         continue;
       }
@@ -366,6 +465,12 @@ export class FrontmatterMutationService {
         delete frontmatter[key];
       }
     }
+  }
+
+  private enforceDailyNoteTag(file: TFile, frontmatter: FrontmatterRecord): void {
+    const isDailyNote = !!this.plugin.fileNamingService?.isDateOnlyBasename?.(file.basename);
+    if (!isDailyNote) return;
+    setValueCaseInsensitive(frontmatter, 'tags', mergeNormalizedTags(frontmatter.tags, 'dailynote'));
   }
 
   private normalizeList(value: unknown): string[] {

@@ -3,246 +3,226 @@ import { Logger } from "./logger";
 import { MetadataManager } from "./metadata-manager";
 import { NotebookNavigatorCompanionSettings } from "../types";
 import { FrontmatterWriteExclusionService } from "./frontmatter-write-exclusion-service";
-import { parseDateFromFilename } from '../../../tps/src/utils/daily-file-date';
+import { parseDateFromFilename } from '../../../TPS-Calendar-Base (Dev)/src/utils/daily-file-date';
+import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
 
 /**
  * Handles bidirectional sync between filenames and the frontmatter `title` field:
- *  - Filename → title: extracts a "clean" title from the filename (strips date suffix).
- *  - Title → filename: renames the file when the frontmatter title changes.
- *
- * Extracted from main.ts to keep the main class under 500 lines.
+ *  - Filename -> title: extracts a "clean" title from the filename (strips date suffix).
+ *  - Title -> filename: renames the file when the frontmatter title changes.
  */
 export class TitleSyncService {
-    constructor(
-        private app: App,
-        private metadataManager: MetadataManager,
-        private logger: Logger,
-        private getSettings: () => NotebookNavigatorCompanionSettings,
-        private exclusionService: FrontmatterWriteExclusionService,
-    ) {}
+  constructor(
+    private app: App,
+    private metadataManager: MetadataManager,
+    private logger: Logger,
+    private getSettings: () => NotebookNavigatorCompanionSettings,
+    private exclusionService: FrontmatterWriteExclusionService,
+  ) {}
 
-    /** Iterate every markdown file and queue a title update where the title is stale. */
-    async syncAllTitlesFromFilenames(): Promise<void> {
-        const files = this.app.vault.getMarkdownFiles();
-        let count = 0;
-        for (const file of files) {
-            if (this.exclusionService.shouldIgnore(file)) continue;
-            const { cleanTitle, dateSuffix } = this.parseFilenameComponents(file.basename);
-            let resolvedTitle = cleanTitle;
-            if (!resolvedTitle && dateSuffix) {
-                const m = (window as any).moment;
-                const dateObj = m(dateSuffix, ["YYYY-MM-DD", "YYYYMMDD"], true);
-                if (dateObj.isValid()) resolvedTitle = dateObj.format("ddd, MMM D YYYY");
-            }
-            if (!resolvedTitle) continue;
-
-            // For date-only files, also check whether `scheduled` needs repair.
-            const isDateOnlyFile = !cleanTitle && !!dateSuffix;
-            const cache = this.app.metadataCache.getFileCache(file);
-            const currentTitle = String(cache?.frontmatter?.title ?? "").trim();
-            const currentScheduled = String(cache?.frontmatter?.scheduled ?? "").trim();
-            const needsScheduledFix =
-                isDateOnlyFile &&
-                !!dateSuffix &&
-                (!currentScheduled || this.isTemplaterVariable(currentScheduled));
-
-            if (currentTitle === resolvedTitle && !needsScheduledFix) continue;
-
-            await this.metadataManager.queueFrontmatterUpdate(file, "filename-sync", (fm) => {
-                let changed = false;
-                if (String(fm.title ?? "").trim() !== resolvedTitle) {
-                    fm.title = resolvedTitle;
-                    changed = true;
-                }
-                if (needsScheduledFix) {
-                    const sched = String(fm.scheduled ?? "").trim();
-                    if (!sched || this.isTemplaterVariable(sched)) {
-                        fm.scheduled = dateSuffix;
-                        changed = true;
-                    }
-                }
-                return changed;
-            });
-            count++;
-        }
-        this.logger.info(`syncAllTitlesFromFilenames: queued updates for ${count} files`);
-    }
-
-    /** Return true if a string appears to be an unresolved Templater expression. */
-    private isTemplaterVariable(value: string): boolean {
-        return /<%.*%>/.test(value);
-    }
-
-    /** Extract the "clean" title from a file's basename and update frontmatter.title. */
-    async handleFilenameUpdate(file: TFile): Promise<void> {
-        if (!this.getSettings().syncTitleFromFilename) return;
-        if (this.exclusionService.shouldIgnore(file)) return;
-
-        const { cleanTitle, dateSuffix } = this.parseFilenameComponents(file.basename);
-
-        let resolvedTitle = cleanTitle;
-        if (!resolvedTitle && dateSuffix) {
-            const m = (window as any).moment;
-            const dateObj = m(dateSuffix, ["YYYY-MM-DD", "YYYYMMDD"], true);
-            if (dateObj.isValid()) {
-                resolvedTitle = dateObj.format("ddd, MMM D YYYY");
-            }
-        }
-
-        // For date-only filenames (no text prefix), also fix `scheduled` if it
-        // holds an unresolved Templater variable or is blank.
-        const isDateOnlyFile = !cleanTitle && !!dateSuffix;
-
-        await this.metadataManager.queueFrontmatterUpdate(file, "filename-sync", (frontmatter) => {
-            let changed = false;
-
-            const currentTitle = String(frontmatter.title || "").trim();
-            if (currentTitle !== resolvedTitle) {
-                frontmatter.title = resolvedTitle;
-                changed = true;
-            }
-
-            if (isDateOnlyFile && dateSuffix) {
-                const currentScheduled = String(frontmatter.scheduled ?? "").trim();
-                const needsScheduledFix =
-                    !currentScheduled ||
-                    this.isTemplaterVariable(currentScheduled);
-                if (needsScheduledFix) {
-                    frontmatter.scheduled = dateSuffix; // YYYY-MM-DD
-                    changed = true;
-                }
-            }
-
-            if (!changed) return false;
-            return true;
-        });
-    }
-
-    /** Rename the file to match its frontmatter title (preserving any date suffix). */
-    async handleTitleSync(file: TFile): Promise<void> {
-        if (!this.getSettings().syncFilenameFromTitle) return;
-        if (this.exclusionService.shouldIgnore(file)) return;
-
-        const cache = this.app.metadataCache.getFileCache(file);
-        if (!cache || !cache.frontmatter) return;
-
-        const desiredTitle = String(cache.frontmatter.title || "").trim();
-        if (!desiredTitle) return;
-
-        const { cleanTitle: currentClean, dateSuffix } = this.parseFilenameComponents(file.basename);
-
-        const dailyNoteFormat = this.getDailyNoteDateFormat();
-        const desiredTitleIsDailyDate = this.isDailyDateLike(desiredTitle, dailyNoteFormat);
-        const isDateOnlyDailyNote = !currentClean && !!dateSuffix;
-
-        // Daily notes should keep their configured filename format instead of
-        // being rewritten as "<title> YYYY-MM-DD".
-        if (isDateOnlyDailyNote) return;
-
-        const needsDailyNoteRepair =
-            !!dateSuffix &&
-            desiredTitleIsDailyDate &&
-            file.basename !== desiredTitle;
-
-        if (desiredTitle === currentClean && !needsDailyNoteRepair) return;
-
-        let newBasename = desiredTitle;
-        if (dateSuffix && !desiredTitleIsDailyDate) {
-            newBasename = `${newBasename} ${this.formatDateSuffixForFilename(dateSuffix, dailyNoteFormat)}`;
-        }
-
-        // @ts-ignore: Internal API
-        const sanitized = (this.app.vault.adapter as any).fs?.sanitize?.(newBasename) || newBasename.replace(/[\\/:]/g, "");
-
-        const newPath = `${file.parent.path}/${sanitized}.${file.extension}`;
-
-        if (newPath === file.path) return;
-        if (await this.app.vault.adapter.exists(newPath)) {
-            this.logger.warn("Skipping title sync rename: Target file already exists", { from: file.path, to: newPath });
-            return;
-        }
-
-        try {
-            await this.app.fileManager.renameFile(file, newPath);
-            this.logger.info("Synced filename to match title", { old: file.path, new: newPath });
-        } catch (error) {
-            this.logger.error("Failed to rename file for title sync", error, { from: file.path, to: newPath });
-        }
-    }
-
-    private getDailyNoteDateFormat(): string | undefined {
-        const configured = (this.getSettings() as any)?.dailyNoteDateFormat;
-        if (typeof configured === 'string' && configured.trim()) return configured.trim();
-
-        const tpsFormat = (this.app as any)?.plugins?.plugins?.tps?.settings?.dailyNoteDateFormat;
-        if (typeof tpsFormat === 'string' && tpsFormat.trim()) return tpsFormat.trim();
-
-        const dailyNotesPlugin = (this.app as any)?.internalPlugins?.getPluginById?.('daily-notes')
-            || (this.app as any)?.internalPlugins?.plugins?.['daily-notes'];
-        const dailyNotesFormat = dailyNotesPlugin?.instance?.options?.format
-            || dailyNotesPlugin?.options?.format;
-        if (typeof dailyNotesFormat === 'string' && dailyNotesFormat.trim()) return dailyNotesFormat.trim();
-
-        return 'dddd, MMMM Do YYYY';
-    }
-
-    private isDailyDateLike(value: string, userFormat?: string): boolean {
-        const parsed = parseDateFromFilename(value, userFormat);
-        if (parsed && parsed.isValid && parsed.isValid()) return true;
-
+  async syncAllTitlesFromFilenames(): Promise<void> {
+    const files = this.app.vault.getMarkdownFiles();
+    let count = 0;
+    for (const file of files) {
+      if (this.exclusionService.shouldIgnore(file)) continue;
+      const { cleanTitle, dateSuffix } = this.parseFilenameComponents(file.basename);
+      let resolvedTitle = cleanTitle;
+      if (!resolvedTitle && dateSuffix) {
         const m = (window as any).moment;
-        if (!m) return false;
+        const dateObj = m(dateSuffix, ["YYYY-MM-DD", "YYYYMMDD"], true);
+        if (dateObj.isValid()) resolvedTitle = dateObj.format(this.getDailyNoteDateFormat() || "YYYY-MM-DD");
+      }
+      if (!resolvedTitle) continue;
 
-        const fallbackFormats = [
-            'dddd, MMMM Do YYYY',
-            'dddd, MMMM D YYYY',
-            'ddd, MMM D YYYY',
-            'YYYY-MM-DD',
-            'YYYYMMDD',
-        ];
+      const isDateOnlyFile = !cleanTitle && !!dateSuffix;
+      const cache = this.app.metadataCache.getFileCache(file);
+      const currentTitle = String(cache?.frontmatter?.title ?? "").trim();
+      const currentScheduled = String(cache?.frontmatter?.scheduled ?? "").trim();
+      const needsScheduledFix =
+        isDateOnlyFile &&
+        !!dateSuffix &&
+        (!currentScheduled || this.isTemplaterVariable(currentScheduled));
 
-        const fallback = m(value, fallbackFormats, true);
-        return !!(fallback && fallback.isValid && fallback.isValid());
-    }
+      if (currentTitle === resolvedTitle && !needsScheduledFix) continue;
 
-    private formatDateSuffixForFilename(dateSuffix: string, userFormat?: string): string {
-        const m = (window as any).moment;
-        if (!m) return dateSuffix;
-
-        const parsed = m(dateSuffix, ['YYYY-MM-DD', 'YYYYMMDD'], true);
-        if (!parsed || !parsed.isValid || !parsed.isValid()) return dateSuffix;
-
-        const desiredFormat = String(userFormat || '').trim();
-        if (!desiredFormat) return dateSuffix;
-
-        return parsed.format(desiredFormat);
-    }
-
-    private parseFilenameComponents(basename: string): { cleanTitle: string; dateSuffix: string | null } {
-        const userFormat = this.getDailyNoteDateFormat();
-
-        try {
-            // Whole-basename date (e.g., daily note)
-            const whole = parseDateFromFilename(basename, userFormat);
-            if (whole && whole.isValid && whole.isValid()) {
-                return { cleanTitle: '', dateSuffix: (whole as any).format('YYYY-MM-DD') };
-            }
-
-            // Trailing token (e.g., "Meeting 2026-03-18")
-            const datePattern = /\s*(\d{4}[-_/]\d{2}[-_/]\d{2}|\d{8})(?:\s+\d+)?$/;
-            const match = basename.match(datePattern);
-            if (match) {
-                const token = match[1];
-                const parsed = parseDateFromFilename(token, userFormat);
-                if (parsed && parsed.isValid && parsed.isValid()) {
-                    const cleanTitle = basename.substring(0, match.index).trim();
-                    return { cleanTitle, dateSuffix: (parsed as any).format('YYYY-MM-DD') };
-                }
-            }
-        } catch (e) {
-            // ignore and fall back
+      await this.metadataManager.queueFrontmatterUpdate(file, "filename-sync", (fm) => {
+        let changed = false;
+        if (String(fm.title ?? "").trim() !== resolvedTitle) {
+          fm.title = resolvedTitle;
+          changed = true;
         }
-
-        return { cleanTitle: basename, dateSuffix: null };
+        if (needsScheduledFix) {
+          const sched = String(fm.scheduled ?? "").trim();
+          if (!sched || this.isTemplaterVariable(sched)) {
+            fm.scheduled = dateSuffix;
+            changed = true;
+          }
+        }
+        return changed;
+      });
+      count++;
     }
+    this.logger.info(`syncAllTitlesFromFilenames: queued updates for ${count} files`);
+  }
+
+  private isTemplaterVariable(value: string): boolean {
+    return /<%.*%>/.test(value);
+  }
+
+  async handleFilenameUpdate(file: TFile): Promise<void> {
+    if (!this.getSettings().syncTitleFromFilename) return;
+    if (this.exclusionService.shouldIgnore(file)) return;
+
+    const { cleanTitle, dateSuffix } = this.parseFilenameComponents(file.basename);
+
+    let resolvedTitle = cleanTitle;
+    if (!resolvedTitle && dateSuffix) {
+      const m = (window as any).moment;
+      const dateObj = m(dateSuffix, ["YYYY-MM-DD", "YYYYMMDD"], true);
+      if (dateObj.isValid()) {
+        resolvedTitle = dateObj.format(this.getDailyNoteDateFormat() || "YYYY-MM-DD");
+      }
+    }
+
+    const isDateOnlyFile = !cleanTitle && !!dateSuffix;
+
+    await this.metadataManager.queueFrontmatterUpdate(file, "filename-sync", (frontmatter) => {
+      let changed = false;
+
+      const currentTitle = String(frontmatter.title || "").trim();
+      if (currentTitle !== resolvedTitle) {
+        frontmatter.title = resolvedTitle;
+        changed = true;
+      }
+
+      if (isDateOnlyFile && dateSuffix) {
+        const currentScheduled = String(frontmatter.scheduled ?? "").trim();
+        const needsScheduledFix =
+          !currentScheduled ||
+          this.isTemplaterVariable(currentScheduled);
+        if (needsScheduledFix) {
+          frontmatter.scheduled = dateSuffix;
+          changed = true;
+        }
+      }
+
+      if (!changed) return false;
+      return true;
+    });
+  }
+
+  async handleTitleSync(file: TFile): Promise<void> {
+    if (!this.getSettings().syncFilenameFromTitle) return;
+    if (this.exclusionService.shouldIgnore(file)) return;
+
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (!cache || !cache.frontmatter) return;
+
+    const desiredTitle = String(cache.frontmatter.title || "").trim();
+    if (!desiredTitle) return;
+
+    const { cleanTitle: currentClean, dateSuffix } = this.parseFilenameComponents(file.basename);
+
+    const dailyNoteFormat = this.getDailyNoteDateFormat();
+    const desiredTitleIsDailyDate = this.isDailyDateLike(desiredTitle, dailyNoteFormat);
+    const isDateOnlyDailyNote = !currentClean && !!dateSuffix;
+
+    if (isDateOnlyDailyNote) return;
+
+    const needsDailyNoteRepair =
+      !!dateSuffix &&
+      desiredTitleIsDailyDate &&
+      file.basename !== desiredTitle;
+
+    if (desiredTitle === currentClean && !needsDailyNoteRepair) return;
+
+    let newBasename = desiredTitle;
+    if (dateSuffix && !desiredTitleIsDailyDate) {
+      newBasename = `${newBasename} ${this.formatDateSuffixForFilename(dateSuffix, dailyNoteFormat)}`;
+    }
+
+    const sanitized = (this.app.vault.adapter as any).fs?.sanitize?.(newBasename) || newBasename.replace(/[\\/:]/g, "");
+
+    const newPath = `${file.parent.path}/${sanitized}.${file.extension}`;
+
+    if (newPath === file.path) return;
+    if (await this.app.vault.adapter.exists(newPath)) {
+      this.logger.warn("Skipping title sync rename: Target file already exists", { from: file.path, to: newPath });
+      return;
+    }
+
+    try {
+      await this.app.fileManager.renameFile(file, newPath);
+      this.logger.info("Synced filename to match title", { old: file.path, new: newPath });
+    } catch (error) {
+      this.logger.error("Failed to rename file for title sync", error, { from: file.path, to: newPath });
+    }
+  }
+
+  private getDailyNoteDateFormat(): string | undefined {
+    return getDailyNoteResolver(this.app, {
+      formatOverride: (this.getSettings() as any)?.dailyNoteDateFormat,
+    }).displayFormat;
+  }
+
+  private isDailyDateLike(value: string, userFormat?: string): boolean {
+    const parsed = parseDateFromFilename(value, userFormat);
+    if (parsed && parsed.isValid && parsed.isValid()) return true;
+
+    const m = (window as any).moment;
+    if (!m) return false;
+
+    const fallbackFormats = [
+      "dddd, MMMM Do YYYY",
+      "dddd, MMMM D YYYY",
+      "ddd, MMM D YYYY",
+      "YYYY-MM-DD",
+      "YYYYMMDD",
+    ];
+
+    const fallback = m(value, fallbackFormats, true);
+    return !!(fallback && fallback.isValid && fallback.isValid());
+  }
+
+  private formatDateSuffixForFilename(dateSuffix: string, userFormat?: string): string {
+    const m = (window as any).moment;
+    if (!m) return dateSuffix;
+
+    const parsed = m(dateSuffix, ["YYYY-MM-DD", "YYYYMMDD"], true);
+    if (!parsed || !parsed.isValid || !parsed.isValid()) return dateSuffix;
+
+    const desiredFormat = String(userFormat || "").trim();
+    if (!desiredFormat) return dateSuffix;
+
+    return parsed.format(desiredFormat);
+  }
+
+  private parseFilenameComponents(basename: string): { cleanTitle: string; dateSuffix: string | null } {
+    const userFormat = this.getDailyNoteDateFormat();
+
+    try {
+      const whole = parseDateFromFilename(basename, userFormat);
+      if (whole && whole.isValid && whole.isValid()) {
+        return { cleanTitle: '', dateSuffix: (whole as any).format('YYYY-MM-DD') };
+      }
+
+      const datePattern = /\s*(\d{4}[-_/]\d{2}[-_/]\d{2}|\d{8})(?:\s+\d+)?$/;
+      const match = basename.match(datePattern);
+      if (match) {
+        const parsed = parseDateFromFilename(match[1], userFormat);
+        if (parsed && parsed.isValid && parsed.isValid()) {
+          return { cleanTitle: basename.substring(0, match.index).trim(), dateSuffix: parsed.format('YYYY-MM-DD') };
+        }
+      }
+    } catch {
+      // Fall through to naive behavior.
+    }
+
+    const match = basename.match(/\s*(\d{4}[-/]\d{2}[-/]\d{2}|\d{8})(?:\s+\d+)?$/);
+    if (match) {
+      return { cleanTitle: basename.substring(0, match.index).trim(), dateSuffix: match[1] };
+    }
+
+    return { cleanTitle: basename, dateSuffix: null };
+  }
 }

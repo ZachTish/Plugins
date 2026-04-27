@@ -29,7 +29,7 @@ export function addSafeClickListener(element: HTMLElement, handler: (e: MouseEve
  */
 export class MenuController {
   plugin: TPSGlobalContextMenuPlugin;
-  private propertyRowService: PropertyRowService;
+  public propertyRowService: PropertyRowService;
   private badgeRenderer: BadgeRenderer;
   public panelBuilder: PanelBuilder;
   private menuBuilder: MenuBuilder;
@@ -216,10 +216,16 @@ export class MenuController {
 
     await this.plugin.runQueuedMove(files, async () => {
       for (const entry of entries) {
-        const newPath = `${folderPath === '/' ? '' : folderPath}/${entry.file.name}`;
+        const targetFolder = folderPath === '/' ? '' : folderPath;
+        const newPath = `${targetFolder ? `${targetFolder}/` : ''}${entry.file.name}`;
         if (newPath !== entry.file.path) {
           try {
             await this.app.fileManager.renameFile(entry.file, newPath);
+            const movedFile = this.app.vault.getAbstractFileByPath(newPath);
+            if (movedFile instanceof TFile) {
+              await this.plugin.bulkEditService.updateFrontmatter([movedFile], { folderPath: targetFolder || '/' });
+              this.plugin.persistentMenuManager?.refreshMenusForFile(movedFile, true);
+            }
           } catch (e: any) {
             logger.error(`Failed to move file to ${newPath}`, e);
             new Notice(`Failed to move file: ${e?.message ?? 'Unknown error'}`);
@@ -247,7 +253,7 @@ export class MenuController {
       item.setTitle('(none)')
         .setChecked(allWithoutKey)
         .onClick(async () => {
-          await this.plugin.bulkEditService.removeFrontmatterKey(files, 'status');
+          await this.plugin.bulkEditService.removeFrontmatterKey(files, 'status', { userInitiated: true });
           entries.forEach((entry: any) => {
             if (!entry.frontmatter || typeof entry.frontmatter !== 'object') return;
             delete entry.frontmatter.status;
@@ -267,7 +273,7 @@ export class MenuController {
       item.setTitle('(empty)')
         .setChecked(allEmpty)
         .onClick(async () => {
-          await this.plugin.bulkEditService.updateFrontmatter(files, { status: '' });
+          await this.plugin.bulkEditService.updateFrontmatter(files, { status: '' }, { userInitiated: true });
           entries.forEach((entry: any) => {
             if (!entry.frontmatter || typeof entry.frontmatter !== 'object') entry.frontmatter = {};
             entry.frontmatter.status = '';
@@ -295,7 +301,7 @@ export class MenuController {
               entry.frontmatter.status = status;
             });
             if (onUpdate) onUpdate(status);
-            await this.plugin.bulkEditService.setStatus(files, status);
+            await this.plugin.bulkEditService.setStatus(files, status, { userInitiated: true });
             // Apply companion rules to update icon
             for (const entry of entries) {
               await this.applyCompanionRulesToFile(entry.file);
@@ -328,7 +334,7 @@ export class MenuController {
       item.setTitle('(none)')
         .setChecked(allWithoutKey)
         .onClick(async () => {
-          await this.plugin.bulkEditService.removeFrontmatterKey(files, 'priority');
+          await this.plugin.bulkEditService.removeFrontmatterKey(files, 'priority', { userInitiated: true });
           entries.forEach((entry: any) => {
             if (!entry.frontmatter || typeof entry.frontmatter !== 'object') return;
             delete entry.frontmatter.priority;
@@ -345,7 +351,7 @@ export class MenuController {
       item.setTitle('(empty)')
         .setChecked(allEmpty)
         .onClick(async () => {
-          await this.plugin.bulkEditService.updateFrontmatter(files, { priority: '' });
+          await this.plugin.bulkEditService.updateFrontmatter(files, { priority: '' }, { userInitiated: true });
           entries.forEach((entry: any) => {
             if (!entry.frontmatter || typeof entry.frontmatter !== 'object') entry.frontmatter = {};
             entry.frontmatter.priority = '';
@@ -370,7 +376,7 @@ export class MenuController {
               entry.frontmatter.priority = prio;
             });
             if (onUpdate) onUpdate(prio);
-            await this.plugin.bulkEditService.setPriority(files, prio);
+            await this.plugin.bulkEditService.setPriority(files, prio, { userInitiated: true });
             // Refresh menus immediately
             entries.forEach((e: any) => {
               if (e.file instanceof TFile) {
@@ -514,8 +520,16 @@ export class MenuController {
     let startDate = new Date();
 
     if (dateStr) {
-      const parsed = window.moment(dateStr, ["YYYY-MM-DD HH:mm", "YYYY-MM-DD"]).toDate();
-      if (!isNaN(parsed.getTime())) {
+      const parsedMoment = window.moment(dateStr, [
+        "YYYY-MM-DD HH:mm:ss",
+        "YYYY-MM-DD HH:mm",
+        "YYYY-MM-DD",
+        "YYYY-MM-DDTHH:mm:ss",
+        "YYYY-MM-DDTHH:mm",
+        window.moment.ISO_8601,
+      ], true);
+      const parsed = parsedMoment.toDate();
+      if (parsedMoment?.isValid?.() && !isNaN(parsed.getTime())) {
         startDate = parsed;
       }
     }
@@ -535,7 +549,7 @@ export class MenuController {
 
     new RecurrenceModal(this.app, this.getRecurrenceValue(fm), startDate, currentEndsOn, async (rule, endsOn) => {
       const files = entries.map(e => e.file);
-      await this.plugin.bulkEditService.setRecurrence(files, rule, endsOn);
+      await this.plugin.bulkEditService.setRecurrence(files, this.normalizeRecurrenceRule(rule, startDate), endsOn);
       // Refresh menus immediately to show updated recurrence
       files.forEach(file => {
         this.plugin.persistentMenuManager?.refreshMenusForFile(file, true);
@@ -543,13 +557,29 @@ export class MenuController {
     }).open();
   }
 
-  openScheduledModal(entries: any[], key = 'scheduled') {
+  private normalizeRecurrenceRule(rule: string, startDate: Date): string {
+    const trimmed = String(rule || '').trim();
+    if (!trimmed) return trimmed;
+    if (!/^RRULE:/i.test(trimmed)) return trimmed;
+    if (!/FREQ=WEEKLY/i.test(trimmed) || /BYDAY=/i.test(trimmed)) return trimmed;
+
+    const weekday = window.moment(startDate).format('dd').toUpperCase();
+    if (!weekday) return trimmed;
+    return `${trimmed};BYDAY=${weekday}`;
+  }
+
+  openScheduledModal(entries: any[], key = 'scheduled', inlineValueOverride?: string | null, onInlineUpdate?: (newVal: string) => void, inlineEstimateOverride?: number, inlineAllDayOverride?: boolean) {
     const fm = entries[0].frontmatter;
+    const scheduledValue = this.getFrontmatterValueCI(fm, key) || inlineValueOverride || '';
+    const fmEstimate = this.getFrontmatterValueCI(fm, 'timeEstimate');
+    const estimateValue = inlineEstimateOverride ?? (typeof fmEstimate === 'number' ? fmEstimate : (fmEstimate ? parseFloat(fmEstimate) || 0 : 0));
+    const fmAllDay = this.getFrontmatterValueCI(fm, 'allDay');
+    const allDayValue = inlineAllDayOverride ?? (fmAllDay === true || fmAllDay === 'true' || false);
     new ScheduledModal(
       this.app,
-      fm[key] || '',
-      fm.timeEstimate || 0,
-      fm.allDay || false,
+      scheduledValue,
+      estimateValue,
+      allDayValue,
       async (result) => {
         const files = entries.map(e => e.file);
         await this.plugin.bulkEditService.updateScheduledDetails(
@@ -559,7 +589,7 @@ export class MenuController {
           result.allDay,
           key
         );
-        // Refresh menus immediately to show updated scheduled date
+        if (onInlineUpdate) onInlineUpdate(result.date);
         files.forEach(file => {
           this.plugin.persistentMenuManager?.refreshMenusForFile(file, true);
         });
@@ -614,75 +644,49 @@ export class MenuController {
         Promise.resolve(notebookNavigatorNavigateToTag.call(notebookNavigator.api.navigation, cleanTag))
           .catch((error: unknown) => {
             logger.error('[TPS GCM] Notebook Navigator tag navigation failed:', error);
-            new Notice('Tag Canvas and Notebook Navigator tag navigation are unavailable.');
+            new Notice('Tag pages and Notebook Navigator tag navigation are unavailable.');
           });
         return;
       }
-      new Notice('Tag Canvas and Notebook Navigator tag navigation are unavailable.');
+      new Notice('Tag pages and Notebook Navigator tag navigation are unavailable.');
     };
 
     try {
-      const anyWindow = window as any;
-      const globalOpenForTag = anyWindow?._tps_tagCanvas?.openForTag;
-      if (typeof globalOpenForTag === 'function') {
-        Promise.resolve(globalOpenForTag.call(anyWindow._tps_tagCanvas, cleanTag))
-          .catch((error: unknown) => {
-            logger.warn('[TPS GCM] Tag Canvas API (window).openForTag failed; falling back:', error);
-            fallbackToNotebookNavigator();
-          });
-        return;
-      }
-
       const pluginManager = (this.app as any)?.plugins;
-      const tagCanvas =
-        pluginManager?.getPlugin?.('tps-tag-canvas') ??
-        pluginManager?.plugins?.['tps-tag-canvas'];
-      const tagCanvasOpenForTag = tagCanvas?.api?.openForTag;
-      if (typeof tagCanvasOpenForTag === 'function') {
-        Promise.resolve(tagCanvasOpenForTag.call(tagCanvas.api, cleanTag))
+      const companion =
+        pluginManager?.getPlugin?.('tps-notebook-navigator-companion') ??
+        pluginManager?.plugins?.['tps-notebook-navigator-companion'];
+      const companionTagPages = companion?.api?.tagPages;
+      const companionOpenForTag = companionTagPages?.openForTag;
+      const companionHasTagPage = companionTagPages?.hasTagPage;
+      const hasTagPage = typeof companionHasTagPage === 'function'
+        ? Boolean(companionHasTagPage.call(companionTagPages, cleanTag))
+        : false;
+      if (hasTagPage && typeof companionOpenForTag === 'function') {
+        Promise.resolve(companionOpenForTag.call(companionTagPages, cleanTag))
           .catch((error: unknown) => {
-            logger.warn('[TPS GCM] Tag Canvas API (plugin).openForTag failed; falling back:', error);
+            logger.warn('[TPS GCM] Tag pages API (plugin).openForTag failed; falling back:', error);
             fallbackToNotebookNavigator();
           });
         return;
       }
 
-      // Fallback: if openForTag isn't available, use sync->getCanvasPath->openFile as before
-      const globalApiSyncForTag = anyWindow?._tps_tagCanvas?.syncForTag;
-      const globalApiGetCanvasPath = anyWindow?._tps_tagCanvas?.getCanvasPath;
-      if (typeof globalApiSyncForTag === 'function' && typeof globalApiGetCanvasPath === 'function') {
+      // Fallback: if openForTag isn't available, use sync -> path -> openFile.
+      const companionSyncForTag = companionTagPages?.syncForTag;
+      const companionGetTagPagePath = companionTagPages?.getTagPagePath;
+      if (hasTagPage && typeof companionSyncForTag === 'function' && typeof companionGetTagPagePath === 'function') {
         Promise.resolve((async () => {
-          await globalApiSyncForTag(cleanTag);
-          const canvasPath = String(globalApiGetCanvasPath(cleanTag) || '').trim();
-          if (!canvasPath) throw new Error('No canvas path returned for tag');
-          const canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
-          if (!(canvasFile instanceof TFile)) throw new Error(`Canvas file not found: ${canvasPath}`);
+          await companionSyncForTag.call(companionTagPages, cleanTag);
+          const tagPagePath = String(companionGetTagPagePath.call(companionTagPages, cleanTag) || '').trim();
+          if (!tagPagePath) throw new Error('No tag page path returned for tag');
+          const tagPageFile = this.app.vault.getAbstractFileByPath(tagPagePath);
+          if (!(tagPageFile instanceof TFile)) throw new Error(`Tag page file not found: ${tagPagePath}`);
           const leaf = this.resolvePreferredContentLeaf();
           if (!leaf) throw new Error('No target leaf available');
-          await leaf.openFile(canvasFile);
+          await leaf.openFile(tagPageFile);
         })())
           .catch((error: unknown) => {
-            logger.error('[TPS GCM] Tag Canvas API (window) failed; falling back to Notebook Navigator:', error);
-            fallbackToNotebookNavigator();
-          });
-        return;
-      }
-
-      const tagCanvasSyncForTag = tagCanvas?.api?.syncForTag;
-      const tagCanvasGetCanvasPath = tagCanvas?.api?.getCanvasPath;
-      if (typeof tagCanvasSyncForTag === 'function' && typeof tagCanvasGetCanvasPath === 'function') {
-        Promise.resolve((async () => {
-          await tagCanvasSyncForTag.call(tagCanvas.api, cleanTag);
-          const canvasPath = String(tagCanvasGetCanvasPath.call(tagCanvas.api, cleanTag) || '').trim();
-          if (!canvasPath) throw new Error('No canvas path returned for tag');
-          const canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
-          if (!(canvasFile instanceof TFile)) throw new Error(`Canvas file not found: ${canvasPath}`);
-          const leaf = this.resolvePreferredContentLeaf();
-          if (!leaf) throw new Error('No target leaf available');
-          await leaf.openFile(canvasFile);
-        })())
-          .catch((error: unknown) => {
-            logger.error('[TPS GCM] Tag Canvas API (plugin) failed; falling back to Notebook Navigator:', error);
+            logger.error('[TPS GCM] Tag pages API fallback failed; falling back to Notebook Navigator:', error);
             fallbackToNotebookNavigator();
           });
         return;
@@ -698,10 +702,10 @@ export class MenuController {
           .catch((error: unknown) => logger.error('[TPS GCM] Notebook Navigator tag navigation failed:', error));
         return;
       }
-      new Notice('Tag Canvas and Notebook Navigator tag navigation are unavailable.');
+      new Notice('Tag pages and Notebook Navigator tag navigation are unavailable.');
     } catch (error) {
       logger.error('[TPS GCM] Failed to navigate tag from context menu:', error);
-      new Notice('Tag Canvas and Notebook Navigator tag navigation are unavailable.');
+      new Notice('Tag pages and Notebook Navigator tag navigation are unavailable.');
     }
   }
 
@@ -748,5 +752,13 @@ export class MenuController {
 
   get app() {
     return this.plugin.app;
+  }
+
+  private getFrontmatterValueCI(fm: Record<string, any>, key: string): any {
+    if (!fm || !key) return undefined;
+    if (key in fm) return fm[key];
+    const lowerKey = key.toLowerCase();
+    const match = Object.keys(fm).find(k => k.toLowerCase() === lowerKey);
+    return match ? fm[match] : undefined;
   }
 }

@@ -179,3 +179,16 @@
 }
 .tps-settings-main-summary h3 { margin: 0; font-size: 1.05em; }
 .tps-settings-main-content { padding: 8px 4px 12px 4px; }
+
+/* ============================================================================
+   Editor Drop-Link Indicator
+   ============================================================================ */
+
+.cm-editor.tps-drop-link-active {
+    cursor: alias !important;
+}
+.cm-editor.tps-drop-link-active .cm-line,
+.cm-editor.tps-drop-link-active .cm-content,
+.cm-editor.tps-drop-link-active .cm-gutters {
+    cursor: alias !important;
+}

@@ -1,6 +1,6 @@
 import { TFile } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from '../main';
-import type { BodySubitemLink, BodySubitemLineKind } from './subitem-types';
+import { DETACHED_SUBITEM_MARKER, type BodySubitemLink, type BodySubitemLineKind } from './subitem-types';
 import { resolveLinkTargetToFile } from './link-target-service';
 
 type ParsedLine = {
@@ -52,6 +52,7 @@ export class BodySubitemLinkService {
   parseLine(rawLine: string): ParsedLine | null {
     const trimmed = String(rawLine || '').trim();
     if (!trimmed) return null;
+    if (this.isDetachedSubitemLine(rawLine)) return null;
 
     const malformedCheckbox = this.matchMalformedCheckboxLink(trimmed);
     if (malformedCheckbox) {
@@ -79,6 +80,20 @@ export class BodySubitemLinkService {
         wikilink: bare.full,
         linkTarget: bare.target,
       };
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      const headingContent = String(headingMatch[2] || '').trim();
+      const headingLink = this.extractSingleWikilink(headingContent);
+      if (headingLink) {
+        return {
+          kind: 'heading',
+          checkboxState: null,
+          wikilink: headingLink.full,
+          linkTarget: headingLink.target,
+        };
+      }
     }
 
     const bulletMatch = trimmed.match(/^((?:[-*+]|\d+\.)\s+)(.+)$/);
@@ -111,6 +126,17 @@ export class BodySubitemLinkService {
     return links.some((entry) => entry.childPath === childFile.path);
   }
 
+  isDetachedSubitemLine(rawLine: string): boolean {
+    return String(rawLine || '').includes(DETACHED_SUBITEM_MARKER);
+  }
+
+  appendDetachedMarker(rawLine: string): string {
+    const normalized = String(rawLine || '').trimEnd();
+    if (!normalized) return rawLine;
+    if (this.isDetachedSubitemLine(rawLine)) return rawLine;
+    return `${normalized} ${DETACHED_SUBITEM_MARKER}`;
+  }
+
   getConfiguredCheckboxStates(): string[] {
     const configured = (this.plugin.settings.linkedSubitemCheckboxMappings || [])
       .map((entry) => String(entry.checkboxState || '').trim())
@@ -119,10 +145,11 @@ export class BodySubitemLinkService {
   }
 
   private extractSingleWikilink(text: string): { full: string; target: string } | null {
-    const matches = Array.from(text.matchAll(/\[\[[^\]]+\]\]/g));
+    const normalizedText = this.stripTrailingInlineProperties(text);
+    const matches = Array.from(normalizedText.matchAll(/\[\[[^\]]+\]\]/g));
     if (matches.length !== 1) return null;
     const full = String(matches[0]?.[0] || '').trim();
-    if (text !== full) return null;
+    if (normalizedText !== full) return null;
     const parsed = full.match(WIKILINK_ONLY_REGEX);
     if (!parsed) return null;
     return {
@@ -158,5 +185,12 @@ export class BodySubitemLinkService {
       wikilink: `[[${String(bulletMatch[2] || '').trim()}${bulletMatch[3] ? `|${String(bulletMatch[3]).trim()}` : ''}]]`,
       linkTarget: String(bulletMatch[2] || '').trim(),
     };
+  }
+
+  private stripTrailingInlineProperties(text: string): string {
+    return String(text || '')
+      .trim()
+      .replace(/(?:\s+\[[a-zA-Z0-9_-]+::\s*[^\]]+\])+$/, '')
+      .trim();
   }
 }

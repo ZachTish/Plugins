@@ -1,5 +1,6 @@
 import { TFile, Platform, debounce, MarkdownView, WorkspaceLeaf } from 'obsidian';
 import { resolveLinkValueToFile } from '../handlers/parent-link-format';
+import { getPluginById } from '../core';
 import type TPSGlobalContextMenuPlugin from '../main';
 import { ViewModeService } from '../services/view-mode-service';
 import { RemoveHiddenSubitemsModal } from '../modals/remove-hidden-subitems-modal';
@@ -13,6 +14,19 @@ import type { BodySubitemLink } from '../services/subitem-types';
  * Also performs the initial `ensureMenus()` call at the end.
  */
 export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
+    const shouldSuppressNotebookNavigatorStatusIconContextMenu = (file: TFile | null): boolean => {
+        if (!(file instanceof TFile) || file.extension !== 'md') return false;
+
+        const companion: any =
+            getPluginById(plugin.app, 'tps-notebook-navigator-companion') ??
+            (plugin.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
+
+        return Boolean(
+            companion?.shouldSuppressNotebookNavigatorStatusIconContextMenu?.(file.path) ||
+            companion?.api?.shouldSuppressNotebookNavigatorStatusIconContextMenu?.(file.path),
+        );
+    };
+
     // Track the previously active file so we can update its checklist property on leaf change
     let previousActiveFile: TFile | null = null;
     // ── Native context menu injection ────────────────────────────────────────
@@ -21,6 +35,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         plugin.app.workspace.on('file-menu', (menu, file) => {
             if (plugin.settings.inlineMenuOnly) return;
             if (file instanceof TFile) {
+                if (shouldSuppressNotebookNavigatorStatusIconContextMenu(file)) return;
                 plugin.menuController.addToNativeMenu(menu, [file]);
             }
         }),
@@ -77,11 +92,48 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
     const throttledEnsureLinkedSubitemCheckboxes = debounce(() => {
         plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
     }, 120, false);
-    const debouncedLiveMarkdownParentReconcile = debounce((file: TFile, raw: string) => {
-        void plugin.subitemRelationshipSyncService?.reconcileMarkdownParentText(file, raw);
-    }, 250, false);
+    const pendingRecurrenceAdvanceTimers = new Map<string, number>();
     const pendingRefreshTimers = new Map<string, number>();
     const pendingLateRefreshTimers = new Map<string, number>();
+    const pendingFileOpenGuardTimers = new Map<string, number[]>();
+
+    const clearFileOpenGuardTimers = (path: string) => {
+        const timers = pendingFileOpenGuardTimers.get(path) || [];
+        for (const timer of timers) window.clearTimeout(timer);
+        pendingFileOpenGuardTimers.delete(path);
+    };
+
+    const scheduleFileOpenGuard = (file: TFile, delayMs: number, task: () => Promise<void> | void) => {
+        if (!(file instanceof TFile) || file.extension !== 'md') return;
+        const path = file.path;
+        const timer = window.setTimeout(() => {
+            const active = plugin.app.workspace.getActiveFile();
+            if (!(active instanceof TFile) || active.path !== path) return;
+            const live = plugin.app.vault.getAbstractFileByPath(path);
+            if (!(live instanceof TFile) || live.extension !== 'md') return;
+            if (!plugin.isInitialSyncSettled()) {
+                scheduleFileOpenGuard(live, 1000, task);
+                return;
+            }
+            void task();
+        }, Math.max(0, delayMs));
+        const timers = pendingFileOpenGuardTimers.get(path) || [];
+        timers.push(timer);
+        pendingFileOpenGuardTimers.set(path, timers);
+    };
+
+    const scheduleRecurringAdvanceCheck = (file: TFile | null, delay = 400) => {
+        if (!(file instanceof TFile) || file.extension !== 'md') return;
+        const path = file.path;
+        const existing = pendingRecurrenceAdvanceTimers.get(path);
+        if (existing !== undefined) window.clearTimeout(existing);
+
+        const timer = window.setTimeout(() => {
+            pendingRecurrenceAdvanceTimers.delete(path);
+            void plugin.bulkEditService.advanceRecurringInstanceIfPastDue(file);
+        }, Math.max(0, delay));
+        pendingRecurrenceAdvanceTimers.set(path, timer);
+    };
 
     const scheduleResponsiveMenuRefresh = (
         file: TFile,
@@ -107,37 +159,45 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         pendingRefreshTimers.set(path, timer);
     };
 
+    const refreshOpenNoteUiImmediately = (file: TFile, opts: { rebuildInlineSubitems?: boolean } = {}) => {
+        if (!(file instanceof TFile) || file.extension !== 'md') return;
+        const activeFile = plugin.app.workspace.getActiveFile();
+        if (!(activeFile instanceof TFile) || activeFile.path !== file.path) return;
+
+        plugin.menuController.panelBuilder?.clearFileTitleCache(file.path);
+        plugin.persistentMenuManager.refreshMenusForFile(file, true, {
+            rebuildInlineSubitems: opts.rebuildInlineSubitems !== false,
+        });
+        plugin.inlineTaskSubtaskService?.ensureForAllMarkdownViews();
+        plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
+        plugin.linkedSubitemCheckboxService?.refreshLivePreviewEditors();
+    };
+
     plugin.registerEvent(plugin.app.workspace.on('layout-change', () => {
+        if (!plugin.isInitialSyncSettled()) return;
         throttledEnsureMenus();
         throttledEnsureInlineTaskControls();
+        throttledEnsureLinkedSubitemCheckboxes();
+        plugin.linkedSubitemCheckboxService?.refreshLivePreviewEditors();
     }));
 
     plugin.registerEvent(
-        plugin.app.workspace.on('editor-change', (editor, info) => {
-            const file = (info as any)?.file;
-            if (!(file instanceof TFile) || file.extension !== 'md') return;
-            const active = plugin.app.workspace.getActiveFile();
-            if (!(active instanceof TFile) || active.path !== file.path) return;
-            const raw = typeof (editor as any)?.getValue === 'function' ? (editor as any).getValue() : null;
-            if (typeof raw !== 'string') return;
-            debouncedLiveMarkdownParentReconcile(file, raw);
-        }),
-    );
-
-    plugin.registerEvent(
         plugin.app.workspace.on('active-leaf-change', () => {
+            if (!plugin.isInitialSyncSettled()) return;
             throttledEnsureMenus();
             throttledEnsureInlineTaskControls();
             throttledEnsureLinkedSubitemCheckboxes();
+            const activeFile = plugin.app.workspace.getActiveFile();
+            for (const path of Array.from(pendingFileOpenGuardTimers.keys())) {
+                if (!(activeFile instanceof TFile) || path !== activeFile.path) {
+                    clearFileOpenGuardTimers(path);
+                }
+            }
             const activePath = plugin.app.workspace.getActiveFile()?.path || null;
             for (const path of Array.from((plugin as any).viewModeSuppressedPaths as Set<string>)) {
                 if (path !== activePath) {
                     (plugin as any).viewModeSuppressedPaths.delete(path);
                 }
-            }
-            // Update checklist property for the note being left
-            if (previousActiveFile && previousActiveFile instanceof TFile) {
-                plugin.taskCheckboxHandler.scheduleChecklistPropertyUpdate(previousActiveFile);
             }
             previousActiveFile = plugin.app.workspace.getActiveFile() ?? null;
         }),
@@ -242,8 +302,13 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         plugin.app.workspace.on('file-open', (file) => {
             ensureMenus();
 
+            if (!plugin.isInitialSyncSettled()) {
+                return;
+            }
+
             // Single unified subitem refresh call
             scheduleSubitemRefresh(file, { delay: 150 });
+            scheduleRecurringAdvanceCheck(file, 900);
 
             if (file && Platform.isMobile) {
                 setTimeout(() => {
@@ -251,31 +316,36 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
                     scheduleSubitemRefresh(file, { delay: 0 });
                 }, 500);
             }
-            if (file && plugin.fileNamingService.shouldProcess(file, { bypassCreationGrace: true })) {
-                setTimeout(() => {
-                    void plugin.fileNamingService.processFileOnOpen(file, { bypassCreationGrace: true });
-                }, 500);
-            }
-            // Update checklist property for the newly opened note
             if (file instanceof TFile) {
-                plugin.taskCheckboxHandler.scheduleChecklistPropertyUpdate(file);
                 previousActiveFile = file;
-                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 300 });
+                refreshOpenNoteUiImmediately(file, { rebuildInlineSubitems: true });
+                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 120 });
 
                 // ── Note-open reconciliation hooks ─────────────────────────────────
                 // 0. Repair broken parent body links from childOf backlinks before any
                 // other subitem reconciliation runs. This prevents transient broken
                 // lines like `- [ ] [[` from stripping childOf links on open.
+                // Keep note-open reconciliation non-destructive beyond broken-link repair;
+                // rewriting valid body links here causes vault-wide metadata churn.
                 void plugin.subitemRelationshipSyncService?.repairBrokenBodyLinksForParent(file);
 
-                // 1. Ensure missing subitem body links are inserted after frontmatter
-                void plugin.subitemRelationshipSyncService?.ensureBodyLinksForChild(file);
+                // 1. Check for unresolved/deleted subitem links and prompt user
+                scheduleFileOpenGuard(file, 250, async () => {
+                    await checkAndPromptForUnresolvedSubitems(plugin, file);
+                });
 
-                // 2. Check for unresolved/deleted subitem links and prompt user
-                // Run after a short delay to let the file fully load
-                setTimeout(() => {
-                    void checkAndPromptForUnresolvedSubitems(plugin, file);
-                }, 800);
+                // 2. Prompt for parent/body relationship mismatches one by one.
+                scheduleFileOpenGuard(file, 1500, async () => {
+                    await plugin.subitemRelationshipGuardService?.handleFileOpen(file);
+                });
+
+                // 3. Prompt for scheduled note / daily-note embed mismatches.
+                if (plugin.settings.enableScheduledLinkGuard && plugin.settings.enableAutoPopulateDailyNotes !== false) {
+                    scheduleFileOpenGuard(file, 2000, async () => {
+                        await plugin.scheduledLinkGuardService?.handleFileOpen(file);
+                    });
+                }
+
             }
         }),
     );
@@ -285,6 +355,9 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
     // kanban, canvas, etc.) and ensures completedDate is always in sync.
     const debouncedCompletedDateSync = debounce((file: TFile) => {
         if (!file || file.extension !== 'md') return;
+        if (plugin.frontmatterMutationService.wasRecentlyWritten(file.path) || plugin.frontmatterMutationService.isWriteInProgress(file.path)) {
+            return;
+        }
 
         const cache = plugin.app.metadataCache.getFileCache(file);
         const fm = (cache?.frontmatter || {}) as Record<string, any>;
@@ -302,14 +375,14 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
 
         if (doneStatuses.has(currentStatus) && !hasCompletedDate) {
             // Write completedDate — status is done but completedDate is missing
-            void plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+            void plugin.frontmatterMutationService.process(file, (fmw) => {
                 fmw['completedDate'] = (window as any).moment
                     ? (window as any).moment().format('YYYY-MM-DD HH:mm:ss')
                     : new Date().toISOString().replace('T', ' ').slice(0, 19);
             });
         } else if (!doneStatuses.has(currentStatus) && hasCompletedDate && currentStatus) {
             // Clear completedDate — status reverted away from done
-            void plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+            void plugin.frontmatterMutationService.process(file, (fmw) => {
                 const key = Object.keys(fmw).find((k) => k.toLowerCase() === 'completeddate');
                 if (key) delete fmw[key];
             });
@@ -354,16 +427,20 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
 
     plugin.registerEvent(
         plugin.app.metadataCache.on('changed', (file) => {
+            if (!plugin.isInitialSyncSettled()) {
+                return;
+            }
             // Clear the title cache when metadata changes to prevent stale titles
             if (file instanceof TFile) {
                 plugin.menuController.panelBuilder?.clearFileTitleCache(file.path);
+                refreshOpenNoteUiImmediately(file, { rebuildInlineSubitems: true });
             }
             debouncedMenuRefresh(file);
             debouncedFilenameSync(file);
             if (file instanceof TFile) {
-                plugin.taskCheckboxHandler.scheduleChecklistPropertyUpdate(file);
-                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 300 });
+                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 80 });
                 debouncedCompletedDateSync(file);
+                scheduleRecurringAdvanceCheck(file, 1200);
             }
         }),
     );
@@ -371,13 +448,13 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
     plugin.registerEvent(
         plugin.app.vault.on('modify', (file) => {
             if (!(file instanceof TFile) || file.extension !== 'md') return;
-            plugin.taskCheckboxHandler.scheduleChecklistPropertyUpdate(file);
+            if (!plugin.isInitialSyncSettled()) return;
             void plugin.subitemRelationshipSyncService?.repairBrokenBodyLinksForParent(file);
-            void plugin.subitemRelationshipSyncService?.reconcileMarkdownParent(file);
             if (plugin.parentLinkResolutionService.getParentsForChild(file).length > 0) {
                 void plugin.linkedSubitemCheckboxService?.refreshReferencesForChild(file);
             }
-            scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 400 });
+            refreshOpenNoteUiImmediately(file, { rebuildInlineSubitems: true });
+            scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 120 });
         }),
     );
 
@@ -401,25 +478,53 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
                 setTimeout(() => {
                     plugin.fileNamingService.syncTitleFromFilename(file);
                 }, 150);
+                if (plugin.settings.enableAutoRename) {
+                    setTimeout(() => {
+                        plugin.fileNamingService.updateFilenameIfNeeded(file, { bypassCreationGrace: true });
+                    }, 600);
+                }
             }
         }),
     );
+
+    plugin.app.workspace.onLayoutReady(() => {
+        const activeFile = plugin.app.workspace.getActiveFile();
+        if (activeFile instanceof TFile && plugin.isInitialSyncSettled()) {
+            refreshOpenNoteUiImmediately(activeFile, { rebuildInlineSubitems: true });
+        }
+    });
 
     plugin.register(() => plugin.persistentMenuManager.detach());
     plugin.register(() => plugin.menuController.detach());
     plugin.register(() => {
         for (const timer of pendingRefreshTimers.values()) window.clearTimeout(timer);
         for (const timer of pendingLateRefreshTimers.values()) window.clearTimeout(timer);
+        for (const timer of pendingRecurrenceAdvanceTimers.values()) window.clearTimeout(timer);
         for (const timer of pendingSubitemTimers.values()) window.clearTimeout(timer);
+        for (const timers of pendingFileOpenGuardTimers.values()) {
+            for (const timer of timers) window.clearTimeout(timer);
+        }
         pendingRefreshTimers.clear();
         pendingLateRefreshTimers.clear();
+        pendingRecurrenceAdvanceTimers.clear();
         pendingSubitemTimers.clear();
+        pendingFileOpenGuardTimers.clear();
     });
 
     plugin.registerEvent(
         plugin.app.vault.on('delete', (file) => {
             if (file instanceof TFile && file.extension === 'md') {
-                void plugin.bulkEditService.cleanupLinksForDeletedFile(file.path, file.basename);
+                void (async () => {
+                    await plugin.bulkEditService.cleanupLinksForDeletedFile(file.path, file.basename);
+                    const activeFile = plugin.app.workspace.getActiveFile();
+                    if (activeFile instanceof TFile && activeFile.extension === 'md') {
+                        refreshOpenNoteUiImmediately(activeFile, { rebuildInlineSubitems: true });
+                        scheduleSubitemRefresh(activeFile, { delay: 40 });
+                    }
+                    plugin.inlineTaskSubtaskService?.ensureForAllMarkdownViews();
+                    plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
+                    plugin.linkedSubitemCheckboxService?.refreshLivePreviewEditors();
+                })();
             }
             try {
                 if (document.activeElement instanceof HTMLElement) {

@@ -25,6 +25,24 @@ const createCollapsibleSection = (
     return details.createDiv({ cls: 'tps-collapsible-section-content' });
 };
 
+const createSettingsGroup = (
+    parent: HTMLElement,
+    title: string,
+    description?: string,
+): HTMLElement => {
+    const group = parent.createDiv({ cls: 'tps-settings-flat-group' });
+    group.style.marginBottom = '18px';
+    group.style.padding = '14px 16px';
+    group.style.border = '1px solid var(--background-modifier-border)';
+    group.style.borderRadius = '12px';
+    group.style.background = 'var(--background-secondary)';
+    group.createEl('h3', { text: title });
+    if (description) {
+        group.createEl('p', { text: description, cls: 'setting-item-description' });
+    }
+    return group;
+};
+
 export class TPSMessagerSettingTab extends PluginSettingTab {
     plugin: TPSMessager;
     private settingsViewState = new Map<string, boolean>();
@@ -49,18 +67,9 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
             cls: 'setting-item-description'
         });
 
-        const createMainCategory = (title: 'Features' | 'Rules' | 'Interaction' | 'UI Display', defaultOpen = true): HTMLElement => {
-            const details = containerEl.createEl('details', { cls: 'tps-settings-main-category' });
-            if (defaultOpen) details.setAttr('open', 'true');
-            const summary = details.createEl('summary', { cls: 'tps-settings-main-summary' });
-            summary.createEl('h3', { text: title });
-            return details.createDiv({ cls: 'tps-settings-main-content' });
-        };
-
-        const featuresCategory = createMainCategory('Features');
-        const rulesCategory = createMainCategory('Rules');
-        const interactionCategory = createMainCategory('Interaction');
-        const uiDisplayCategory = createMainCategory('UI Display');
+        const featuresCategory = createSettingsGroup(containerEl, 'Core Delivery', 'Main transport toggles and the ntfy connection used by other TPS automation.');
+        const automationCategory = createSettingsGroup(containerEl, 'Connection', 'Server, topic, and delivery priority.');
+        const maintenanceCategory = createSettingsGroup(containerEl, 'Diagnostics and Testing', 'Logging and manual test delivery tools.');
 
         const features = createCollapsibleSection(
             featuresCategory,
@@ -92,7 +101,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
                 }));
 
         const connection = createCollapsibleSection(
-            rulesCategory,
+            automationCategory,
             'Connection',
             'Server, topic, and delivery priority. These are the settings you are most likely to change.',
             false
@@ -140,7 +149,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
         }
 
         const diagnostics = createCollapsibleSection(
-            interactionCategory,
+            maintenanceCategory,
             'Diagnostics & Debug',
             'Optional tools for verifying delivery and troubleshooting.',
             false
@@ -158,7 +167,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
 
         if ((this.plugin.settings.enabled ?? true) && (this.plugin.settings.enableManualComposer ?? true)) {
             const composer = createCollapsibleSection(
-                interactionCategory,
+                maintenanceCategory,
                 'Manual Composer',
                 'Command and test payload tooling for manual sends.',
                 false
@@ -201,11 +210,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
         if (!this.hasRenderedSettings) {
             detailsEls.forEach((detailsEl) => {
                 const details = detailsEl as HTMLDetailsElement;
-                if (details.classList.contains('tps-settings-main-category')) {
-                    details.setAttr('open', 'true');
-                } else {
-                    details.removeAttribute('open');
-                }
+                details.removeAttribute('open');
             });
             this.hasRenderedSettings = true;
             containerEl.scrollTop = 0;

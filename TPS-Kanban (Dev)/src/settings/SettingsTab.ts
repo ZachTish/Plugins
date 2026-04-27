@@ -25,6 +25,24 @@ const createCollapsibleSection = (
   return details.createDiv({ cls: 'tps-collapsible-section-content' });
 };
 
+const createSettingsGroup = (
+  parent: HTMLElement,
+  title: string,
+  description?: string,
+): HTMLElement => {
+  const group = parent.createDiv({ cls: 'tps-settings-flat-group' });
+  group.style.marginBottom = '18px';
+  group.style.padding = '14px 16px';
+  group.style.border = '1px solid var(--background-modifier-border)';
+  group.style.borderRadius = '12px';
+  group.style.background = 'var(--background-secondary)';
+  group.createEl('h3', { text: title });
+  if (description) {
+    group.createEl('p', { text: description, cls: 'setting-item-description' });
+  }
+  return group;
+};
+
 export class KanbanSettingTab extends PluginSettingTab {
   plugin: TPSKanbanPlugin;
   private settingsViewState = new Map<string, boolean>();
@@ -45,11 +63,50 @@ export class KanbanSettingTab extends PluginSettingTab {
       cls: 'setting-item-description',
     });
 
-    const cardFields = createCollapsibleSection(
+    const metadataGroup = createSettingsGroup(
       containerEl,
+      'Card Metadata',
+      'Frontmatter keys and color behavior used when rendering cards.',
+    );
+
+    const creationGroup = createSettingsGroup(
+      containerEl,
+      'Creation Defaults',
+      'Default card creation mode and destination. The destination acts as a folder for notes or a file for task cards.',
+    );
+
+    new Setting(creationGroup)
+      .setName('Default creation type')
+      .setDesc('Choose whether new cards create full notes or task lines.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('note', 'Full note')
+          .addOption('task', 'Task line')
+          .setValue(this.plugin.settings.defaultCreateMode || 'note')
+          .onChange(async (value) => {
+            this.plugin.settings.defaultCreateMode = value as 'note' | 'task';
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(creationGroup)
+      .setName('Default creation destination')
+      .setDesc('Folder for note cards, or file for task cards. Leave blank to use the current board behavior.')
+      .addText((text) =>
+        text
+          .setPlaceholder('Markdown/04 Lists')
+          .setValue(this.plugin.settings.defaultCreateDestination || '')
+          .onChange(async (value) => {
+            this.plugin.settings.defaultCreateDestination = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    const cardFields = createCollapsibleSection(
+      metadataGroup,
       'Card Frontmatter Keys',
       'Keys used to pull visual metadata from each card note.',
-      false,
+      true,
     );
 
     new Setting(cardFields)
@@ -88,11 +145,17 @@ export class KanbanSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }));
 
-    const laneOrder = createCollapsibleSection(
+    const boardGroup = createSettingsGroup(
       containerEl,
+      'Board Behavior',
+      'Lane ordering, task-card placement, and overall board sizing.',
+    );
+
+    const laneOrder = createCollapsibleSection(
+      boardGroup,
       'Lane Behavior',
       'Optional sorting behavior for cards that do not have a group-by value.',
-      false,
+      true,
     );
 
     new Setting(laneOrder)

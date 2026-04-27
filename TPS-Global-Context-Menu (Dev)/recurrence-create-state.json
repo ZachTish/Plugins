@@ -1,45 +1,75 @@
 {
   "version": 1,
   "ops": {
-    "medication|2026-03-15 17:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Medication 2026-03-15.md",
-      "updatedAt": 1773500606291
-    },
-    "medication|2026-03-16 17:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Medication 2026-03-16.md",
-      "updatedAt": 1773599527190
-    },
-    "medication|2026-03-17 17:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Medication 2026-03-17.md",
-      "updatedAt": 1773669946134
-    },
-    "weekly chores|2026-03-23 18:42:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Weekly Chores 2026-03-23.md",
-      "updatedAt": 1773704645539
-    },
-    "log timesheet|2026-03-27 20:36:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Log Timesheet Friday, March 27th 2026.md",
-      "updatedAt": 1774031124147
-    },
-    "medication|2026-03-21 17:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Medication Saturday, March 21st 2026.md",
-      "updatedAt": 1774038222958
-    },
-    "medication|2026-03-22 17:15:00": {
-      "state": "complete",
-      "targetPath": "Markdown/Action Items/Medication Sunday, March 22nd 2026.md",
-      "updatedAt": 1774108587087
-    },
     "log timesheet|2026-04-03 20:36:00": {
       "state": "complete",
       "targetPath": "Markdown/Action Items/Log Timesheet Friday, April 3rd 2026.md",
       "updatedAt": 1774644075855
+    },
+    "medication|2026-04-02 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/01 Action Items/Medication Thu, Apr 2 2026.md",
+      "updatedAt": 1775081885079
+    },
+    "medication|2026-04-03 17:15:00": {
+      "state": "complete",
+      "targetPath": "Markdown/01 Action Items/Medication Fri, Apr 3 2026.md",
+      "updatedAt": 1775147538163
+    },
+    "archive/log timesheet fri, apr 3 2026.md|2026-04-10 20:36:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Log Timesheet Fri, Apr 10 2026.md",
+      "updatedAt": 1775233227656
+    },
+    "archive/weekly chores mon, mar 23 2026 mon, apr 6 2026.md|2026-04-12 00:00:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Weekly Chores Sun, Apr 12 2026.md",
+      "updatedAt": 1775413448548
+    },
+    "weekly chores.md|2026-04-12 00:00:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Weekly Chores Sun, Apr 12 2026.md",
+      "updatedAt": 1775414109114
+    },
+    "weekly chores.md|2026-04-13 00:00:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Weekly Chores Mon, Apr 13 2026.md",
+      "updatedAt": 1775459876986
+    },
+    "take out trash.md|2026-04-13 18:40:00": {
+      "state": "complete",
+      "targetPath": "Markdown/01 Action Items/Take Out Trash Mon, Apr 13 2026.md",
+      "updatedAt": 1775522387674
+    },
+    "weekly chores.md|2026-04-15 00:00:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Weekly Chores Wed, Apr 15 2026.md",
+      "updatedAt": 1775677009469
+    },
+    "archive/2026-04-06/2026-04-06/weekly chores.md|2026-04-15 00:00:00": {
+      "state": "complete",
+      "targetPath": "Archive/Weekly Chores Wed, Apr 15 2026.md",
+      "updatedAt": 1775677010296
+    },
+    "archive/2026-04-06/2026-04-06/weekly chores.md|2026-04-16 00:00:00": {
+      "state": "complete",
+      "targetPath": "Archive/Weekly Chores Thu, Apr 16 2026.md",
+      "updatedAt": 1775710846686
+    },
+    "weekly chores.md|2026-04-16 00:00:00": {
+      "state": "complete",
+      "targetPath": "Markdown/Action Items/Weekly Chores Thu, Apr 16 2026.md",
+      "updatedAt": 1775751947903
+    },
+    "archive/2026-04-06/2026-04-06/weekly chores.md|2026-04-17 00:00:00": {
+      "state": "complete",
+      "targetPath": "Archive/Weekly Chores Fri, Apr 17 2026.md",
+      "updatedAt": 1775797323420
+    },
+    "weekly chores.md|2026-04-17 00:00:00": {
+      "state": "complete",
+      "targetPath": "Markdown/01 Action Items/Weekly Chores Fri, Apr 17 2026.md",
+      "updatedAt": 1775832261018
     }
   }
 }

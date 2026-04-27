@@ -1,15 +1,19 @@
 import { App, Notice, TFile, TFolder, normalizePath } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from '../main';
-import { buildParentLinkValue, normalizeParentLinkFormat } from '../handlers/parent-link-format';
+import { buildBaseCompatibleParentLinkValue } from '../handlers/parent-link-format';
 import { CreateSubitemModal } from '../modals/create-subitem-modal';
 import { mergeNormalizedTags, parseTagInput } from '../utils/tag-utils';
 import * as logger from '../logger';
+import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
+import { generateSubitemId, getSubitemIdFromRecord, SUBITEM_ID_KEY } from '../utils/subitem-id';
 
 export interface CreateSubitemOptions {
   seedDefaults?: boolean;
   seedParentTags?: boolean;
   seedVisualMetadata?: boolean;
   insertParentBodyLink?: boolean;
+  initialFrontmatter?: Record<string, unknown>;
+  preferScheduledParentForDailyNote?: boolean;
 }
 
 export async function promptAndCreateSubitemForParent(
@@ -58,13 +62,16 @@ export async function createSubitemForParentWithTitle(
   const targetPath = getUniqueMarkdownPath(plugin.app, folderPath, cleanedTitle);
   const escapedTitle = cleanedTitle.replace(/"/g, '\\"');
   const parentLinkKey = plugin.parentLinkResolutionService.getParentKey();
-  const parentLinkValue = buildParentLinkValue(
+  const parentLinkValue = buildBaseCompatibleParentLinkValue(
     plugin.app,
     parentFile,
     targetPath,
-    normalizeParentLinkFormat(plugin.settings.parentLinkFormat),
   ).replace(/"/g, '\\"');
   const seedDefaults = options?.seedDefaults ?? true;
+  const initialFrontmatter = options?.initialFrontmatter || {};
+  if (!getSubitemIdFromRecord(initialFrontmatter)) {
+    initialFrontmatter[SUBITEM_ID_KEY] = generateSubitemId();
+  }
   // Default to no parent-tag inheritance. This is safer, matches TaskNotes-style
   // conversion behavior, and avoids accidental propagation of context tags such
   // as `dailynote` onto child notes.
@@ -81,31 +88,30 @@ export async function createSubitemForParentWithTitle(
   let dailyNoteDateStr = '';
   if (plugin.fileNamingService.isDateOnlyBasename(parentFile.basename)) {
       isDailyNoteParent = true;
-      const parsed = window.moment(parentFile.basename, [
-          plugin.fileNamingService.getDailyNoteDateFormat(),
-          "YYYY-MM-DD", "YYYY_MM_DD", "YYYYMMDD",
-          "dddd, MMMM Do YYYY", "MMMM D, YYYY", "MMM D, YYYY"
-      ], true);
-      if (parsed.isValid()) {
-          dailyNoteDateStr = parsed.format('YYYY-MM-DD');
-      }
+      dailyNoteDateStr = getDailyNoteResolver(plugin.app, {
+          formatOverride: (plugin as any)?.settings?.dailyNoteDateFormat,
+      }).parseFilenameToDateKey(parentFile.basename) || '';
   }
+  const preferScheduledParentForDailyNote = !!options?.preferScheduledParentForDailyNote;
+  const useScheduledParentForDailyNote = preferScheduledParentForDailyNote && isDailyNoteParent && !!dailyNoteDateStr;
 
   const frontmatterLines = [
     '---',
     `title: "${escapedTitle}"`,
-    `${parentLinkKey}: "${parentLinkValue}"`,
   ];
-  if (isDailyNoteParent && dailyNoteDateStr) {
+  if (!useScheduledParentForDailyNote) {
+    frontmatterLines.push(`${parentLinkKey}: "${parentLinkValue}"`);
+  }
+  if (isDailyNoteParent && dailyNoteDateStr && !hasFrontmatterKeyCI(initialFrontmatter, 'scheduled')) {
       frontmatterLines.push(`scheduled: "${dailyNoteDateStr}"`);
       // When scheduled is explicitly set to today/daily note date,
       // we don't necessarily need to add default status to avoid duplication,
       // but let's keep the user's defaults working:
   }
-  if (defaultStatus) {
+  if (defaultStatus && !hasFrontmatterKeyCI(initialFrontmatter, 'status')) {
     frontmatterLines.push(`status: "${defaultStatus}"`);
   }
-  if (defaultPriority) {
+  if (defaultPriority && !hasFrontmatterKeyCI(initialFrontmatter, 'priority')) {
     frontmatterLines.push(`priority: "${defaultPriority}"`);
   }
   if (plugin.settings.autoSaveFolderPath) {
@@ -133,6 +139,12 @@ export async function createSubitemForParentWithTitle(
       .map((line) => line.split(':')[0]?.trim().toLowerCase())
       .filter((key): key is string => Boolean(key)),
   );
+  const initialLines = collectExplicitFrontmatterLines(initialFrontmatter, beforeInheritedKeys);
+  frontmatterLines.push(...initialLines);
+  for (const line of initialLines) {
+    const key = line.split(':')[0]?.trim().toLowerCase();
+    if (key) beforeInheritedKeys.add(key);
+  }
   const inheritedLines = collectInheritedParentFrontmatterLines(parentFrontmatter, beforeInheritedKeys);
   logger.log('[TPS GCM] [DIAG] createSubitem frontmatter BEFORE inherited:', {
     title: cleanedTitle,
@@ -206,10 +218,12 @@ export async function createSubitemForParentWithTitle(
   }
 
   if (seedParentTags && parentTags.length > 0) {
-    await mergeParentTagsIntoSubitem(plugin.app, created, parentTags);
+    await mergeParentTagsIntoSubitem(plugin, created, parentTags);
   }
 
-  await plugin.parentLinkResolutionService.addParentToChild(created, parentFile);
+  if (!useScheduledParentForDailyNote) {
+    await plugin.parentLinkResolutionService.addParentToChild(created, parentFile);
+  }
 
   new Notice(`Created subitem: ${created.basename}`);
   return created;
@@ -285,12 +299,13 @@ export async function applyCompanionRulesToFile(plugin: TPSGlobalContextMenuPlug
   }
 }
 
-async function mergeParentTagsIntoSubitem(app: App, file: TFile, parentTags: string[]): Promise<void> {
+async function mergeParentTagsIntoSubitem(plugin: TPSGlobalContextMenuPlugin, file: TFile, parentTags: string[]): Promise<void> {
   if (parentTags.length === 0) return;
 
   await new Promise((resolve) => setTimeout(resolve, 100));
 
   try {
+    const app = plugin.app;
     const cache = app.metadataCache.getFileCache(file);
     const currentFrontmatter = (cache?.frontmatter || {}) as Record<string, any>;
     const currentTags = parseTagInput([currentFrontmatter.tags, currentFrontmatter.tag]);
@@ -299,7 +314,7 @@ async function mergeParentTagsIntoSubitem(app: App, file: TFile, parentTags: str
     const mergedTagsStr = JSON.stringify([...mergedTags].sort());
 
     if (currentTagsStr !== mergedTagsStr) {
-      await app.fileManager.processFrontMatter(file, (fm) => {
+      await plugin.frontmatterMutationService.process(file, (fm) => {
         setFrontmatterValueCaseInsensitive(fm as Record<string, any>, 'tags', mergedTags);
       });
     }
@@ -424,6 +439,37 @@ function collectInheritedParentFrontmatterLines(
     lines,
   });
   return lines;
+}
+
+function collectExplicitFrontmatterLines(
+  frontmatter: Record<string, unknown> | null | undefined,
+  existingKeys: Iterable<string> = [],
+): string[] {
+  if (!frontmatter || typeof frontmatter !== 'object') return [];
+  const lines: string[] = [];
+  const seen = new Set(
+    Array.from(existingKeys)
+      .map((key) => String(key || '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+  for (const [rawKey, value] of Object.entries(frontmatter)) {
+    const key = String(rawKey || '').trim();
+    const normalizedKey = key.toLowerCase();
+    if (!key || seen.has(normalizedKey) || normalizedKey === 'title') continue;
+    const serialized = serializeSimpleYamlValue(value);
+    if (!serialized) continue;
+    lines.push(`${key}: ${serialized}`);
+    seen.add(normalizedKey);
+  }
+  return lines;
+}
+
+function hasFrontmatterKeyCI(frontmatter: Record<string, unknown> | null | undefined, key: string): boolean {
+  if (!frontmatter || typeof frontmatter !== 'object') return false;
+  const normalized = String(key || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return Object.keys(frontmatter).some((candidate) => String(candidate || '').trim().toLowerCase() === normalized);
 }
 
 function serializeSimpleYamlValue(value: any): string {

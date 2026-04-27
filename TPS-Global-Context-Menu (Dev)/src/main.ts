@@ -1,4 +1,4 @@
-import { Plugin, TFile, WorkspaceLeaf, Menu, debounce, Notice, normalizePath, Platform } from 'obsidian';
+import { Plugin, TFile, WorkspaceLeaf, Menu, debounce, Notice, normalizePath, Platform, MarkdownView } from 'obsidian';
 import { TPSGlobalContextMenuSettings, BuildPanelOptions } from './types';
 import { DEFAULT_SETTINGS } from './constants';
 import { PLUGIN_STYLES } from './plugin-styles';
@@ -29,14 +29,24 @@ import { ParentLinkResolutionService } from './services/parent-link-resolution-s
 import { BodySubitemLinkService } from './services/body-subitem-link-service';
 import { SubitemRelationshipSyncService } from './services/subitem-relationship-sync-service';
 import { SubitemReferenceIndexService } from './services/subitem-reference-index-service';
+import { SubitemRelationshipGuardService } from './services/subitem-relationship-guard-service';
+import { ScheduledLinkGuardService } from './services/scheduled-link-guard-service';
+import { TimeTrackingService } from './services/time-tracking-service';
 import { registerGcmEvents } from './events/register-events';
 import { registerGcmCommands } from './commands/register-commands';
 import { setupPluginApi } from './plugin-api';
+import { normalizeArchiveFolderMode } from './utils/archive-path';
+import { CalendarNoteMutationService } from './services/calendar-note-mutation-service';
+import { ParentChildMutationService } from './services/parent-child-mutation-service';
+import { ItemSemanticsService } from './services/item-semantics-service';
+import { LinkedSubitemMigrationService } from './services/linked-subitem-migration-service';
+import type { NotebookNavigatorCompanionSettings } from '../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
 
 
 export default class TPSGlobalContextMenuPlugin extends Plugin {
   private static readonly BUILD_STAMP = '2026-03-11 18:12';
   private readonly startupTimestamp = Date.now();
+  private lastSyncBlockedNoticeAt = 0;
   settings: TPSGlobalContextMenuSettings;
   menuController: MenuController;
   persistentMenuManager: PersistentMenuManager;
@@ -55,17 +65,28 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
   inlineTaskSubtaskService: InlineTaskSubtaskService;
   linkedSubitemCheckboxService: LinkedSubitemCheckboxService;
   frontmatterMutationService: FrontmatterMutationService;
+  calendarNoteMutationService: CalendarNoteMutationService;
+  parentChildMutationService: ParentChildMutationService;
+  linkedSubitemMigrationService: LinkedSubitemMigrationService;
+  itemSemanticsService: ItemSemanticsService;
   parentLinkResolutionService: ParentLinkResolutionService;
   bodySubitemLinkService: BodySubitemLinkService;
   subitemRelationshipSyncService: SubitemRelationshipSyncService;
   subitemReferenceIndexService: SubitemReferenceIndexService;
+  subitemRelationshipGuardService: SubitemRelationshipGuardService;
+  scheduledLinkGuardService: ScheduledLinkGuardService;
+  timeTrackingService: TimeTrackingService;
   styleEl: HTMLStyleElement | null = null;
   ignoreNextContext = false;
   keyboardVisible = false;
   private archiveSweepTimerId: number | null = null;
+  private inlineFieldRefreshTimerId: number | null = null;
+  private inlineFieldRefreshRetryTimerId: number | null = null;
+  private inlineFieldMutationObserver: MutationObserver | null = null;
+  private inlineFieldObservedRoot: HTMLElement | null = null;
+  private inlineFieldScrollRoot: HTMLElement | null = null;
   private restoreMenuPatch: (() => void) | null = null;
   private restoreCanvasOpenGuard: (() => void) | null = null;
-  private restoreProcessFrontmatterPatch: (() => void) | null = null;
   private viewModeSuppressedPaths: Set<string> = new Set();
   private canvasPointerSession:
     | {
@@ -95,9 +116,9 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     return [
       { checkboxState: '[ ]', statuses: ['todo'], toggleTargetStatus: 'complete', icon: 'square', label: 'Todo' },
       { checkboxState: '[x]', statuses: ['complete'], toggleTargetStatus: 'todo', icon: 'check', label: 'Complete' },
-      { checkboxState: '[\\]', statuses: ['working'], toggleTargetStatus: 'complete', icon: 'slash', label: 'Working' },
+      { checkboxState: '[/]', statuses: ['working'], toggleTargetStatus: 'complete', icon: 'loader', label: 'Working' },
       { checkboxState: '[?]', statuses: ['holding'], toggleTargetStatus: 'todo', icon: 'help-circle', label: 'Holding' },
-      { checkboxState: '[-]', statuses: ['wont-do'], toggleTargetStatus: 'todo', icon: 'minus', label: 'Won’t Do' },
+      { checkboxState: '[-]', statuses: ['wont-do'], toggleTargetStatus: 'todo', icon: 'minus', label: 'Won\u2019t Do' },
     ];
   }
 
@@ -140,6 +161,33 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     );
   }
 
+  private isNotebookNavigatorStatusIconContextMenuTarget(evt: MouseEvent, target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    if (!target.closest('.view-content.notebook-navigator, .notebook-navigator')) return false;
+
+    const row = target.closest('.nn-file[data-path], .nn-navitem[data-path][data-nav-item-type="note"], .nn-navitem[data-path][data-nav-item-type="file"]') as HTMLElement | null;
+    if (!row) return false;
+
+    const iconSlot = row.querySelector('.nn-file-icon-slot') as HTMLElement | null;
+    if (!iconSlot) return false;
+
+    const rect = iconSlot.getBoundingClientRect();
+    return evt.clientX >= rect.left && evt.clientX <= rect.right && evt.clientY >= rect.top && evt.clientY <= rect.bottom;
+  }
+
+  private shouldSuppressNotebookNavigatorStatusIconContextMenu(file: TFile | null | undefined): boolean {
+    if (!(file instanceof TFile) || file.extension !== 'md') return false;
+
+    const companion: any =
+      getPluginById(this.app, 'tps-notebook-navigator-companion') ??
+      (this.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
+
+    return Boolean(
+      companion?.shouldSuppressNotebookNavigatorStatusIconContextMenu?.(file.path) ||
+      companion?.api?.shouldSuppressNotebookNavigatorStatusIconContextMenu?.(file.path),
+    );
+  }
+
   private suppressCanvasActivationEvent(evt: MouseEvent): boolean {
     if (!this.shouldSuppressOpenForRecentCanvasDrag()) return false;
     if (!this.isCanvasOrBasesInteractionTarget(evt.target)) return false;
@@ -172,15 +220,21 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.commandQueueService = new CommandQueueService();
     this.vaultQueryService = new VaultQueryService(this.app);
     this.taskIdentityService = new TaskIdentityService();
+    this.itemSemanticsService = new ItemSemanticsService(this);
     this.workspaceRibbonService = new WorkspaceRibbonService(this);
     this.parentLinkResolutionService = new ParentLinkResolutionService(this);
     this.bodySubitemLinkService = new BodySubitemLinkService(this);
     this.subitemRelationshipSyncService = new SubitemRelationshipSyncService(this);
     this.subitemReferenceIndexService = new SubitemReferenceIndexService(this);
+    this.subitemRelationshipGuardService = new SubitemRelationshipGuardService(this);
+    this.scheduledLinkGuardService = new ScheduledLinkGuardService(this);
+    this.timeTrackingService = new TimeTrackingService(this);
     this.inlineTaskSubtaskService = new InlineTaskSubtaskService(this);
     this.linkedSubitemCheckboxService = new LinkedSubitemCheckboxService(this);
     this.frontmatterMutationService = new FrontmatterMutationService(this);
-    this.restoreProcessFrontmatterPatch = this.installProcessFrontmatterPatch();
+    this.calendarNoteMutationService = new CalendarNoteMutationService(this);
+    this.parentChildMutationService = new ParentChildMutationService(this);
+    this.linkedSubitemMigrationService = new LinkedSubitemMigrationService(this);
     this.registerEditorExtension(this.linkedSubitemCheckboxService.getEditorExtension());
     this.app.workspace.updateOptions();
 
@@ -203,6 +257,7 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.restoreCanvasOpenGuard = this.installCanvasOpenGuard();
 
     this.injectStyles();
+    this.timeTrackingService.start();
 
     this.keyboardVisible = false;
 
@@ -230,6 +285,10 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       let startupCheckDone = false;
       const runStartupCheck = async () => {
         if (startupCheckDone) return;
+        if (!this.isInitialSyncSettled()) {
+          window.setTimeout(() => void runStartupCheck(), 2000);
+          return;
+        }
         startupCheckDone = true;
         logger.log('[TPS GCM] Checking for missing recurrences on startup...');
         await this.bulkEditService.checkMissingRecurrences();
@@ -353,6 +412,7 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
 
       const targets = this.contextTargetService.resolveTargets([], evt);
       if (targets.length === 0) return;
+      if (targets.some((file) => this.shouldSuppressNotebookNavigatorStatusIconContextMenu(file))) return;
 
       evt.preventDefault();
       evt.stopPropagation();
@@ -377,18 +437,223 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     }, { capture: true, passive: true });
 
     registerGcmCommands(this);
+    this.registerInlineFieldClickHandler();
+    this.syncInlineFieldVisibilityObserver();
+  }
+
+  private registerInlineFieldClickHandler(): void {
+    this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
+      const target = evt.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      const keyEl = target.closest('.dataview.inline-field-key') as HTMLElement | null;
+      const valueEl = target.closest('.dataview.inline-field-value') as HTMLElement | null;
+      const clickedEl = valueEl || keyEl;
+      if (!clickedEl) return;
+
+      const dvKey = clickedEl.getAttribute('data-dv-key');
+      if (!dvKey) return;
+
+      const leaf = this.app.workspace.activeLeaf;
+      if (!leaf) return;
+      const file = this.app.workspace.getActiveFile();
+      if (!(file instanceof TFile) || file.extension !== 'md') return;
+
+      const prop = this.settings.properties?.find(p => p.key === dvKey || p.key?.toLowerCase() === dvKey.toLowerCase());
+      if (!prop) return;
+
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+      evt.stopPropagation();
+
+      const entries = this.menuController.createFileEntries([file]);
+      const anchor = clickedEl;
+
+      const inlineFieldContainer = clickedEl.closest('.dataview.inline-field') as HTMLElement | null;
+      let inlineValue: string | null = null;
+      let valueDisplayEl: HTMLElement | null = null;
+      if (inlineFieldContainer) {
+        valueDisplayEl = inlineFieldContainer.querySelector('.dataview.inline-field-value');
+        if (valueDisplayEl) inlineValue = valueDisplayEl.textContent?.trim() || null;
+      }
+
+      const siblingValues: Record<string, string> = {};
+      const parentEl = inlineFieldContainer?.parentElement;
+      if (parentEl) {
+        const siblingFields = parentEl.querySelectorAll('.dataview.inline-field');
+        for (let si = 0; si < siblingFields.length; si++) {
+          const sf = siblingFields[si];
+          const sfKey = sf.querySelector('.dataview.inline-field-key');
+          const sfVal = sf.querySelector('.dataview.inline-field-value');
+          if (sfKey && sfVal) {
+            const k = (sfKey.getAttribute('data-dv-key') || sfKey.textContent?.trim() || '').toLowerCase();
+            siblingValues[k] = sfVal.textContent?.trim() || '';
+          }
+        }
+      }
+
+      const updateInlineDisplay = (newVal: string) => {
+        if (valueDisplayEl) valueDisplayEl.textContent = newVal;
+      };
+
+      if (prop.id === 'status' || prop.type === 'selector') {
+        const options = prop.type === 'selector' ? prop.options : undefined;
+        this.menuController.propertyRowService.openStatusSubmenu(anchor, entries, updateInlineDisplay, options, undefined, inlineValue || undefined);
+      } else if (prop.id === 'priority') {
+        this.menuController.propertyRowService.openPrioritySubmenu(anchor, entries, updateInlineDisplay, undefined, inlineValue || undefined);
+      } else if (prop.type === 'datetime') {
+        const estimateRaw = siblingValues['timeestimate'] || null;
+        const allDayRaw = siblingValues['allday'] || null;
+        this.menuController.openScheduledModal(
+          entries, prop.key, inlineValue, updateInlineDisplay,
+          estimateRaw ? parseFloat(estimateRaw) || 0 : undefined,
+          allDayRaw === 'true' || undefined,
+        );
+      } else if (prop.id === 'folder' || prop.type === 'folder') {
+        this.menuController.propertyRowService.openTypeSubmenu(anchor, entries);
+      } else if (prop.type === 'recurrence') {
+        this.menuController.openRecurrenceModalNative(entries);
+      }
+    }, { capture: true });
+
+    this.registerEvent(this.app.workspace.on('layout-change', () => this.scheduleHiddenInlineFieldRefresh({ retry: false })));
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
+      this.syncInlineFieldVisibilityObserver();
+      this.scheduleHiddenInlineFieldRefresh({ retry: true });
+    }));
+    this.registerEvent(this.app.metadataCache.on('changed', (file) => {
+      const active = this.app.workspace.getActiveFile();
+      if (active instanceof TFile && file instanceof TFile && file.path === active.path) {
+        this.scheduleHiddenInlineFieldRefresh({ retry: false });
+      }
+    }));
+    this.app.workspace.onLayoutReady(() => {
+      this.scheduleHiddenInlineFieldRefresh({ retry: true });
+    });
+  }
+
+  private scheduleHiddenInlineFieldRefresh(opts: { retry: boolean }): void {
+    if (this.inlineFieldRefreshTimerId !== null) {
+      window.clearTimeout(this.inlineFieldRefreshTimerId);
+      this.inlineFieldRefreshTimerId = null;
+    }
+    if (this.inlineFieldRefreshRetryTimerId !== null) {
+      window.clearTimeout(this.inlineFieldRefreshRetryTimerId);
+      this.inlineFieldRefreshRetryTimerId = null;
+    }
+
+    const run = () => {
+      this.inlineFieldRefreshTimerId = null;
+      this.hideHiddenInlineFields();
+      if (opts.retry) {
+        this.inlineFieldRefreshRetryTimerId = window.setTimeout(() => {
+          this.inlineFieldRefreshRetryTimerId = null;
+          this.hideHiddenInlineFields();
+        }, 120);
+      }
+    };
+
+    if (typeof window.requestAnimationFrame === 'function') {
+      this.inlineFieldRefreshTimerId = window.setTimeout(() => {
+        window.requestAnimationFrame(run);
+      }, 0);
+    } else {
+      this.inlineFieldRefreshTimerId = window.setTimeout(run, 0);
+    }
+  }
+
+  private syncInlineFieldVisibilityObserver(): void {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const contentRoot = activeView?.contentEl as HTMLElement | undefined;
+    const nextRoot = contentRoot?.querySelector<HTMLElement>('.cm-scroller')
+      || contentRoot?.querySelector<HTMLElement>('.markdown-preview-view')
+      || contentRoot
+      || null;
+
+    if (this.inlineFieldObservedRoot === nextRoot) return;
+
+    if (this.inlineFieldMutationObserver) {
+      this.inlineFieldMutationObserver.disconnect();
+      this.inlineFieldMutationObserver = null;
+    }
+
+    if (this.inlineFieldScrollRoot) {
+      this.inlineFieldScrollRoot.removeEventListener('scroll', this.inlineFieldScrollListener as EventListener);
+      this.inlineFieldScrollRoot = null;
+    }
+
+    this.inlineFieldObservedRoot = nextRoot;
+    if (!nextRoot) return;
+
+    this.inlineFieldMutationObserver = new MutationObserver(() => {
+      this.scheduleHiddenInlineFieldRefresh({ retry: true });
+    });
+    this.inlineFieldMutationObserver.observe(nextRoot, {
+      childList: true,
+      subtree: true,
+    });
+
+    const scrollRoot = contentRoot?.querySelector<HTMLElement>('.cm-scroller')
+      || contentRoot?.querySelector<HTMLElement>('.markdown-preview-view')
+      || nextRoot;
+    this.inlineFieldScrollRoot = scrollRoot;
+    scrollRoot.addEventListener('scroll', this.inlineFieldScrollListener as EventListener, { passive: true });
+  }
+
+  private inlineFieldScrollListener = (): void => {
+    this.scheduleHiddenInlineFieldRefresh({ retry: true });
+  };
+
+  private hideHiddenInlineFields(): void {
+    const allowedKeys = new Set<string>();
+    for (const prop of this.settings.properties || []) {
+      if (prop.key) allowedKeys.add(prop.key.toLowerCase());
+    }
+
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const scopeRoot = activeView?.contentEl || document.body;
+    const fields = scopeRoot.querySelectorAll('.dataview.inline-field');
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i] as HTMLElement;
+      const keyEl = field.querySelector('.dataview.inline-field-key') as HTMLElement | null;
+      const standalone = field.querySelector('.dataview.inline-field-standalone-value') as HTMLElement | null;
+      let dvKey = '';
+      if (keyEl) {
+        dvKey = (keyEl.getAttribute('data-dv-key') || '').toLowerCase();
+      } else if (standalone) {
+        dvKey = (standalone.getAttribute('data-dv-key') || '').toLowerCase();
+      }
+      if (dvKey && allowedKeys.has(dvKey)) {
+        field.setAttribute('data-tps-visible', 'true');
+      } else if (dvKey) {
+        field.removeAttribute('data-tps-visible');
+      }
+    }
   }
 
   onunload(): void {
     this.workspaceRibbonService?.teardown();
     delete (this as any).api;
+    if (this.inlineFieldRefreshTimerId !== null) {
+      window.clearTimeout(this.inlineFieldRefreshTimerId);
+      this.inlineFieldRefreshTimerId = null;
+    }
+    if (this.inlineFieldRefreshRetryTimerId !== null) {
+      window.clearTimeout(this.inlineFieldRefreshRetryTimerId);
+      this.inlineFieldRefreshRetryTimerId = null;
+    }
+    if (this.inlineFieldMutationObserver) {
+      this.inlineFieldMutationObserver.disconnect();
+      this.inlineFieldMutationObserver = null;
+    }
+    if (this.inlineFieldScrollRoot) {
+      this.inlineFieldScrollRoot.removeEventListener('scroll', this.inlineFieldScrollListener as EventListener);
+      this.inlineFieldScrollRoot = null;
+    }
+    this.inlineFieldObservedRoot = null;
     if (this.restoreCanvasOpenGuard) {
       this.restoreCanvasOpenGuard();
       this.restoreCanvasOpenGuard = null;
-    }
-    if (this.restoreProcessFrontmatterPatch) {
-      this.restoreProcessFrontmatterPatch();
-      this.restoreProcessFrontmatterPatch = null;
     }
     if (this.restoreMenuPatch) {
       this.restoreMenuPatch();
@@ -399,6 +664,7 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.persistentMenuManager?.detach();
     this.recurrenceService?.cleanup();
     this.taskCheckboxHandler?.dispose();
+    this.timeTrackingService?.detach();
     this.inlineTaskSubtaskService?.detach();
     this.linkedSubitemCheckboxService?.detach();
     this.stopArchiveTagAutomation();
@@ -418,6 +684,10 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     if (!this.settings.archiveFolderPath && legacyArchiveFolder) {
       this.settings.archiveFolderPath = legacyArchiveFolder;
     }
+    const storedArchiveMode = typeof loaded?.archiveFolderMode === 'string' ? loaded.archiveFolderMode : null;
+    const legacyArchiveMode = loaded?.archiveUseDailyFolder === true ? 'daily' : 'none';
+    this.settings.archiveFolderMode = normalizeArchiveFolderMode(storedArchiveMode ?? legacyArchiveMode);
+    this.settings.archiveUseDailyFolder = this.settings.archiveFolderMode === 'daily';
     if (
       this.settings.checklistPromotionBehavior !== 'remove' &&
       this.settings.checklistPromotionBehavior !== 'complete-and-link' &&
@@ -463,12 +733,12 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.settings.linkedSubitemCheckboxMappings = this.normalizeStrictLinkedSubitemMappings(
       this.settings.linkedSubitemCheckboxMappings
         .map((entry) => ({
-        checkboxState: String(entry?.checkboxState || '').trim(),
+        checkboxState: String(entry?.checkboxState || '').trim() === '[\\]' ? '[/]' : String(entry?.checkboxState || '').trim(),
         statuses: Array.isArray(entry?.statuses)
           ? entry.statuses.map((value) => String(value || '').trim()).filter(Boolean)
           : [],
         toggleTargetStatus: String(entry?.toggleTargetStatus || '').trim() || undefined,
-        icon: String(entry?.icon || '').trim() || undefined,
+        icon: String(entry?.icon || '').trim() === 'slash' ? 'loader' : String(entry?.icon || '').trim() || undefined,
         label: String(entry?.label || '').trim() || undefined,
       }))
       .filter((entry) => entry.checkboxState && entry.statuses.length > 0),
@@ -476,13 +746,71 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     if (this.settings.linkedSubitemCheckboxMappings.length === 0) {
       this.settings.linkedSubitemCheckboxMappings = this.getStrictLinkedSubitemMappings();
     }
+    this.adoptCompanionNavigatorRuleSettingsIfNeeded();
     logger.setLoggingEnabled(this.settings.enableLogging);
+  }
+
+  private adoptCompanionNavigatorRuleSettingsIfNeeded(): void {
+    const companion: any =
+      getPluginById(this.app, 'tps-notebook-navigator-companion') ??
+      (this.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
+    const companionSettings = companion?.settings as Partial<NotebookNavigatorCompanionSettings> | undefined;
+    if (!companionSettings) return;
+
+    const shouldAdopt = (!this.settings.notebookNavigatorRules?.length && Array.isArray(companionSettings.rules) && companionSettings.rules.length > 0)
+      || (!this.settings.notebookNavigatorHideRules?.length && Array.isArray(companionSettings.hideRules) && companionSettings.hideRules.length > 0)
+      || (!this.settings.notebookNavigatorSmartSort?.buckets?.length && companionSettings.smartSort?.buckets?.length);
+    if (!shouldAdopt) return;
+
+    this.settings.notebookNavigatorIconField = String(companionSettings.frontmatterIconField || this.settings.notebookNavigatorIconField || 'icon').trim() || 'icon';
+    this.settings.notebookNavigatorColorField = String(companionSettings.frontmatterColorField || this.settings.notebookNavigatorColorField || 'color').trim() || 'color';
+    this.settings.notebookNavigatorWriteBasesIconFields = companionSettings.writeBasesIconFields === true;
+    this.settings.notebookNavigatorBasesIconMarkdownField = String(companionSettings.basesIconMarkdownField || this.settings.notebookNavigatorBasesIconMarkdownField || 'iconDisplay').trim() || 'iconDisplay';
+    this.settings.notebookNavigatorBasesIconUriField = String(companionSettings.basesIconUriField || this.settings.notebookNavigatorBasesIconUriField || 'iconDisplayUri').trim() || 'iconDisplayUri';
+    this.settings.notebookNavigatorNoteCheckboxIconColor = String(companionSettings.noteCheckboxIconColor || this.settings.notebookNavigatorNoteCheckboxIconColor || '').trim();
+    this.settings.notebookNavigatorClearIconWhenNoMatch = companionSettings.clearIconWhenNoMatch === true;
+    this.settings.notebookNavigatorClearColorWhenNoMatch = companionSettings.clearColorWhenNoMatch === true;
+    this.settings.notebookNavigatorAutoRemoveHiddenWhenNoMatch = companionSettings.autoRemoveHiddenWhenNoMatch !== false;
+    this.settings.notebookNavigatorFrontmatterWriteExclusions = String(companionSettings.frontmatterWriteExclusions || this.settings.notebookNavigatorFrontmatterWriteExclusions || '');
+    this.settings.notebookNavigatorRules = Array.isArray(companionSettings.rules) ? companionSettings.rules : this.settings.notebookNavigatorRules;
+    this.settings.notebookNavigatorHideRules = Array.isArray(companionSettings.hideRules) ? companionSettings.hideRules : this.settings.notebookNavigatorHideRules;
+    this.settings.notebookNavigatorSmartSort = companionSettings.smartSort || this.settings.notebookNavigatorSmartSort;
+    logger.log('[TPS GCM] Adopted Notebook Navigator rule settings from Companion');
   }
 
   private getControllerArchiveFolderPath(): string {
     const plugin = getPluginById(this.app, 'tps-controller') as any;
     const raw = typeof plugin?.settings?.archiveFolder === 'string' ? plugin.settings.archiveFolder : '';
     return raw.trim();
+  }
+
+  getInitialSyncReadiness(): { ready: boolean; reason: string } {
+    const controller = getPluginById(this.app, 'tps-controller') as any;
+    const api = controller?.api;
+    const readiness = api?.getSyncReadiness?.();
+    if (readiness && typeof readiness.ready === 'boolean') {
+      return {
+        ready: readiness.ready,
+        reason: String(readiness.reason || (readiness.ready ? 'ready' : 'sync unsettled')),
+      };
+    }
+    if (typeof api?.isSyncSettled === 'function') {
+      const ready = !!api.isSyncSettled();
+      return { ready, reason: ready ? 'ready' : 'sync unsettled' };
+    }
+    return { ready: true, reason: 'no controller sync gate' };
+  }
+
+  isInitialSyncSettled(): boolean {
+    return this.getInitialSyncReadiness().ready;
+  }
+
+  notifySyncBlockedAction(action: string): void {
+    const now = Date.now();
+    if (now - this.lastSyncBlockedNoticeAt < 5000) return;
+    this.lastSyncBlockedNoticeAt = now;
+    const readiness = this.getInitialSyncReadiness();
+    new Notice(`Deferred ${action} until sync settles: ${readiness.reason}.`);
   }
 
   getArchiveFolderPath(): string {
@@ -499,6 +827,8 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     logger.setLoggingEnabled(this.settings.enableLogging);
+    this.settings.archiveFolderMode = normalizeArchiveFolderMode(this.settings.archiveFolderMode);
+    this.settings.archiveUseDailyFolder = this.settings.archiveFolderMode === 'daily';
     this.workspaceRibbonService?.refresh();
     this.startArchiveTagAutomation();
     this.debouncedSave();
@@ -838,26 +1168,6 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       if (typeof originalRevealLeaf === 'function') {
         workspace.revealLeaf = originalRevealLeaf;
       }
-    };
-  }
-
-  private installProcessFrontmatterPatch(): () => void {
-    const fileManager = this.app.fileManager as any;
-    const original = fileManager.processFrontMatter?.bind(fileManager);
-    if (typeof original !== 'function') {
-      return () => {};
-    }
-
-    const plugin = this;
-    fileManager.processFrontMatter = async function (
-      file: TFile,
-      mutator: (frontmatter: Record<string, unknown>) => void | Promise<void>,
-    ) {
-      return await plugin.frontmatterMutationService.process(file, mutator);
-    };
-
-    return () => {
-      fileManager.processFrontMatter = original;
     };
   }
 

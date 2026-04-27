@@ -155,15 +155,24 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "TPS Auto Base Embed" });
 
-    const createMainCategory = (title: string, defaultOpen = true): HTMLElement => {
-      const details = containerEl.createEl('details', { cls: 'tps-settings-main-category' });
-      if (defaultOpen) details.setAttr('open', 'true');
-      const summary = details.createEl('summary', { cls: 'tps-settings-main-summary' });
-      summary.createEl('h3', { text: title });
-      return details.createDiv({ cls: 'tps-settings-main-content' });
+    const createMainCategory = (title: string, description?: string): HTMLElement => {
+      const group = containerEl.createDiv({ cls: 'tps-settings-flat-group' });
+      group.style.marginBottom = '18px';
+      group.style.padding = '14px 16px';
+      group.style.border = '1px solid var(--background-modifier-border)';
+      group.style.borderRadius = '12px';
+      group.style.background = 'var(--background-secondary)';
+      group.createEl('h3', { text: title });
+      if (description) {
+        group.createEl('p', { text: description, cls: 'setting-item-description' });
+      }
+      return group;
     };
 
-    const featuresCategory = createMainCategory('Features');
+    const featuresCategory = createMainCategory('Display and Interaction', 'How embeds appear, expand, and behave inside notes and canvases.');
+    const automationCategory = createMainCategory('Rendering', 'Where and how embeds are mounted in supported surfaces.');
+    const matchingRulesCategory = createMainCategory('Rules', 'Which bases embed into which files, plus exclusions and matching logic.');
+    const maintenanceCategory = createMainCategory('Maintenance', 'Utility actions and lower-frequency diagnostic controls.');
 
     new Setting(featuresCategory)
       .setName("Enable auto base embed")
@@ -202,35 +211,21 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
       );
 
     new Setting(featuresCategory)
-      .setName("Render mode")
-      .setDesc("Choose between the current floating overlay and a virtual inline embed rendered inside the note view.")
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("floating", "Floating overlay")
-          .addOption("inline", "Inline virtual embed")
-          .setValue(this.plugin.settings.renderMode)
-          .onChange(async (value: "floating" | "inline") => {
-            this.plugin.settings.renderMode = value;
+      .setName("Debug logging")
+      .setDesc("Enable TPS Auto Base Embed console messages for scroll, reuse, mount, and fallback diagnostics.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(!!this.plugin.settings.debugLogging)
+          .onChange(async (value) => {
+            this.plugin.settings.debugLogging = value;
             await this.plugin.saveSettings();
-            this.display();
           })
       );
 
-    if (this.plugin.settings.renderMode === "inline") {
-      new Setting(featuresCategory)
-        .setName("Inline placement")
-        .setDesc("Choose where the inline embed is inserted in markdown notes.")
-        .addDropdown((dropdown) =>
-          dropdown
-            .addOption("after-title", "After title")
-            .addOption("after-content", "After content")
-            .setValue(this.plugin.settings.inlinePlacement)
-            .onChange(async (value: "after-title" | "after-content") => {
-              this.plugin.settings.inlinePlacement = value;
-              await this.plugin.saveSettings();
-            })
-        );
-    }
+    automationCategory.createEl("p", {
+      text: "Render placement is now configured on each base embed rule, so different bases can appear after the title, after the content, or as a hovering overlay in the same note.",
+      cls: "setting-item-description",
+    });
 
     new Setting(featuresCategory)
       .setName("Default expansion state")
@@ -256,16 +251,27 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    const rulesCategory = createMainCategory('Rules');
-    rulesCategory.createEl("p", {
+    new Setting(featuresCategory)
+      .setName("Always expanded (no collapse header)")
+      .setDesc("Remove the collapse header entirely. Bases are always embedded and expanded with no way to collapse them.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.alwaysExpanded)
+          .onChange(async (value) => {
+            this.plugin.settings.alwaysExpanded = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    matchingRulesCategory.createEl("p", {
       text: "Define which bases to embed and under what conditions. Rules are evaluated in order; all matching rules will be embedded.",
       cls: "setting-item-description"
     });
 
-    const rulesContainer = rulesCategory.createDiv({ cls: "tps-auto-base-embed-rules" });
+    const rulesContainer = matchingRulesCategory.createDiv({ cls: "tps-auto-base-embed-rules" });
     this.renderRules(rulesContainer);
 
-    new Setting(rulesCategory)
+    new Setting(matchingRulesCategory)
       .setName("Add new rule")
       .addButton((button) =>
         button
@@ -278,6 +284,9 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
                 basePath: file.path,
                 enabled: true,
                 conditions: {},
+                renderPlacement: this.plugin.settings.renderMode === "inline"
+                  ? this.plugin.settings.inlinePlacement
+                  : "floating",
               };
               this.plugin.settings.rules.push(newRule);
               this.expandedRules.add(newRule.id);
@@ -287,7 +296,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(rulesCategory)
+    new Setting(matchingRulesCategory)
       .setName("Exclude files")
       .setDesc("Comma or newline separated file paths to never embed in.")
       .addTextArea((text) =>
@@ -300,7 +309,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    rulesCategory.createEl("p", {
+    matchingRulesCategory.createEl("p", {
       text: "Note: the Base is rendered using the current note as the source path, so filters like this.file.name resolve correctly.",
       cls: "setting-item-description",
     });
@@ -323,11 +332,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
     if (!this.hasRenderedSettings) {
       detailsEls.forEach((detailsEl) => {
         const details = detailsEl as HTMLDetailsElement;
-        if (details.classList.contains("tps-settings-main-category")) {
-          details.setAttr("open", "true");
-        } else {
-          details.removeAttribute("open");
-        }
+        details.removeAttribute("open");
       });
       this.hasRenderedSettings = true;
       containerEl.scrollTop = 0;
@@ -374,7 +379,10 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
       const summary = this.getConditionSummary(rule.conditions);
       if (summary) {
         const summaryEl = header.createDiv({ cls: "tps-auto-base-embed-rule-summary" });
-        summaryEl.textContent = summary;
+        summaryEl.textContent = `${this.getRenderPlacementSummary(rule)} ${summary}`;
+      } else {
+        const summaryEl = header.createDiv({ cls: "tps-auto-base-embed-rule-summary" });
+        summaryEl.textContent = this.getRenderPlacementSummary(rule);
       }
 
       const actions = header.createDiv({ cls: "tps-auto-base-embed-rule-actions" });
@@ -450,6 +458,22 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           .onChange(async (value: "default" | "expanded" | "collapsed") => {
             rule.initialState = value;
             await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(container)
+      .setName("Render placement")
+      .setDesc("Choose where this specific base embed appears when the rule matches.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("floating", "Hovering overlay")
+          .addOption("after-title", "After title")
+          .addOption("after-content", "After content")
+          .setValue(rule.renderPlacement || "floating")
+          .onChange(async (value: "floating" | "after-title" | "after-content") => {
+            rule.renderPlacement = value;
+            await this.plugin.saveSettings();
+            this.display();
           })
       );
 
@@ -645,5 +669,16 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
       parts.push(conditions.propertyNotEquals.map((p) => `${p.key}≠${p.value}`).join(", "));
     }
     return parts.length > 0 ? `(${parts.join("; ")})` : "";
+  }
+
+  private getRenderPlacementSummary(rule: BaseEmbedRule): string {
+    switch (rule.renderPlacement || "floating") {
+      case "after-title":
+        return "after title";
+      case "after-content":
+        return "after content";
+      default:
+        return "hovering";
+    }
   }
 }

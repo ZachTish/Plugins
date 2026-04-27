@@ -1,4 +1,4 @@
-﻿import { Plugin, Notice, Platform, TFile, WorkspaceLeaf, moment, normalizePath } from "obsidian";
+import { Plugin, Notice, Platform, TFile, WorkspaceLeaf, moment, normalizePath } from "obsidian";
 import { DeviceRoleManager, DeviceRole } from "./device-role-manager";
 import { TPSControllerSettings, DEFAULT_CONTROLLER_SETTINGS } from "./types";
 import { AutoCreateService } from "./services/auto-create-service";
@@ -17,6 +17,8 @@ import { CalendarAutomationService } from "./services/calendar-automation";
 import { CompanionAutomationService } from "./services/companion-automation";
 import { migrateSettingsFromPlugins } from "./services/migration-service";
 import { ExternalCalendarDuplicateCleanupService } from "./services/external-calendar-duplicate-cleanup-service";
+import { CheckboxPatternService, CheckboxPatterns } from "./services/checkbox-pattern-service";
+import { EditorDropLinkService } from "./services/editor-drop-link-service";
 
 // ============================================================================
 // Plugin API Types
@@ -67,9 +69,11 @@ export default class TPSControllerPlugin extends Plugin {
 
     // Feature services
     private overdueService: OverdueService;
-    private calendarAutomation: CalendarAutomationService;
+    calendarAutomation: CalendarAutomationService;
     private companionAutomation: CompanionAutomationService;
     private externalCalendarDuplicateCleanup: ExternalCalendarDuplicateCleanupService;
+    private checkboxPatternService: CheckboxPatternService;
+    private editorDropLinkService: EditorDropLinkService;
 
     // Reminder interval
     private reminderIntervalId: number | null = null;
@@ -81,6 +85,8 @@ export default class TPSControllerPlugin extends Plugin {
     private metadataIndexResolved = false;
     private calendarSyncSettledAt = Date.now() + 20_000;
     private readonly calendarSyncSettleWindowMs = 20_000;
+    private startupSyncGuardEndsAt = Date.now() + 60_000;
+    private readonly startupSyncGuardWindowMs = 60_000;
 
     async onload() {
         logger.log(" TPS-Controller loading...");
@@ -115,7 +121,10 @@ export default class TPSControllerPlugin extends Plugin {
             this.externalCalendarService,
             () => this.settings,
             () => this.getCalendarPlugin(),
-            () => this.runRecurrenceMaintenanceTick(),
+            async () => {
+                await this.runRecurrenceMaintenanceTick();
+                await this.runPostSyncDuplicateCleanup();
+            },
             () => this.getCalendarSyncReadiness()
         );
         this.companionAutomation = new CompanionAutomationService(
@@ -124,6 +133,9 @@ export default class TPSControllerPlugin extends Plugin {
             () => this.deviceRoleManager.isController()
         );
         this.externalCalendarDuplicateCleanup = new ExternalCalendarDuplicateCleanupService(this.app, () => this.settings);
+        this.checkboxPatternService = new CheckboxPatternService();
+        this.editorDropLinkService = new EditorDropLinkService(this.app, () => this.settings);
+        this.editorDropLinkService.register(this);
 
         // Commands
         this.addCommand({ id: "set-device-role-controller", name: "Set as Controller (Automation Source)", callback: () => { this.deviceRoleManager.setRole("controller"); new Notice("Device set to CONTROLLER."); } });
@@ -166,6 +178,10 @@ export default class TPSControllerPlugin extends Plugin {
             getReminders: () => this.settings.reminders || [],
             getOverdueItems: () => this.getOverdueItems(),
             snoozeFile: (file: TFile, minutes: number) => this.snoozeFile(file, minutes),
+            getSyncReadiness: () => this.getCalendarSyncReadiness(),
+            isSyncSettled: () => this.getCalendarSyncReadiness().ready,
+            checkboxPatterns: CheckboxPatterns,
+            checkboxPatternService: this.checkboxPatternService,
         };
         (window as any).TPS = { controller: (this as any).api };
 
@@ -209,6 +225,14 @@ export default class TPSControllerPlugin extends Plugin {
         delete (window as any).TPS;
     }
 
+    public async countTaskListEntriesForCalendar(taskListPath: string, calendarUrl: string): Promise<number> {
+        return await this.autoCreateService.countTaskListEntriesForCalendar(taskListPath, calendarUrl);
+    }
+
+    public async migrateTaskListCalendarPath(calendarUrl: string, oldPath: string, newPath: string): Promise<number> {
+        return await this.autoCreateService.migrateTaskListCalendarPath(calendarUrl, oldPath, newPath);
+    }
+
     // ========================================================================
     // Settings
     // ========================================================================
@@ -234,6 +258,9 @@ export default class TPSControllerPlugin extends Plugin {
         } else {
             this.settings.alertState = {};
         }
+        this.settings.archiveFolder = String(this.settings.archiveFolder || DEFAULT_CONTROLLER_SETTINGS.archiveFolder).trim() || DEFAULT_CONTROLLER_SETTINGS.archiveFolder;
+        this.settings.archiveNotePath = String(this.settings.archiveNotePath || DEFAULT_CONTROLLER_SETTINGS.archiveNotePath).trim() || DEFAULT_CONTROLLER_SETTINGS.archiveNotePath;
+        this.settings.notificationPresentationMode = this.settings.notificationPresentationMode === "modal" ? "modal" : "sidebar";
         this.sanitizeFrontmatterKeySettings();
         logger.setLoggingEnabled(this.settings.enableLogging);
     }
@@ -260,6 +287,9 @@ export default class TPSControllerPlugin extends Plugin {
         s.titleKey = normalizeKey(s.titleKey, d.titleKey);
         s.statusKey = normalizeKey(s.statusKey, d.statusKey);
         s.previousStatusKey = normalizeKey(s.previousStatusKey, d.previousStatusKey);
+        s.scheduledDateProperty = normalizeKey(s.scheduledDateProperty, d.scheduledDateProperty);
+        s.scheduledStartProperty = normalizeKey(s.scheduledStartProperty, d.scheduledStartProperty);
+        s.scheduledEndProperty = normalizeKey(s.scheduledEndProperty, d.scheduledEndProperty);
         s.startProperty = normalizeKey(s.startProperty, d.startProperty);
         s.endProperty = normalizeKey(s.endProperty, d.endProperty);
 
@@ -268,6 +298,9 @@ export default class TPSControllerPlugin extends Plugin {
         s.titleKey = ensureNotIdentity(s.titleKey, d.titleKey);
         s.statusKey = ensureNotIdentity(s.statusKey, d.statusKey);
         s.previousStatusKey = ensureNotIdentity(s.previousStatusKey, d.previousStatusKey);
+        s.scheduledDateProperty = ensureNotIdentity(s.scheduledDateProperty, d.scheduledDateProperty);
+        s.scheduledStartProperty = ensureNotIdentity(s.scheduledStartProperty, d.scheduledStartProperty);
+        s.scheduledEndProperty = ensureNotIdentity(s.scheduledEndProperty, d.scheduledEndProperty);
         s.startProperty = ensureNotIdentity(s.startProperty, d.startProperty);
         s.endProperty = ensureNotIdentity(s.endProperty, d.endProperty);
 
@@ -323,6 +356,8 @@ export default class TPSControllerPlugin extends Plugin {
     }
 
     private enterControllerMode() {
+        this.startupSyncGuardEndsAt = Date.now() + this.startupSyncGuardWindowMs;
+        this.calendarSyncSettledAt = Date.now() + this.calendarSyncSettleWindowMs;
         new Notice("Controller mode activated. Running background automation.", 3000);
         this.startAllAutomation();
     }
@@ -368,6 +403,9 @@ export default class TPSControllerPlugin extends Plugin {
     }
 
     private deferCalendarSyncSettlement(reason: string): void {
+        if (Date.now() > this.startupSyncGuardEndsAt) {
+            return;
+        }
         const nextReadyAt = Date.now() + this.calendarSyncSettleWindowMs;
         if (nextReadyAt > this.calendarSyncSettledAt) {
             this.calendarSyncSettledAt = nextReadyAt;
@@ -472,8 +510,12 @@ export default class TPSControllerPlugin extends Plugin {
         }
     }
 
-    private async runReminderCheck(): Promise<void> {
-        if (!this.settings.enableReminders) return;
+    async runReminderCheck(): Promise<void> {
+        if (!this.settings.enableReminders) {
+            logger.log("[TPS Controller] runReminderCheck skipped: enableReminders is false");
+            return;
+        }
+        logger.log("[TPS Controller] runReminderCheck starting...");
         const result = await this.reminderEngine.evaluateReminders(this.settings);
         if (result.stateChanged) this.scheduleReminderStateSave();
         if (!result.notifications.length) return;
@@ -634,6 +676,17 @@ export default class TPSControllerPlugin extends Plugin {
             await checkMissing.call(gcm.bulkEditService);
         } catch (error) {
             logger.error(" Recurrence maintenance tick failed", error);
+        }
+    }
+
+    private async runPostSyncDuplicateCleanup(): Promise<void> {
+        try {
+            const result = await this.externalCalendarDuplicateCleanup.run();
+            if (result.archivedCount > 0) {
+                logger.log(`[TPS Controller] Post-sync dedup: archived ${result.archivedCount} duplicates, found ${result.groupsFound} groups`);
+            }
+        } catch (error) {
+            logger.warn('[TPS Controller] Post-sync duplicate cleanup failed:', error);
         }
     }
 

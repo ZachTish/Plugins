@@ -1,7 +1,11 @@
 import { normalizePath, TFile } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
 import * as logger from "../logger";
-import { extractDateSuffix, stripDateSuffix, FULL_DATE_REGEX } from '../utils/date-suffix-utils';
+import { extractDateSuffix, stripDateAndTimeSuffix, stripDateSuffix, FULL_DATE_REGEX, TIME_SUFFIX_REGEX } from '../utils/date-suffix-utils';
+import { mergeNormalizedTags } from '../utils/tag-utils';
+import { setValueCaseInsensitive } from '../core/record-utils';
+import { parseDateFromFilename } from '../../../TPS-Calendar-Base (Dev)/src/utils/daily-file-date';
+import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
 
 /**
  * Handles automatic file naming based on title and scheduled date
@@ -10,7 +14,6 @@ export class FileNamingService {
     plugin: TPSGlobalContextMenuPlugin;
     private processingFiles: Set<string> = new Set();
     private recentFolderPathWrites: Map<string, { value: string; until: number }> = new Map();
-    private inferredDailyNoteFormat: string | null = null;
 
     constructor(plugin: TPSGlobalContextMenuPlugin) {
         this.plugin = plugin;
@@ -24,26 +27,29 @@ export class FileNamingService {
     ];
 
     public getDailyNoteDateFormat(): string {
-        const configured = String((this.plugin as any)?.settings?.dailyNoteDateFormat || '').trim();
+        return getDailyNoteResolver(this.plugin.app, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        }).displayFormat;
+    }
+
+    /**
+     * Returns the moment.js format string used when appending a date suffix to
+     * filenames.  If the user has configured `dateSuffixFormat` in settings that
+     * value is used; otherwise it falls back to `getDailyNoteDateFormat()`.
+     */
+    public getDateSuffixFormat(): string {
+        const configured = String((this.plugin as any)?.settings?.dateSuffixFormat || '').trim();
         if (configured) return configured;
-        const dailyNotesFormat = String((this.plugin.app as any)?.internalPlugins?.plugins?.["daily-notes"]?.instance?.options?.format || '').trim();
-        if (dailyNotesFormat) return dailyNotesFormat;
-        if (!this.inferredDailyNoteFormat) {
-            const hasPrettyDaily = this.plugin.app.vault.getFiles().some((file) =>
-                /\/Notes\/[A-Za-z]+,\s+[A-Za-z]+\s+\d{1,2}(st|nd|rd|th)\s+\d{4}\.md$/.test(file.path),
-            );
-            this.inferredDailyNoteFormat = hasPrettyDaily ? 'dddd, MMMM Do YYYY' : 'YYYY-MM-DD';
-        }
-        return this.inferredDailyNoteFormat;
+        return this.getDailyNoteDateFormat();
     }
 
     public isDateOnlyBasename(value: string): boolean {
         const basename = String(value || '').trim();
         if (!basename) return false;
         if (FULL_DATE_REGEX.test(basename)) return true;
-        const preferred = this.getDailyNoteDateFormat();
-        const parsed = window.moment(basename, [preferred, "YYYY-MM-DD", "YYYY_MM_DD", "YYYYMMDD"], true);
-        return !!parsed?.isValid?.() && parsed.isValid();
+        return getDailyNoteResolver(this.plugin.app, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        }).isDailyNoteBasename(basename);
     }
 
     private titleMatchesScheduledDate(title: string, scheduledDate: any): boolean {
@@ -54,27 +60,43 @@ export class FileNamingService {
         const preferredFormat = this.getDailyNoteDateFormat();
         const expectedIso = scheduledDate.format('YYYY-MM-DD');
         const expectedPreferred = scheduledDate.format(preferredFormat);
+        const configuredSuffix = scheduledDate.format(this.getDateSuffixFormat());
+        const sanitizedConfiguredSuffix = this.sanitizeFilename(configuredSuffix);
 
         const lowered = normalizedTitle.toLowerCase();
         if (lowered === expectedIso.toLowerCase() || lowered === expectedPreferred.toLowerCase()) return true;
-        if (lowered.includes(expectedIso.toLowerCase()) || lowered.includes(expectedPreferred.toLowerCase())) return true;
+        if (lowered === configuredSuffix.toLowerCase() || lowered === sanitizedConfiguredSuffix.toLowerCase()) return true;
 
         const parsed = window.moment(
             normalizedTitle,
-            [preferredFormat, "YYYY-MM-DD", "dddd, MMMM Do YYYY", "MMMM D, YYYY", "MMM D, YYYY"],
+            [this.getDateSuffixFormat(), preferredFormat, "YYYY-MM-DD", "dddd, MMMM Do YYYY", "ddd, MMM D YYYY", "MMMM D, YYYY", "MMM D, YYYY"],
             true,
         );
         return !!parsed?.isValid?.() && parsed.isValid() && parsed.format('YYYY-MM-DD') === expectedIso;
     }
 
+    private getScheduledSuffixCandidates(scheduledDate: any): string[] {
+        if (!scheduledDate || !scheduledDate.isValid || !scheduledDate.isValid()) return [];
+
+        const rawCandidates = [
+            scheduledDate.format(this.getDateSuffixFormat()),
+            scheduledDate.format('YYYY-MM-DD'),
+        ].map((value) => String(value || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+
+        const candidates = new Set<string>();
+        for (const candidate of rawCandidates) {
+            candidates.add(candidate);
+            candidates.add(this.sanitizeFilename(candidate));
+        }
+
+        return Array.from(candidates).filter(Boolean);
+    }
+
     private stripKnownDateSuffix(value: string, scheduledDate: any): string {
-        let stripped = stripDateSuffix(String(value || '')).replace(/\s+/g, ' ').trim();
+        let stripped = stripDateAndTimeSuffix(String(value || '')).replace(/\s+/g, ' ').trim();
         if (!scheduledDate || !scheduledDate.isValid || !scheduledDate.isValid()) return stripped;
 
-        const candidates = [
-            scheduledDate.format(this.getDailyNoteDateFormat()),
-            scheduledDate.format('YYYY-MM-DD'),
-        ].map((v) => String(v || '').trim()).filter(Boolean);
+        const candidates = this.getScheduledSuffixCandidates(scheduledDate);
 
         for (const suffix of candidates) {
             const lowered = stripped.toLowerCase();
@@ -84,6 +106,10 @@ export class FileNamingService {
             }
         }
 
+        if (TIME_SUFFIX_REGEX.test(stripped)) {
+            stripped = stripped.replace(TIME_SUFFIX_REGEX, '').trim();
+        }
+
         return stripped;
     }
 
@@ -91,6 +117,7 @@ export class FileNamingService {
      * Process a file when it's opened - update filename and folder path
      */
     async processFileOnOpen(file: TFile, options: { bypassCreationGrace?: boolean } = {}): Promise<void> {
+        if (!this.plugin.isInitialSyncSettled()) return;
         if (!this.shouldProcess(file, options)) return;
         const liveFile = this.getLiveFile(file);
         if (!liveFile || !this.shouldProcess(liveFile, options)) return;
@@ -105,6 +132,13 @@ export class FileNamingService {
         this.processingFiles.add(lockKey);
 
         try {
+            if (!skipFrontmatterWrites && this.isDateOnlyBasename(liveFile.basename)) {
+                await this.plugin.frontmatterMutationService.process(liveFile, (frontmatter: any) => {
+                    const mergedTags = mergeNormalizedTags(frontmatter.tags, 'dailynote');
+                    setValueCaseInsensitive(frontmatter, 'tags', mergedTags);
+                });
+            }
+
             // Update folder path if enabled
             if (this.plugin.settings.autoSaveFolderPath && !skipFrontmatterWrites) {
                 await this._syncFolderPath(liveFile);
@@ -124,10 +158,6 @@ export class FileNamingService {
                 });
             }
 
-            // Populate daily note with scheduled items if applicable
-            if (this.plugin.settings.enableAutoPopulateDailyNotes && this.isDateOnlyBasename(liveFile.basename)) {
-                await this.plugin.noteOperationService.populateDailyNoteWithScheduledItems(liveFile);
-            }
         } catch (error) {
             logger.error('[TPS GCM] Error processing file on open:', error);
         } finally {
@@ -217,7 +247,7 @@ export class FileNamingService {
         try {
             logger.debug(`[FILE-DRAG] Writing folderPath to frontmatter: ${currentFolder}`);
             await this.plugin.bulkEditService.runSerializedFrontmatterWrite(liveFile, async () => {
-                await this.plugin.app.fileManager.processFrontMatter(liveFile, (frontmatter) => {
+                await this.plugin.frontmatterMutationService.process(liveFile, (frontmatter) => {
                     frontmatter.folderPath = currentFolder;
                     for (const key of Object.keys(frontmatter)) {
                         const normalized = String(key || '').trim().toLowerCase();
@@ -251,6 +281,7 @@ export class FileNamingService {
         file: TFile,
         options: { onlyIfTemplateDerived?: boolean; force?: boolean; bypassCreationGrace?: boolean } = {},
     ): Promise<void> {
+        if (!this.plugin.isInitialSyncSettled()) return;
         if (!options.force && !this.plugin.settings.autoSyncTitleFromFilename) {
             return;
         }
@@ -319,8 +350,18 @@ export class FileNamingService {
             const scheduled = fm.scheduled;
             let nextTitle = rawBasename;
 
-            // If the filename ends with a YYYY-MM-DD suffix, strip it from the title.
-            // This keeps the "title" canonical and allows the filename to carry the date.
+            const scheduledDate = scheduled ? window.moment(scheduled) : null;
+            if (scheduledDate?.isValid?.()) {
+                const strippedFromScheduledSuffix = this.stripKnownDateSuffix(rawBasename, scheduledDate);
+                if (strippedFromScheduledSuffix && strippedFromScheduledSuffix !== rawBasename) {
+                    nextTitle = strippedFromScheduledSuffix;
+                }
+            }
+
+            if (TIME_SUFFIX_REGEX.test(nextTitle)) {
+                nextTitle = nextTitle.replace(TIME_SUFFIX_REGEX, '').trim();
+            }
+
             const { base: before, dateStr } = extractDateSuffix(nextTitle);
             if (dateStr) {
 
@@ -355,7 +396,7 @@ export class FileNamingService {
                     return "skipped";
                 }
                 await this.plugin.bulkEditService.runSerializedFrontmatterWrite(targetFile, async () => {
-                    await this.plugin.app.fileManager.processFrontMatter(targetFile, (frontmatter) => {
+                    await this.plugin.frontmatterMutationService.process(targetFile, (frontmatter) => {
                         const existingTitleKeys = Object.keys(frontmatter).filter(
                             (key) => key.trim().toLowerCase() === 'title',
                         );
@@ -384,9 +425,185 @@ export class FileNamingService {
     }
 
     /**
+     * Batch-rename all scheduled notes and daily notes so their filenames use
+     * the currently detected daily-note date format.  Daily notes also get
+     * their frontmatter `title` updated to match the new filename.
+     */
+    async reformatDateSuffixesAcrossVault(): Promise<{ scanned: number; renamed: number; skipped: number; failed: number }> {
+        const allFiles = this.plugin.app.vault.getMarkdownFiles();
+        const currentFormat = this.getDailyNoteDateFormat();
+        const stats = { scanned: 0, renamed: 0, skipped: 0, failed: 0 };
+
+        // Use a lightweight filter that skips frontmatter-write exclusions.
+        // This is an explicit user command, not auto-processing, so exclusion
+        // patterns (which exist to prevent background churn) should not apply.
+        const isReformattable = (file: TFile): boolean => {
+            if (file.extension !== 'md') return false;
+            const baseName = String(file.basename || '').trim().toLowerCase();
+            if (baseName === '__type__' || baseName === '__root__') return false;
+            // Still respect folder exclusions (e.g. System/Templates)
+            if (this.plugin.settings.folderExclusions) {
+                const exclusions = this.plugin.settings.folderExclusions
+                    .split('\n')
+                    .map(e => e.trim())
+                    .filter(e => e.length > 0);
+                const normalizedPath = this.normalizeBasenameForCompare(file.path);
+                const normalizedBasename = this.normalizeBasenameForCompare(file.basename);
+                if (exclusions.some(pattern => this.plugin.matchesAutoFrontmatterExclusionPattern(normalizedPath, normalizedBasename, pattern))) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // --- Pass 1: Daily notes (date-only basenames) ---
+        const dailyNotes = allFiles.filter((file) => {
+            if (!isReformattable(file)) return false;
+            return this.isDateOnlyBasename(file.basename);
+        });
+
+        for (let i = 0; i < dailyNotes.length; i++) {
+            const file = dailyNotes[i];
+            stats.scanned += 1;
+
+            try {
+                const liveFile = this.getLiveFile(file);
+                if (!liveFile) { stats.skipped += 1; continue; }
+
+                const parsed = parseDateFromFilename(liveFile.basename, currentFormat);
+                if (!parsed || !parsed.isValid?.() || !parsed.isValid()) {
+                    stats.skipped += 1;
+                    continue;
+                }
+
+                const newBasename = parsed.format(currentFormat);
+                if (this.normalizeBasenameForCompare(liveFile.basename) === this.normalizeBasenameForCompare(newBasename)) {
+                    stats.skipped += 1;
+                    // Still sync title even if filename is already correct
+                    await this.syncTitleFromFilenameWithOptions(liveFile, { force: true, bypassCreationGrace: true });
+                    continue;
+                }
+
+                const safeBasename = this.sanitizeFilename(newBasename);
+                const newPath = liveFile.parent
+                    ? `${liveFile.parent.path}/${safeBasename}.md`
+                    : `${safeBasename}.md`;
+
+                if (normalizePath(newPath).toLowerCase() === normalizePath(liveFile.path).toLowerCase()) {
+                    stats.skipped += 1;
+                    continue;
+                }
+
+                const existing = this.plugin.app.vault.getAbstractFileByPath(newPath);
+                if (existing && existing !== liveFile) {
+                    logger.warn(`[TPS GCM] Skipping daily note rename — target exists: ${newPath}`);
+                    stats.skipped += 1;
+                    continue;
+                }
+
+                const previousPath = liveFile.path;
+                await this.plugin.app.fileManager.renameFile(liveFile, newPath);
+                logger.log(`[TPS GCM] Reformatted daily note: "${liveFile.basename}" → "${safeBasename}"`);
+                stats.renamed += 1;
+
+                // Update title to match new filename
+                const renamed = this.plugin.app.vault.getAbstractFileByPath(newPath);
+                if (renamed instanceof TFile) {
+                    await this.syncTitleFromFilenameWithOptions(renamed, { force: true, bypassCreationGrace: true });
+                }
+            } catch (error) {
+                logger.error(`[TPS GCM] Failed to reformat daily note: ${file.path}`, error);
+                stats.failed += 1;
+            }
+
+            if ((i + 1) % 50 === 0) await this.yieldToEventLoop();
+        }
+
+        // --- Pass 2: Scheduled notes (non-daily-note files with scheduled date) ---
+        const scheduledNotes = allFiles.filter((file) => {
+            if (!isReformattable(file)) return false;
+            if (this.isDateOnlyBasename(file.basename)) return false;
+            const cache = this.plugin.app.metadataCache.getFileCache(file);
+            return !!cache?.frontmatter?.scheduled;
+        });
+
+        for (let i = 0; i < scheduledNotes.length; i++) {
+            const file = scheduledNotes[i];
+            stats.scanned += 1;
+
+            try {
+                const liveFile = this.getLiveFile(file);
+                if (!liveFile) { stats.skipped += 1; continue; }
+
+                const cache = this.plugin.app.metadataCache.getFileCache(liveFile);
+                const fm = cache?.frontmatter;
+                if (!fm || !fm.title) { stats.skipped += 1; continue; }
+
+                const title = String(fm.title ?? '').trim();
+                if (!title || title.toLowerCase().includes('template')) { stats.skipped += 1; continue; }
+
+                const scheduled = fm.scheduled;
+                let expectedBasename: string;
+
+                if (scheduled) {
+                    const scheduledDate = window.moment(scheduled);
+                    if (!scheduledDate.isValid()) {
+                        stats.skipped += 1; continue;
+                    }
+                    const dateStr = scheduledDate.format(this.getDateSuffixFormat());
+                    const normalizedTitle = title.replace(/\s+/g, ' ').trim();
+                    if (this.titleMatchesScheduledDate(normalizedTitle, scheduledDate)) {
+                        expectedBasename = this.sanitizeFilename(normalizedTitle);
+                    } else {
+                        const titleWithoutDate = this.stripKnownDateSuffix(normalizedTitle, scheduledDate);
+                        expectedBasename = this.sanitizeFilename(`${titleWithoutDate} ${dateStr}`);
+                    }
+                } else {
+                    stats.skipped += 1; continue;
+                }
+
+                if (!expectedBasename) { stats.skipped += 1; continue; }
+                const currentNormalized = this.normalizeBasenameForCompare(liveFile.basename);
+                const expectedNormalized = this.normalizeBasenameForCompare(expectedBasename);
+                if (currentNormalized === expectedNormalized) { stats.skipped += 1; continue; }
+
+                const expectedPath = liveFile.parent
+                    ? `${liveFile.parent.path}/${expectedBasename}.md`
+                    : `${expectedBasename}.md`;
+                if (normalizePath(expectedPath).toLowerCase() === normalizePath(liveFile.path).toLowerCase()) {
+                    stats.skipped += 1; continue;
+                }
+
+                const existingFile = this.plugin.app.vault.getAbstractFileByPath(expectedPath);
+                if (existingFile && existingFile !== liveFile) {
+                    stats.skipped += 1; continue;
+                }
+
+                const pathBefore = liveFile.path;
+                await this.plugin.app.fileManager.renameFile(liveFile, expectedPath);
+                logger.log(`[TPS GCM] Reformatted scheduled note: "${pathBefore}" → "${expectedPath}"`);
+
+                const renamed = this.plugin.app.vault.getAbstractFileByPath(expectedPath);
+                if (renamed instanceof TFile) {
+                    await this.syncTitleFromFilenameWithOptions(renamed, { force: true, bypassCreationGrace: true });
+                }
+                stats.renamed += 1;
+            } catch (error) {
+                logger.error(`[TPS GCM] Failed to reformat scheduled note: ${file.path}`, error);
+                stats.failed += 1;
+            }
+
+            if ((i + 1) % 50 === 0) await this.yieldToEventLoop();
+        }
+
+        return stats;
+    }
+
+    /**
      * Update filename based on title and scheduled date
      */
     async updateFilenameIfNeeded(file: TFile, options: { bypassCreationGrace?: boolean } = {}): Promise<void> {
+        if (!this.plugin.isInitialSyncSettled()) return;
         if (!this.shouldProcess(file, options)) return;
         const liveFile = this.getLiveFile(file);
         if (!liveFile || !this.shouldProcess(liveFile, options)) return;
@@ -415,31 +632,24 @@ export class FileNamingService {
 
         const scheduled = fm.scheduled;
 
-        // Generate the expected filename
         let expectedBasename: string;
         if (scheduled) {
-            // Parse the scheduled date
             const scheduledDate = window.moment(scheduled);
             if (!scheduledDate.isValid()) {
                 expectedBasename = this.sanitizeFilename(title);
             } else {
-                const dateStr = scheduledDate.format(this.getDailyNoteDateFormat());
+                const dateStr = scheduledDate.format(this.getDateSuffixFormat());
                 const normalizedTitle = title.replace(/\s+/g, ' ').trim();
-                const titleHasScheduledDate = this.titleMatchesScheduledDate(normalizedTitle, scheduledDate);
-
-                // If the title IS the date, just use the date (prevent "2025-01-01 2025-01-01")
                 if (this.titleMatchesScheduledDate(title.trim(), scheduledDate)) {
                     expectedBasename = this.sanitizeFilename(normalizedTitle);
-                } else if (titleHasScheduledDate) {
-                    expectedBasename = this.sanitizeFilename(normalizedTitle);
                 } else {
-                    // Remove any existing date suffix from title to prevent duplication
                     const titleWithoutDate = this.stripKnownDateSuffix(title, scheduledDate);
-                    expectedBasename = this.sanitizeFilename(`${titleWithoutDate} ${dateStr}`);
+                    const base = this.sanitizeFilename(`${titleWithoutDate} ${dateStr}`);
+                    const timeSuffix = this.buildTimeSuffixFromScheduled(scheduled);
+                    expectedBasename = timeSuffix ? `${base} ${timeSuffix}` : base;
                 }
             }
         } else {
-            // Remove any existing date suffix if no scheduled date
             const titleWithoutDate = stripDateSuffix(title);
             expectedBasename = this.sanitizeFilename(titleWithoutDate);
         }
@@ -503,11 +713,22 @@ export class FileNamingService {
      * Sanitize filename to remove invalid characters
      */
     private sanitizeFilename(name: string): string {
-        // Remove or replace invalid filename characters
         return name
-            .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // Remove invalid characters
-            .replace(/\s+/g, ' ') // Normalize whitespace
+            .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+            .replace(/\s+/g, ' ')
             .trim();
+    }
+
+    private buildTimeSuffixFromScheduled(scheduled: unknown): string {
+        const raw = String(scheduled || '').trim();
+        if (!raw) return '';
+        const timeMatch = raw.match(/\d{4}-\d{2}-\d{2}\s+(\d{1,2}):(\d{2})/);
+        if (!timeMatch) return '';
+        const hours = parseInt(timeMatch[1], 10);
+        const minutes = parseInt(timeMatch[2], 10);
+        if (hours === 0 && minutes === 0) return '';
+        const d = new Date(2000, 0, 1, hours, minutes);
+        return window.moment(d).format('h.mma').toLowerCase();
     }
 
     /**

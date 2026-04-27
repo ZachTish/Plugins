@@ -7,6 +7,10 @@ export interface KanbanSettings {
   frontmatterColorTarget: "card" | "icon" | "both" | "off";
   /** Where to render the ungrouped lane relative to keyed lanes */
   ungroupedPosition: 'first' | 'last';
+  /** Default creation mode for new cards */
+  defaultCreateMode: 'note' | 'task';
+  /** Default creation destination for new cards */
+  defaultCreateDestination: string;
   /** Persisted manual lane order keyed by "<basePath>::<viewName>" */
   laneOrderByView: Record<string, string[]>;
   /** Where task-level cards from Kanban board checkboxes render relative to the board note card */
@@ -28,6 +32,8 @@ export const DEFAULT_SETTINGS: KanbanSettings = {
   colorKey: 'color',
   frontmatterColorTarget: 'both',
   ungroupedPosition: 'last',
+  defaultCreateMode: 'note',
+  defaultCreateDestination: '',
   laneOrderByView: {},
   kanbanTaskCardPosition: 'bottom',
   scale: 1,

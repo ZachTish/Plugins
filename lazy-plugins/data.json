@@ -1,0 +1,68 @@
+{
+  "dualConfigs": false,
+  "showConsoleLog": false,
+  "desktop": {
+    "shortDelaySeconds": 5,
+    "longDelaySeconds": 15,
+    "delayBetweenPlugins": 40,
+    "defaultStartupType": null,
+    "showDescriptions": true,
+    "enableDependencies": false,
+    "plugins": {
+      "consistent-attachments-and-links": {
+        "startupType": "instant"
+      },
+      "dataview": {
+        "startupType": "instant"
+      },
+      "handwritten-notes": {
+        "startupType": "disabled"
+      },
+      "obsidian-linter": {
+        "startupType": "instant"
+      },
+      "notebook-navigator": {
+        "startupType": "instant"
+      },
+      "omnisearch": {
+        "startupType": "disabled"
+      },
+      "pomodoro-timer": {
+        "startupType": "disabled"
+      },
+      "settings-search": {
+        "startupType": "instant"
+      },
+      "obsidian-style-settings": {
+        "startupType": "disabled"
+      },
+      "tag-timer": {
+        "startupType": "disabled"
+      },
+      "templater-obsidian": {
+        "startupType": "instant"
+      },
+      "tps-auto-base-embed": {
+        "startupType": "instant"
+      },
+      "tps-calendar-base": {
+        "startupType": "instant"
+      },
+      "tps-controller": {
+        "startupType": "instant"
+      },
+      "tps-global-context-menu": {
+        "startupType": "instant"
+      },
+      "tps-kanban": {
+        "startupType": "instant"
+      },
+      "tps-messager": {
+        "startupType": "instant"
+      },
+      "tps-notebook-navigator-companion": {
+        "startupType": "instant"
+      }
+    }
+  }
+}

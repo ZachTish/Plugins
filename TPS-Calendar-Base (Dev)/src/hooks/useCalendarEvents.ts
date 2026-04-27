@@ -2,6 +2,21 @@ import { useMemo } from "react";
 import { BasesEntry, BasesPropertyId, Value } from "obsidian";
 import type { CalendarEntry } from "../CalendarReactView";
 
+/**
+ * Normalizes a potentially UTC-midnight Date to local midnight for all-day events.
+ *
+ * JavaScript parses bare ISO date strings like "2026-03-30" as UTC midnight.
+ * In timezones west of UTC, getFullYear()/getMonth()/getDate() on such a Date
+ * returns the *previous* calendar day. This helper detects that situation and
+ * re-anchors using UTC methods, matching the approach in date-value-utils.ts.
+ */
+const toLocalMidnight = (d: Date): Date => {
+  if (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0) {
+    return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  }
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+};
+
 const normalizeValue = (value: unknown): string => {
   if (value === null || value === undefined) return "";
   if (typeof value === "object") {
@@ -100,16 +115,10 @@ export function useCalendarEvents({
       let eventStart = startDate;
       let eventEnd = endDate;
       if (isAllDay) {
-        eventStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+        eventStart = toLocalMidnight(startDate);
         // FullCalendar expects all-day `end` to be exclusive; guarantee at least 1 full day.
-        const candidateEnd = new Date(endDate);
-        if (
-          candidateEnd.getHours() === 0 &&
-          candidateEnd.getMinutes() === 0 &&
-          candidateEnd.getSeconds() === 0 &&
-          candidateEnd.getMilliseconds() === 0 &&
-          candidateEnd.getTime() > eventStart.getTime()
-        ) {
+        const candidateEnd = toLocalMidnight(endDate);
+        if (candidateEnd.getTime() > eventStart.getTime()) {
           eventEnd = candidateEnd;
         } else {
           eventEnd = new Date(eventStart);
@@ -137,6 +146,10 @@ export function useCalendarEvents({
                 (calEntry.entry as any).__taskItem?.lineNumber ?? "na",
                 startDate.getTime(),
                 endDate.getTime(),
+                calEntry.taskCheckboxState || "",
+                calEntry.status || "",
+                calEntry.iconName || "",
+                backgroundColor || "",
               ].join("-")
             : ((calEntry.entry as any).file?.path + (calEntry.isExternal ? "" : `-${backgroundColor}`)),
         title,
@@ -148,6 +161,9 @@ export function useCalendarEvents({
           calendarEntry: calEntry,
           entry: calEntry.entry,
           entryPath: (calEntry.entry as any).file?.path,
+          sourceLinkPath: calEntry.isTask
+            ? (calEntry.entry as any).__taskItem?.filePath || (calEntry.entry as any).file?.path
+            : (calEntry.entry as any).file?.path,
           calEntryTitle: calEntry.title,
           iconName: calEntry.iconName,
           iconColor: calEntry.iconColor,
@@ -159,6 +175,9 @@ export function useCalendarEvents({
           isGhost: calEntry.isGhost,
           ghostDate: calEntry.ghostDate ? calEntry.ghostDate.toISOString() : undefined,
           isTask: calEntry.isTask,
+          taskCheckboxState: calEntry.taskCheckboxState,
+          taskInlineProperties: calEntry.taskInlineProperties,
+          taskIsDone: calEntry.taskIsDone,
           isPast,
         },
         display: "block",

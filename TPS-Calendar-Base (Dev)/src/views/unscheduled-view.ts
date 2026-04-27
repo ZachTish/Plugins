@@ -153,7 +153,13 @@ export class UnscheduledView extends ItemView {
         scheduleSuppressReset();
         e.dataTransfer.effectAllowed = "copy";
         e.dataTransfer.setData("obsidian/file", file.path);
-        e.dataTransfer.setData("text/plain", file.path);
+        if (title && file.path) {
+          e.dataTransfer.setData("application/x-tps-card-reference", JSON.stringify({
+            title,
+            linkPath: file.path,
+          }));
+        }
+        e.dataTransfer.setData("text/plain", `[[${file.path}|${title}]]`);
         item.style.opacity = "0.5";
       });
 

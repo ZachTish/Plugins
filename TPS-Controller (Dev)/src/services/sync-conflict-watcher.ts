@@ -1,4 +1,4 @@
-import { App, TFile, Notice, normalizePath, EventRef } from "obsidian";
+import { App, TFile, normalizePath, EventRef } from "obsidian";
 import * as logger from "../logger";
 
 export class SyncConflictWatcher {
@@ -6,7 +6,6 @@ export class SyncConflictWatcher {
     private events: EventRef[] = [];
     private archiveFolder: string = "System/Archive";
     private eventIdKey: string = "externalEventId";
-    private isSweeping = false;
 
     constructor(app: App) {
         this.app = app;
@@ -50,57 +49,12 @@ export class SyncConflictWatcher {
         );
 
         logger.log("🔍 SyncConflictWatcher: Started listening for file conflicts.");
-
-        // 2. Do an initial sweep to catch any created while Obsidian was closed.
-        // Must wait for metadataCache to be fully populated: hasCalendarIdentity()
-        // calls getFileCache(), which returns null before 'resolved' fires.
-        // If it returns false early, a meeting note that happens to have a
-        // conflict-style name would bypass the guard and be incorrectly archived.
-        let startupSweepDone = false;
-        const runStartupSweep = () => {
-            if (startupSweepDone) return;
-            startupSweepDone = true;
-            void this.sweepVaultForConflicts();
-        };
-        this.events.push(
-            this.app.metadataCache.on("resolved", runStartupSweep),
-        );
-        // Fallback: if the vault was already fully resolved before we registered
-        // the event (common on subsequent loads), fire after a generous delay.
-        setTimeout(runStartupSweep, 8000);
     }
 
     public stop() {
         this.events.forEach(e => this.app.vault.offref(e));
         this.events = [];
         logger.log("🔍 SyncConflictWatcher: Stopped.");
-    }
-
-    /**
-     * Scans the entire vault ONCE at startup to catch any offline sync conflicts.
-     */
-    public async sweepVaultForConflicts() {
-        if (this.isSweeping) return;
-        this.isSweeping = true;
-        try {
-            const files = this.app.vault.getMarkdownFiles();
-            let archivedCount = 0;
-
-            for (const file of files) {
-                // Quick ignore for our own archive folder
-                if (this.isInDuplicateArchiveFolder(file.path)) continue;
-
-                const archived = await this.checkAndArchiveIfConflict(file);
-                if (archived) archivedCount++;
-            }
-
-            if (archivedCount > 0) {
-                new Notice(`Controller: Archived ${archivedCount} sync conflicts on startup.`);
-                logger.warn(`🔍 SyncConflictWatcher: Swept and archived ${archivedCount} offline conflicts.`);
-            }
-        } finally {
-            this.isSweeping = false;
-        }
     }
 
     /**

@@ -1,4 +1,9 @@
 import { TFile, MarkdownView } from 'obsidian';
+import type {
+  HideRule,
+  IconColorRule,
+  SmartSortSettings,
+} from '../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
 
 /**
  * Plugin settings interface
@@ -57,6 +62,8 @@ export type AppearanceSettingKey =
   | 'dailyNavScale'
   | 'dailyNavRestOpacity';
 
+export type ArchiveFolderMode = 'none' | 'daily' | 'weekly' | 'monthly';
+
 export type ViewModeRuleMatch = 'all' | 'any';
 export type ViewModeConditionType = 'frontmatter' | 'path' | 'scheduled' | 'daily-note';
 export type ViewModeConditionOperator =
@@ -104,6 +111,19 @@ export interface TPSGlobalContextMenuSettings {
   showCustomPropertiesInInlineUi: boolean;
   showCustomPropertiesInContextMenu: boolean;
   inheritNotebookNavigatorTagColors: boolean;
+  notebookNavigatorIconField: string;
+  notebookNavigatorColorField: string;
+  notebookNavigatorWriteBasesIconFields: boolean;
+  notebookNavigatorBasesIconMarkdownField: string;
+  notebookNavigatorBasesIconUriField: string;
+  notebookNavigatorNoteCheckboxIconColor: string;
+  notebookNavigatorClearIconWhenNoMatch: boolean;
+  notebookNavigatorClearColorWhenNoMatch: boolean;
+  notebookNavigatorAutoRemoveHiddenWhenNoMatch: boolean;
+  notebookNavigatorFrontmatterWriteExclusions: string;
+  notebookNavigatorRules: IconColorRule[];
+  notebookNavigatorSmartSort: SmartSortSettings;
+  notebookNavigatorHideRules: HideRule[];
 
   // Recurrence settings
   enableRecurrence: boolean;
@@ -116,6 +136,7 @@ export interface TPSGlobalContextMenuSettings {
   // File naming settings
 
   enableAutoRename: boolean;
+  dateSuffixFormat: string; // Moment.js format for the date appended to filenames (empty = use daily note format)
   autoSyncTitleFromFilename: boolean;
   autoSaveFolderPath: boolean;
   seedNewSubitemVisualMetadata: boolean;
@@ -141,8 +162,6 @@ export interface TPSGlobalContextMenuSettings {
   viewModeIgnoredFolders: string;
   viewModeRules: ViewModeRule[];
 
-  enableChecklistCompletionProperty: boolean;
-  checklistCompletionPropertyKey: string;
   checklistFinalPromptStatuses: string[];
   enableLinkedSubitemCheckboxes: boolean;
   linkedSubitemCheckboxStyle: LinkedSubitemCheckboxStyle;
@@ -163,6 +182,8 @@ export interface TPSGlobalContextMenuSettings {
   enableArchiveTagMove: boolean;
   archiveTag: string;
   archiveFolderPath: string;
+  archiveFolderMode: ArchiveFolderMode;
+  /** @deprecated Legacy boolean retained for settings migration. */
   archiveUseDailyFolder: boolean;
   lastArchiveTagSweepDate?: string;
 
@@ -178,7 +199,9 @@ export interface TPSGlobalContextMenuSettings {
   enableTopParentNav: boolean;
   ignoreEmbeddedChildrenInTopLinks: boolean;
   dailyNavShowToday: boolean;
+  enableScheduledLinkGuard: boolean;
   enableAutoPopulateDailyNotes: boolean;
+  enableDailyNoteScheduledNormalization: boolean;
 
   // Overlay ignore rules
   subitems_IgnoreRules: ViewModeRule[];

@@ -1,4 +1,4 @@
-import { MarkdownView, Menu, Notice, TFile, setIcon } from 'obsidian';
+import { MarkdownView, Menu, Notice, TFile } from 'obsidian';
 import { RangeSetBuilder, StateEffect } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from '@codemirror/view';
 import type TPSGlobalContextMenuPlugin from '../main';
@@ -8,75 +8,23 @@ import { getViewMode } from './leaf-resolver';
 import { resolveLinkTargetToFile } from './link-target-service';
 import { ViewModeService } from './view-mode-service';
 import type { BodySubitemLink } from './subitem-types';
+import { checkAndPromptForUnresolvedSubitems } from './unresolved-subitem-modal';
 import { SubitemLineModelService, type SubitemLineModel, type PropertyPill } from './subitem-line-model';
-import { buildLinkedSubitemRow, getIconNameForState } from './linked-subitem-row-builder';
+import { buildLinkedSubitemRow } from './linked-subitem-row-builder';
+import { CheckboxPatterns } from '../core';
 
 const VIRTUAL_CHECKBOX_CLASS = 'tps-gcm-linked-subitem-checkbox';
 const CM_WIDGET_CLASS = 'tps-gcm-linked-subitem-cm-widget';
 const DECORATION_VERSION = '2';
 const refreshLinkedSubitemEffect = StateEffect.define<number>();
 
-/**
- * Live Preview widget for a linked subitem.
- * It replaces only the wikilink token, leaving the native list marker and
- * checkbox intact.
- */
-class LinkedSubitemRowWidget extends WidgetType {
-  private readonly onClick: (path: string) => void;
-  private readonly onPillClick: (evt: MouseEvent, pill: PropertyPill) => void;
-  
-  constructor(
-    private readonly model: SubitemLineModel,
-    private readonly onCheckboxClick: (evt: MouseEvent) => void,
-    onLinkClick: (path: string) => void,
-    onPillClick: (evt: MouseEvent, pill: PropertyPill) => void,
-  ) {
-    super();
-    this.onClick = onLinkClick;
-    this.onPillClick = onPillClick;
-  }
+function shouldRenderReadingModeLeadingControl(model: SubitemLineModel): boolean {
+  return model.kind === 'checkbox' || model.kind === 'heading' || model.hasExplicitStatus;
+}
 
-  eq(other: LinkedSubitemRowWidget): boolean {
-    return (
-      other.model.childFile.path === this.model.childFile.path &&
-      other.model.parentFile.path === this.model.parentFile.path &&
-      other.model.checkboxState === this.model.checkboxState &&
-      other.model.visualState === this.model.visualState &&
-      JSON.stringify(other.model.pills) === JSON.stringify(this.model.pills)
-    );
-  }
-
-  toDOM(): HTMLElement {
-    const elements = buildLinkedSubitemRow(
-      this.model,
-      this.onCheckboxClick,
-      this.onClick,
-      this.onPillClick,
-      { includeCheckbox: this.model.kind !== 'checkbox' },
-    );
-    elements.container.classList.add(CM_WIDGET_CLASS, 'is-cm-widget');
-    return elements.container;
-  }
-
-  updateDOM(dom: HTMLElement): boolean {
-    // Check if this is still the same subitem
-    if (dom.dataset.linkedSubitemPath !== this.model.childFile.path) return false;
-    
-    // Update checkbox state if changed
-    const checkbox = dom.querySelector(`.${VIRTUAL_CHECKBOX_CLASS}`) as HTMLElement | null;
-    if (checkbox && checkbox.dataset.linkedSubitemState !== this.model.checkboxState) {
-      checkbox.dataset.linkedSubitemState = this.model.checkboxState || '[ ]';
-      checkbox.className = `${VIRTUAL_CHECKBOX_CLASS} state-${this.model.visualState}`;
-      checkbox.innerHTML = '';
-      setIcon(checkbox, getIconNameForState(this.model.checkboxState || '[ ]'));
-    }
-    
-    return true;
-  }
-
-  ignoreEvent(): boolean {
-    return true;
-  }
+function shouldRenderLivePreviewLeadingControl(model: SubitemLineModel): boolean {
+  if (model.kind === 'checkbox' || model.kind === 'heading') return true;
+  return model.hasExplicitStatus;
 }
 
 class LinkedSubitemSpacerWidget extends WidgetType {
@@ -93,10 +41,53 @@ class LinkedSubitemSpacerWidget extends WidgetType {
   }
 }
 
+class LinkedSubitemPillsWidget extends WidgetType {
+  constructor(
+    private readonly model: SubitemLineModel,
+    private readonly onPillClick: (evt: MouseEvent, pill: PropertyPill) => void,
+  ) {
+    super();
+  }
+
+  eq(other: LinkedSubitemPillsWidget): boolean {
+    return (
+      other.model.childFile.path === this.model.childFile.path &&
+      other.model.parentFile.path === this.model.parentFile.path &&
+      JSON.stringify(other.model.pills) === JSON.stringify(this.model.pills)
+    );
+  }
+
+  toDOM(): HTMLElement {
+    const elements = buildLinkedSubitemRow(
+      this.model,
+      () => {},
+      () => {},
+      () => {},
+      this.onPillClick,
+      {
+        includeCheckbox: false,
+        includeBulletMarker: false,
+      },
+    );
+    const wrapper = document.createElement('span');
+    wrapper.className = `${CM_WIDGET_CLASS} tps-gcm-linked-subitem-pills-only`;
+    wrapper.dataset.linkedSubitemPath = this.model.childFile.path;
+    wrapper.dataset.linkedSubitemParent = this.model.parentFile.path;
+    wrapper.appendChild(elements.pillsContainer);
+    return wrapper;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
 export class LinkedSubitemCheckboxService {
   private observers = new Map<MarkdownView, MutationObserver>();
   private refreshTimers = new Map<MarkdownView, number>();
+  private selfHealAttempts = new WeakMap<MarkdownView, number>();
   private syncingFiles = new Set<string>();
+  private pendingClearedStatusSyncs = new Set<string>();
   private decoratingViews = new WeakSet<MarkdownView>();
   private elementStates = new WeakMap<HTMLElement, string>();
   // NOTE: Removed lastSuccessfulEditorDecorations cache - it was preserving stale decorations
@@ -106,6 +97,15 @@ export class LinkedSubitemCheckboxService {
 
   constructor(private plugin: TPSGlobalContextMenuPlugin) {
     this.subitemLineModelService = new SubitemLineModelService(plugin);
+  }
+
+  private shouldEnhanceLinkedSubitems(): boolean {
+    return this.plugin.settings.enableLinkedSubitemCheckboxes || this.plugin.settings.showCustomPropertiesInInlineUi !== false;
+  }
+
+  private shouldRenderLinkedSubitemCheckboxes(model?: SubitemLineModel): boolean {
+    if (this.plugin.settings.enableLinkedSubitemCheckboxes !== false) return true;
+    return !!model?.hasExplicitStatus;
   }
 
   getEditorExtension() {
@@ -134,14 +134,36 @@ export class LinkedSubitemCheckboxService {
     }
   }
 
+  private createReadingModeObserver(view: MarkdownView): MutationObserver {
+    return new MutationObserver(() => {
+      if (this.decoratingViews.has(view)) return;
+      this.scheduleDecorate(view);
+    });
+  }
+
+  private reconnectReadingModeObserver(view: MarkdownView): void {
+    const root = view.contentEl;
+    if (!root) return;
+    const observer = this.observers.get(view);
+    if (!observer) return;
+    observer.disconnect();
+    observer.observe(root, { childList: true, subtree: true });
+  }
+
   ensureForView(view: MarkdownView): void {
     const file = view.file;
-    if (!(file instanceof TFile) || file.extension !== 'md' || !this.plugin.settings.enableLinkedSubitemCheckboxes) {
+    if (!(file instanceof TFile) || file.extension !== 'md' || !this.shouldEnhanceLinkedSubitems()) {
       this.removeForView(view);
       return;
     }
 
     const mode = this.getLinkedSubitemRenderMode(view);
+    logger.log('[TPS GCM] [LinkedSubitemTrace] ensureForView', {
+      file: file.path,
+      mode,
+      observerPresent: this.observers.has(view),
+      activeFile: this.plugin.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path ?? null,
+    });
 
     if (mode !== 'preview') {
       const observer = this.observers.get(view);
@@ -149,21 +171,19 @@ export class LinkedSubitemCheckboxService {
         observer.disconnect();
         this.observers.delete(view);
       }
-      this.clearDecorations(view);
+      this.resetSelfHealAttempts(view);
+      this.clearReadingModeDecorations(view);
+      logger.log('[TPS GCM] [LinkedSubitemTrace] source-mode preserve-live-widgets', {
+        file: file.path,
+        mode,
+      });
       return;
     }
 
     if (!this.observers.has(view)) {
-      const root = view.contentEl;
-      if (root) {
-        const observer = new MutationObserver(() => {
-          if (this.decoratingViews.has(view)) return;
-          this.scheduleDecorate(view);
-        });
-        observer.observe(root, { childList: true, subtree: true });
-        this.observers.set(view, observer);
-      }
+      this.observers.set(view, this.createReadingModeObserver(view));
     }
+    this.reconnectReadingModeObserver(view);
 
     this.scheduleDecorate(view);
   }
@@ -189,16 +209,30 @@ export class LinkedSubitemCheckboxService {
   }
 
   async handleClick(evt: MouseEvent): Promise<boolean> {
-    if (!this.plugin.settings.enableLinkedSubitemCheckboxes) return false;
     const targetEl = evt.target instanceof HTMLElement ? evt.target : null;
+    if (targetEl && await this.handleMissingLinkedSubitemInteraction(evt, targetEl)) {
+      return true;
+    }
     const pillEl = targetEl?.closest('.tps-gcm-linked-subitem-pill') as HTMLElement | null;
     if (pillEl) {
       return this.handlePropertyPillClick(evt, pillEl);
     }
-    
     const customCheckboxEl = targetEl?.closest(`.${VIRTUAL_CHECKBOX_CLASS}`) as HTMLElement | null;
     if (customCheckboxEl) {
       return this.handleCustomCheckboxClick(evt, customCheckboxEl);
+    }
+
+    const customBulletEl = targetEl?.closest('.tps-gcm-linked-subitem-bullet-marker') as HTMLElement | null;
+    if (customBulletEl) {
+      return this.handleBulletClick(evt, customBulletEl);
+    }
+
+    const nativeBulletEl = targetEl?.closest('.list-bullet') as HTMLElement | null;
+    if (nativeBulletEl) {
+      const taskHost = nativeBulletEl.closest('.tps-gcm-linked-subitem-task.kind-bullet');
+      if (taskHost instanceof HTMLElement) {
+        return this.handleNativeBulletInSubitemLine(evt, taskHost);
+      }
     }
     
     const nativeCheckboxEl = targetEl?.closest('input.task-list-item-checkbox') as HTMLInputElement | null;
@@ -230,15 +264,21 @@ export class LinkedSubitemCheckboxService {
     const nextStatus = this.getToggleTargetForState(currentState, currentStatus);
     if (!nextStatus) return false;
 
-    const statusKey = this.getStatusKey();
-    await this.plugin.app.fileManager.processFrontMatter(childFile, (fm) => {
-      fm[statusKey] = nextStatus;
-    });
+    await this.applyLinkedSubitemStatusChange(childFile, nextStatus);
+    return true;
+  }
 
-    await this.refreshReferencesForChild(childFile);
-    this.scheduleDecorateForActiveView();
-    this.refreshLivePreviewEditors();
-    new Notice(`Set "${childFile.basename}" to ${nextStatus}.`);
+  private async handleBulletClick(evt: MouseEvent, bulletEl: HTMLElement | null): Promise<boolean> {
+    const childPath = bulletEl?.dataset.linkedSubitemPath;
+    if (!childPath) return false;
+    const childFile = this.plugin.app.vault.getFileByPath(childPath);
+    if (!(childFile instanceof TFile)) return false;
+
+    evt.preventDefault();
+    evt.stopPropagation();
+    evt.stopImmediatePropagation();
+
+    this.showLinkedSubitemStatusMenu(childFile, evt.clientX, evt.clientY);
     return true;
   }
 
@@ -268,15 +308,32 @@ export class LinkedSubitemCheckboxService {
     const nextStatus = this.getToggleTargetForState(currentState, currentStatus);
     if (!nextStatus) return false;
 
-    const statusKey = this.getStatusKey();
-    await this.plugin.app.fileManager.processFrontMatter(childFile, (fm) => {
-      fm[statusKey] = nextStatus;
-    });
-
-    await this.refreshReferencesForChild(childFile);
+    await this.applyLinkedSubitemStatusChange(childFile, nextStatus);
     this.scheduleDecorate(view);
-    this.refreshLivePreviewEditors();
-    new Notice(`Set "${childFile.basename}" to ${nextStatus}.`);
+    return true;
+  }
+
+  private async handleNativeBulletInSubitemLine(
+    evt: MouseEvent,
+    taskHost: HTMLElement,
+  ): Promise<boolean> {
+    const view = this.resolveMarkdownViewForElement(taskHost);
+    if (!(view instanceof MarkdownView)) return false;
+    const parentFile = view.file;
+    if (!(parentFile instanceof TFile)) return false;
+
+    const sourceLine = this.getSourceLineForReadingHost(view, taskHost);
+    const parsed = sourceLine ? this.plugin.bodySubitemLinkService.parseLine(sourceLine.rawLine) : null;
+    if (!parsed) return false;
+
+    const childFile = this.resolveLinkedFile(parsed.linkTarget, parentFile.path);
+    if (!(childFile instanceof TFile)) return false;
+
+    evt.preventDefault();
+    evt.stopPropagation();
+    evt.stopImmediatePropagation();
+
+    this.showLinkedSubitemStatusMenu(childFile, evt.clientX, evt.clientY);
     return true;
   }
 
@@ -295,42 +352,75 @@ export class LinkedSubitemCheckboxService {
   }
 
   async handleContextMenu(evt: MouseEvent): Promise<boolean> {
-    if (!this.plugin.settings.enableLinkedSubitemCheckboxes) return false;
     const targetEl = evt.target instanceof HTMLElement ? evt.target : null;
+    if (targetEl && await this.handleMissingLinkedSubitemInteraction(evt, targetEl)) {
+      return true;
+    }
     const checkboxEl = targetEl?.closest(`.${VIRTUAL_CHECKBOX_CLASS}`) as HTMLElement | null;
-    if (!checkboxEl) return false;
+    if (checkboxEl) {
+      const childPath = checkboxEl.dataset.linkedSubitemPath;
+      const parentPath = checkboxEl.dataset.linkedSubitemParent;
+      if (!childPath || !parentPath) return false;
 
-    const childPath = checkboxEl.dataset.linkedSubitemPath;
-    const parentPath = checkboxEl.dataset.linkedSubitemParent;
-    if (!childPath || !parentPath) return false;
+      const childFile = this.plugin.app.vault.getFileByPath(childPath);
+      const parentFile = this.plugin.app.vault.getFileByPath(parentPath);
+      if (!(childFile instanceof TFile) || !(parentFile instanceof TFile)) return false;
+
+      evt.preventDefault();
+      evt.stopPropagation();
+      evt.stopImmediatePropagation();
+
+      this.showLinkedSubitemStatusMenu(childFile, evt.clientX, evt.clientY);
+      return true;
+    }
+
+    const customBulletEl = targetEl?.closest('.tps-gcm-linked-subitem-bullet-marker') as HTMLElement | null;
+    if (customBulletEl) {
+      return this.handleBulletClick(evt, customBulletEl);
+    }
+
+    const nativeBulletEl = targetEl?.closest('.list-bullet') as HTMLElement | null;
+    if (nativeBulletEl) {
+      const taskHost = nativeBulletEl.closest('.tps-gcm-linked-subitem-task.kind-bullet');
+      if (taskHost instanceof HTMLElement) {
+        return this.handleNativeBulletInSubitemLine(evt, taskHost);
+      }
+    }
+
+    return false;
+  }
+
+  private async handleMissingLinkedSubitemInteraction(evt: MouseEvent, targetEl: HTMLElement): Promise<boolean> {
+    const host = targetEl.closest(
+      '.tps-gcm-linked-subitem-link, .tps-gcm-linked-subitem-row-content, .tps-gcm-linked-subitem-task, .tps-gcm-linked-subitem-pill, .tps-gcm-linked-subitem-checkbox, .tps-gcm-linked-subitem-bullet-marker',
+    ) as HTMLElement | null;
+    if (!(host instanceof HTMLElement)) return false;
+
+    const childPath = host.dataset.linkedSubitemPath
+      || host.closest<HTMLElement>('[data-linked-subitem-path]')?.dataset.linkedSubitemPath
+      || '';
+    if (!childPath) return false;
 
     const childFile = this.plugin.app.vault.getFileByPath(childPath);
-    const parentFile = this.plugin.app.vault.getFileByPath(parentPath);
-    if (!(childFile instanceof TFile) || !(parentFile instanceof TFile)) return false;
+    if (childFile instanceof TFile) return false;
 
     evt.preventDefault();
     evt.stopPropagation();
     evt.stopImmediatePropagation();
 
-    const statuses = this.getStatusOptions();
-    if (statuses.length === 0) return false;
+    const parentPath = host.dataset.linkedSubitemParent
+      || host.closest<HTMLElement>('[data-linked-subitem-parent]')?.dataset.linkedSubitemParent
+      || '';
+    const parentFile = parentPath ? this.plugin.app.vault.getFileByPath(parentPath) : null;
 
-    const currentStatus = this.getNormalizedStatus(childFile);
-    const menu = new Menu();
-    for (const status of statuses) {
-      menu.addItem((item) => {
-        const normalized = String(status || '').trim().toLowerCase();
-        item.setTitle(status);
-        if (normalized && normalized === currentStatus) {
-          item.setChecked(true);
-        }
-        item.onClick(() => {
-          void this.setLinkedSubitemStatus(childFile, status);
-        });
-      });
+    if (parentFile instanceof TFile) {
+      await checkAndPromptForUnresolvedSubitems(this.plugin, parentFile);
+      this.scheduleRefreshForParentFile(parentFile);
+    } else {
+      this.scheduleDecorateForActiveView();
+      this.refreshLivePreviewEditors();
+      new Notice('This linked subitem no longer exists.');
     }
-
-    menu.showAtPosition({ x: evt.clientX, y: evt.clientY });
     return true;
   }
 
@@ -352,9 +442,8 @@ export class LinkedSubitemCheckboxService {
     evt.stopPropagation();
     evt.stopImmediatePropagation();
 
-    if ((kind === 'status' || (propertyType === 'selector' && propertyKey === 'status')) && propertyRowService?.openStatusSubmenu) {
-      const statusProp = this.resolveCustomProperty(entries, 'status', 'status');
-      propertyRowService.openStatusSubmenu(pillEl, entries, undefined, statusProp?.options);
+    if (kind === 'status' || (propertyType === 'selector' && propertyKey === 'status')) {
+      this.showLinkedSubitemStatusMenu(childFile, evt.clientX, evt.clientY);
       return true;
     }
     if ((kind === 'priority' || (propertyType === 'selector' && propertyKey === 'priority')) && propertyRowService?.openPrioritySubmenu) {
@@ -386,8 +475,34 @@ export class LinkedSubitemCheckboxService {
       const prop = this.resolveCustomProperty(entries, propertyKey, propertyKey);
       const options = Array.isArray(prop?.options) ? prop.options : [];
       if (options.length > 0) {
-        const currentValue = String((entries[0]?.frontmatter || {})[propertyKey] || '').trim();
+        const fm = (entries[0]?.frontmatter || {}) as Record<string, unknown>;
+        const actualKey = Object.keys(fm).find((key) => key.toLowerCase() === String(propertyKey || '').toLowerCase());
+        const currentRawValue = actualKey ? fm[actualKey] : undefined;
+        const currentValue = String(currentRawValue ?? '').trim();
+        const hasPropertyKey = !!actualKey;
+        const isEmptyValue = hasPropertyKey && (currentRawValue === '' || currentRawValue === null || currentRawValue === undefined);
         const menu = new Menu();
+        menu.addItem((item) => {
+          item
+            .setTitle('(none)')
+            .setChecked(!hasPropertyKey)
+            .onClick(async () => {
+              await this.plugin.bulkEditService.removeFrontmatterKey([childFile], propertyKey);
+              await this.refreshReferencesForChild(childFile);
+              this.triggerLinkedSubitemRenderRefresh();
+            });
+        });
+        menu.addItem((item) => {
+          item
+            .setTitle('(empty)')
+            .setChecked(isEmptyValue)
+            .onClick(async () => {
+              await this.plugin.bulkEditService.updateFrontmatter([childFile], { [propertyKey]: '' });
+              await this.refreshReferencesForChild(childFile);
+              this.triggerLinkedSubitemRenderRefresh();
+            });
+        });
+        menu.addSeparator();
         for (const option of options) {
           menu.addItem((item) => {
             item.setTitle(option);
@@ -395,8 +510,7 @@ export class LinkedSubitemCheckboxService {
             item.onClick(async () => {
               await this.plugin.bulkEditService.updateFrontmatter([childFile], { [propertyKey]: option });
               await this.refreshReferencesForChild(childFile);
-              this.scheduleDecorateForActiveView();
-              this.refreshLivePreviewEditors();
+              this.triggerLinkedSubitemRenderRefresh();
             });
           });
         }
@@ -410,7 +524,7 @@ export class LinkedSubitemCheckboxService {
   async syncActiveViewFile(): Promise<void> {
     const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
     const activeFile = activeView?.file;
-    if (!(activeView instanceof MarkdownView) || !(activeFile instanceof TFile) || activeFile.extension !== 'md' || !this.plugin.settings.enableLinkedSubitemCheckboxes) return;
+    if (!(activeView instanceof MarkdownView) || !(activeFile instanceof TFile) || activeFile.extension !== 'md' || !this.shouldEnhanceLinkedSubitems()) return;
     if (this.getLinkedSubitemRenderMode(activeView) === 'preview') {
       this.scheduleDecorate(activeView);
     } else {
@@ -470,6 +584,38 @@ export class LinkedSubitemCheckboxService {
     this.refreshTimers.set(view, timer);
   }
 
+  private scheduleSelfHeal(view: MarkdownView, reason: string, delay = 120): void {
+    const attempts = this.selfHealAttempts.get(view) ?? 0;
+    if (attempts >= 3) {
+      logger.warn('[TPS GCM] [SelfHeal] giving up after repeated retries', {
+        file: view.file?.path ?? null,
+        reason,
+        attempts,
+      });
+      return;
+    }
+
+    this.selfHealAttempts.set(view, attempts + 1);
+    logger.warn('[TPS GCM] [SelfHeal] scheduling retry', {
+      file: view.file?.path ?? null,
+      reason,
+      attempt: attempts + 1,
+      delay,
+    });
+
+    const existing = this.refreshTimers.get(view);
+    if (existing != null) window.clearTimeout(existing);
+    const timer = window.setTimeout(() => {
+      this.refreshTimers.delete(view);
+      this.decorateView(view);
+    }, Math.max(0, delay));
+    this.refreshTimers.set(view, timer);
+  }
+
+  private resetSelfHealAttempts(view: MarkdownView): void {
+    this.selfHealAttempts.delete(view);
+  }
+
   private scheduleDecorateForActiveView(): void {
     const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
     if (!(activeView instanceof MarkdownView)) return;
@@ -477,36 +623,87 @@ export class LinkedSubitemCheckboxService {
     this.scheduleDecorate(activeView);
   }
 
+  private clearReadingModeDecorations(view: MarkdownView): void {
+    const previewContainer = this.getVisiblePreviewContainer(view);
+    if (!(previewContainer instanceof HTMLElement)) return;
+    logger.log('[TPS GCM] [LinkedSubitemTrace] clearReadingModeDecorations', {
+      file: view.file?.path ?? null,
+      previewTag: previewContainer.tagName,
+      previewClasses: previewContainer.className,
+      pillsCount: previewContainer.querySelectorAll('.tps-gcm-linked-subitem-pills').length,
+      rowCount: previewContainer.querySelectorAll('.tps-gcm-linked-subitem-row-content').length,
+    });
+
+    previewContainer.querySelectorAll<HTMLElement>('.tps-gcm-linked-subitem-replaced').forEach((el) => {
+      const originalHtml = el.dataset.tpsGcmOriginalHtml;
+      if (typeof originalHtml === 'string') {
+        el.innerHTML = originalHtml;
+        delete el.dataset.tpsGcmOriginalHtml;
+      }
+      el.classList.remove('tps-gcm-linked-subitem-replaced');
+    });
+
+    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-pill').forEach((el) => el.remove());
+    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-checkbox').forEach((el) => el.remove());
+    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-row-content').forEach((el) => el.remove());
+    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-task').forEach((el) => {
+      el.classList.remove('tps-gcm-linked-subitem-task', 'is-open', 'is-complete', 'is-canceled', 'is-working', 'kind-checkbox', 'kind-bullet', 'kind-bare', 'kind-heading');
+      delete (el as HTMLElement).dataset.linkedSubitemKind;
+    });
+    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-link').forEach((el) => {
+      el.classList.remove('tps-gcm-linked-subitem-link');
+    });
+    previewContainer.querySelectorAll('.tps-gcm-hidden-native-link').forEach((el) => {
+      el.classList.remove('tps-gcm-hidden-native-link');
+    });
+    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-checkbox-hidden').forEach((el) => {
+      el.classList.remove('tps-gcm-linked-subitem-checkbox-hidden');
+      if (el instanceof HTMLInputElement) {
+        el.style.display = '';
+      }
+    });
+  }
+
   private clearDecorations(view: MarkdownView): void {
     const root = view.contentEl;
     if (!root) return;
-    const previewContainer = this.getVisiblePreviewContainer(view);
+    const mode = this.getLinkedSubitemRenderMode(view);
+    if (mode === 'source') {
+      logger.log('[TPS GCM] [LinkedSubitemTrace] clearDecorations skipped in source mode', {
+        file: view.file?.path ?? null,
+      });
+      return;
+    }
+    const previewContainer = this.getVisiblePreviewContainer(view) || root;
+    logger.log('[TPS GCM] [LinkedSubitemTrace] clearDecorations', {
+      file: view.file?.path ?? null,
+      mode,
+      previewTag: previewContainer.tagName,
+      previewClasses: (previewContainer as HTMLElement).className,
+      pillsCount: previewContainer.querySelectorAll('.tps-gcm-linked-subitem-pills').length,
+      rowCount: previewContainer.querySelectorAll('.tps-gcm-linked-subitem-row-content').length,
+      replacedCount: previewContainer.querySelectorAll('.tps-gcm-linked-subitem-replaced').length,
+    });
     if (!(previewContainer instanceof HTMLElement)) return;
 
-    // Remove all custom elements
-    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-pill').forEach(el => el.remove());
-    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-checkbox').forEach(el => el.remove());
-    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-row-content').forEach(el => el.remove());
-    
-    // Remove all marker classes
-    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-task').forEach(el => {
-      el.classList.remove('tps-gcm-linked-subitem-task', 'is-open', 'is-complete', 'is-canceled');
-    });
-    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-link').forEach(el => {
-      el.classList.remove('tps-gcm-linked-subitem-link');
-    });
-    previewContainer.querySelectorAll('.tps-gcm-hidden-native-link').forEach(el => {
-      el.classList.remove('tps-gcm-hidden-native-link');
-    });
-    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-checkbox-hidden').forEach(el => {
-      el.classList.remove('tps-gcm-linked-subitem-checkbox-hidden');
-      if (el instanceof HTMLInputElement) {
-        (el as HTMLInputElement).style.display = '';
+    previewContainer.querySelectorAll<HTMLElement>('.tps-gcm-linked-subitem-replaced').forEach((el) => {
+      const originalHtml = el.dataset.tpsGcmOriginalHtml;
+      if (typeof originalHtml === 'string') {
+        el.innerHTML = originalHtml;
+        delete el.dataset.tpsGcmOriginalHtml;
       }
-    });
-    previewContainer.querySelectorAll('.tps-gcm-linked-subitem-replaced').forEach(el => {
       el.classList.remove('tps-gcm-linked-subitem-replaced');
     });
+
+    this.clearReadingModeDecorations(view);
+  }
+
+  private hasRenderedLinkedSubitems(view: MarkdownView): boolean {
+    const root = view.contentEl;
+    if (!root) return false;
+    return !!root.querySelector(
+      '.tps-gcm-linked-subitem-task, .tps-gcm-linked-subitem-row-content, .tps-gcm-linked-subitem-replaced',
+    );
   }
 
   /**
@@ -521,6 +718,7 @@ export class LinkedSubitemCheckboxService {
     const mode = this.getLinkedSubitemRenderMode(view);
 
     if (mode !== 'preview') {
+      this.resetSelfHealAttempts(view);
       this.clearDecorations(view);
       return;
     }
@@ -530,6 +728,8 @@ export class LinkedSubitemCheckboxService {
     }
 
     this.decoratingViews.add(view);
+    const observer = this.observers.get(view);
+    observer?.disconnect();
     try {
       const file = view.file;
       if (!(file instanceof TFile)) return;
@@ -549,6 +749,9 @@ export class LinkedSubitemCheckboxService {
         const childFile = this.resolveLinkedFile(parsed.linkTarget, file.path);
         if (!(childFile instanceof TFile)) continue;
         const model = this.subitemLineModelService.buildModel(parsed, childFile, file);
+        if (parsed.kind === 'checkbox' && !model.hasExplicitStatus) {
+          this.queueClearedStatusSync(childFile);
+        }
         logger.log('[TPS GCM] [DIAG] reading-mode model', {
           parentFile: file.path,
           childFile: childFile.path,
@@ -593,42 +796,51 @@ export class LinkedSubitemCheckboxService {
       // Reading mode can churn through transient wrapper states and otherwise falls back
       // to plain native links until another refresh happens to succeed.
       if (lineToElement.size === 0) {
-        this.scheduleDecorate(view);
+        this.scheduleSelfHeal(view, 'reading-mode line mapping produced zero matches');
         return;
+      }
+
+      if (lineToElement.size < subitemEntries.size) {
+        logger.warn('[TPS GCM] [LinkedSubitem] partial reading mode line mapping', {
+          file: file.path,
+          matchedCount: lineToElement.size,
+          expectedCount: subitemEntries.size,
+          missingLines: Array.from(subitemEntries.keys()).filter((lineNum) => !lineToElement.has(lineNum)),
+        });
       }
 
       this.clearDecorations(view);
       
       // Now decorate each matched element
+      let hadValidationFailure = false;
       for (const [lineNum, entry] of subitemEntries) {
         const li = lineToElement.get(lineNum);
         if (!li) {
           logger.log('[TPS GCM] [LinkedSubitem] no element for line', { lineNum, line: lines[lineNum] });
+          hadValidationFailure = true;
           continue;
         }
         
         const { parsed, childFile, model } = entry;
+        const renderPlan = this.buildRenderPlan('reading', model, {
+          lineNumber: lineNum,
+          sourceLine: lines[lineNum] ?? '',
+          sourceIndent: this.getLeadingIndentInfo(lines[lineNum] ?? ''),
+        });
+        logger.log('[TPS GCM] [RenderPlan] reading', renderPlan);
         
-        // Mark the list item as a linked subitem task
-        li.classList.add('tps-gcm-linked-subitem-task', model.visualStateClass);
-        
-        // Build the complete row content using shared builder
         const elements = buildLinkedSubitemRow(
           model,
-          (evt) => {
-            const checkboxEl = elements.checkbox;
-            if (checkboxEl) {
-              void this.handleCustomCheckboxClick(evt, checkboxEl);
-            }
-          },
-          (path) => this.openLinkedSubitemPath(path),
+          () => {},
+          () => {},
+          () => {},
           (evt, pill) => {
             void this.handlePropertyPillClick(evt, this.findPillElement(elements.pillsContainer, pill));
           },
-          { includeCheckbox: model.kind !== 'checkbox' },
+          { includeCheckbox: false, includeBulletMarker: false },
         );
 
-        logger.log('[TPS GCM] [DIAG] reading-mode rendered row before replace', {
+        logger.log('[TPS GCM] [DIAG] reading-mode rendered pills before insert', {
           parentFile: file.path,
           childFile: childFile.path,
           lineNumber: lineNum,
@@ -640,10 +852,25 @@ export class LinkedSubitemCheckboxService {
             text: (pillEl as HTMLElement).textContent,
           })),
         });
-        
-        this.injectReadingModeLinkWidget(li, childFile, model, elements.container);
+
+        this.logReadingModeHostDiagnostics(file.path, childFile.path, lineNum, li, elements.pillsContainer);
+        this.injectReadingModePillsWidget(li, childFile, model, elements.pillsContainer);
+        const validation = this.validateReadingModeReplacement(li, model, renderPlan);
+        logger.log('[TPS GCM] [RenderResult] reading', validation);
+        if (!validation.ok) {
+          hadValidationFailure = true;
+        }
+      }
+
+      if (hadValidationFailure) {
+        this.scheduleSelfHeal(view, 'reading-mode replacement validation failed');
+      } else {
+        this.resetSelfHealAttempts(view);
       }
     } finally {
+      if (this.getLinkedSubitemRenderMode(view) === 'preview') {
+        this.reconnectReadingModeObserver(view);
+      }
       window.setTimeout(() => this.decoratingViews.delete(view), 0);
     }
   }
@@ -681,6 +908,14 @@ export class LinkedSubitemCheckboxService {
       if (el instanceof HTMLElement) {
         const host = this.normalizeReadingModeHostElement(el);
         if (host) {
+          logger.log('[TPS GCM] [SectionMap] reading host candidate', {
+            line,
+            sectionTag: el.tagName,
+            sectionClasses: el.className,
+            hostTag: host.tagName,
+            hostClasses: host.className,
+            hostText: this.getListItemText(host),
+          });
           lineToElementMap.set(line, host);
         }
       }
@@ -701,6 +936,7 @@ export class LinkedSubitemCheckboxService {
       matchedCount: result.size,
       expectedCount: subitemEntries.size,
       usedFallback: usedLines.size !== subitemEntries.size,
+      mappedLines: Array.from(result.keys()),
     });
     
     return result;
@@ -838,38 +1074,133 @@ export class LinkedSubitemCheckboxService {
     customContent: HTMLElement,
     lineKind: string,
   ): void {
-    // Find and preserve the bullet marker (the first element child)
-    const bulletMarker = li.firstChild;
+    const target = li.matches('li') ? li : (li.closest('li') as HTMLElement | null) ?? li;
+    const preservedNodes = Array.from(target.children).filter((child) => child.matches('ul, ol, .list-bullet'));
     logger.log('[TPS GCM] [DIAG] replaceListContent before', {
       lineKind,
-      originalChildNodeCount: li.childNodes.length,
-      originalElementChildCount: li.childElementCount,
-      originalHtml: li.innerHTML,
-      bulletMarkerNodeName: bulletMarker?.nodeName || null,
+      originalChildNodeCount: target.childNodes.length,
+      originalElementChildCount: target.childElementCount,
+      originalHtml: target.innerHTML,
+      nestedListCount: preservedNodes.filter((child) => child.matches('ul, ol')).length,
+      preservedNodeTags: preservedNodes.map((child) => child.tagName),
       customContentPillCount: customContent.querySelectorAll('.tps-gcm-linked-subitem-pill').length,
     });
-    
-    // Clear the list item content
-    li.textContent = '';
-    
-    // Re-add the bullet marker at the beginning
-    if (bulletMarker && bulletMarker.nodeType === Node.ELEMENT_NODE) {
-      li.appendChild(bulletMarker);
+
+    if (!target.dataset.tpsGcmOriginalHtml) {
+      target.dataset.tpsGcmOriginalHtml = target.innerHTML;
     }
-    
-    // Append our custom row content
-    li.appendChild(customContent);
-    
-    // Mark the list item as having replaced content
-    li.classList.add('tps-gcm-linked-subitem-replaced');
+
+    for (const preservedNode of preservedNodes) {
+      preservedNode.remove();
+    }
+    while (target.firstChild) {
+      target.removeChild(target.firstChild);
+    }
+
+    for (const preservedNode of preservedNodes) {
+      if (preservedNode.matches('.list-bullet')) {
+        target.appendChild(preservedNode);
+      }
+    }
+
+    target.appendChild(customContent);
+
+    for (const preservedNode of preservedNodes) {
+      if (preservedNode.matches('ul, ol')) {
+        target.appendChild(preservedNode);
+      }
+    }
+
+    target.classList.add('tps-gcm-linked-subitem-replaced');
 
     logger.log('[TPS GCM] [DIAG] replaceListContent after', {
       lineKind,
-      finalChildNodeCount: li.childNodes.length,
-      finalElementChildCount: li.childElementCount,
-      finalHtml: li.innerHTML,
-      renderedPillCount: li.querySelectorAll('.tps-gcm-linked-subitem-pill').length,
+      finalChildNodeCount: target.childNodes.length,
+      finalElementChildCount: target.childElementCount,
+      finalHtml: target.innerHTML,
+      renderedPillCount: target.querySelectorAll('.tps-gcm-linked-subitem-pill').length,
     });
+  }
+
+  private buildRenderPlan(
+    mode: 'reading' | 'live-preview',
+    model: SubitemLineModel,
+    context: {
+      lineNumber: number;
+      sourceLine: string;
+      sourceIndent: { whitespace: string; depth: number; visualColumns: number };
+    },
+  ): Record<string, unknown> {
+    const includeCheckbox = this.shouldRenderLinkedSubitemCheckboxes(model) && (mode === 'reading'
+      ? shouldRenderReadingModeLeadingControl(model)
+      : shouldRenderLivePreviewLeadingControl(model));
+    const includeBulletMarker = mode === 'live-preview' && model.kind === 'bullet';
+
+    return {
+      mode,
+      parentFile: model.parentFile.path,
+      childFile: model.childFile.path,
+      lineNumber: context.lineNumber,
+      lineKind: model.kind,
+      sourceLine: context.sourceLine,
+      sourceIndentDepth: context.sourceIndent.depth,
+      sourceIndentColumns: context.sourceIndent.visualColumns,
+      sourceIndentWhitespace: context.sourceIndent.whitespace.replace(/\t/g, '\\t'),
+      linkTarget: model.linkTarget,
+      displayLabel: model.displayLabel,
+      hasExplicitStatus: model.hasExplicitStatus,
+      effectiveCheckboxState: model.checkboxState,
+      effectiveVisualState: model.visualState,
+      includeCheckbox,
+      includeBulletMarker,
+      pillCount: model.pills.length,
+      pillKinds: model.pills.map((pill) => pill.kind),
+    };
+  }
+
+  private getLeadingIndentInfo(line: string): { whitespace: string; depth: number; visualColumns: number } {
+    const whitespace = String(line || '').match(/^[\t ]*/)?.[0] ?? '';
+    const visualColumns = whitespace.split('').reduce((total, char) => total + (char === '\t' ? 2 : 1), 0);
+    return {
+      whitespace,
+      depth: whitespace.length,
+      visualColumns,
+    };
+  }
+
+  private validateReadingModeReplacement(
+    li: HTMLElement,
+    model: SubitemLineModel,
+    renderPlan: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const link = this.findReadingModeNativeLink(li, model.childFile, model.displayLabel);
+    const pills = li.querySelector('.tps-gcm-linked-subitem-pills') as HTMLElement | null;
+    const nestedListCount = Array.from(li.children).filter((child) => child.matches('ul, ol')).length;
+    const nativeBullet = li.querySelector(':scope > .list-bullet') as HTMLElement | null;
+    const expectedLabel = String(model.displayLabel || model.childFile.basename || model.childFile.name || '').trim()
+      || model.childFile.basename;
+    const renderedLabel = String(link?.textContent?.trim() || '');
+
+    const ok = Boolean(
+      link &&
+      pills &&
+      renderedLabel === expectedLabel &&
+      nestedListCount >= 0,
+    );
+
+    return {
+      ...renderPlan,
+      ok,
+      hostTag: li.tagName,
+      hostClasses: li.className,
+      hasLink: !!link,
+      hasPills: !!pills,
+      renderedLabel,
+      expectedLabel,
+      nativeBulletStillPresent: !!nativeBullet,
+      nestedListCount,
+      hostHtml: li.innerHTML,
+    };
   }
 
   /**
@@ -886,23 +1217,79 @@ export class LinkedSubitemCheckboxService {
     this.replaceListContent(li, customContent, lineKind);
   }
 
-  /**
-   * Reading mode decoration: hide the native link and inject our inline widget
-   * immediately after it, preserving the original checkbox/list structure.
-   */
-  private injectReadingModeLinkWidget(
+  private injectReadingModePillsWidget(
     li: HTMLElement,
     childFile: TFile,
     model: SubitemLineModel,
-    customContent: HTMLElement,
+    pillsContainer: HTMLElement,
   ): void {
     const host = this.normalizeReadingModeHostElement(li) ?? li;
-    customContent.classList.add('is-reading-mode');
+    const isHeading = /^H[1-6]$/.test(host.tagName);
+    const renderLeadingControl = this.shouldRenderLinkedSubitemCheckboxes(model) && shouldRenderReadingModeLeadingControl(model);
+    const renderedKind = renderLeadingControl && model.kind !== 'heading' ? 'checkbox' : model.kind;
     const nativeLink = this.findReadingModeNativeLink(host, childFile, model.displayLabel);
-    if (!nativeLink) return;
+    if (!nativeLink) {
+      logger.warn('[TPS GCM] [LinkedSubitemTrace] reading insert skipped', {
+        parentFile: model.parentFile.path,
+        childFile: childFile.path,
+        hostTag: host.tagName,
+        hostClasses: host.className,
+        hostHtml: host.innerHTML,
+        reason: 'native-link-not-found',
+      });
+      return;
+    }
 
-    nativeLink.classList.add('tps-gcm-hidden-native-link');
-    nativeLink.insertAdjacentElement('afterend', customContent);
+    host.classList.add('tps-gcm-linked-subitem-task', `kind-${renderedKind}`);
+    host.classList.remove('kind-bare', 'kind-bullet', 'kind-checkbox', 'kind-heading');
+    host.classList.add(`kind-${renderedKind}`);
+    host.dataset.linkedSubitemKind = renderedKind;
+
+    if (renderLeadingControl) {
+      const existingCheckbox = host.querySelector(':scope > .tps-gcm-linked-subitem-checkbox');
+      if (existingCheckbox) existingCheckbox.remove();
+
+      const checkboxInput = document.createElement('input');
+      checkboxInput.type = 'checkbox';
+      checkboxInput.tabIndex = -1;
+      checkboxInput.className = `tps-gcm-linked-subitem-checkbox state-${model.visualState}${isHeading ? ' is-heading' : ''}`;
+      const state = model.checkboxState || '[ ]';
+      checkboxInput.setAttribute('aria-label', 'Toggle linked subitem status');
+      checkboxInput.dataset.linkedSubitemPath = childFile.path;
+      checkboxInput.dataset.linkedSubitemParent = model.parentFile.path;
+      checkboxInput.dataset.linkedSubitemState = state;
+      checkboxInput.checked = /[xX]/.test(state);
+      checkboxInput.indeterminate = state.includes('?') || state.includes('-') || state.includes('/');
+      checkboxInput.addEventListener('mousedown', (evt) => { evt.preventDefault(); evt.stopPropagation(); });
+      checkboxInput.addEventListener('click', (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        void this.handleCustomCheckboxClick(evt, checkboxInput);
+      });
+      host.insertBefore(checkboxInput, nativeLink);
+    }
+
+    const existing = host.querySelector(':scope .tps-gcm-linked-subitem-pills');
+    if (existing) {
+      logger.log('[TPS GCM] [LinkedSubitemTrace] reading remove-existing-pills', {
+        parentFile: model.parentFile.path,
+        childFile: childFile.path,
+        existingHtml: (existing as HTMLElement).outerHTML,
+      });
+      existing.remove();
+    }
+
+    nativeLink.insertAdjacentText('afterend', ' ');
+    nativeLink.insertAdjacentElement('afterend', pillsContainer);
+    logger.log('[TPS GCM] [LinkedSubitemTrace] reading insert complete', {
+      parentFile: model.parentFile.path,
+      childFile: childFile.path,
+      label: model.displayLabel,
+      nativeLinkText: nativeLink.textContent?.trim() ?? '',
+      nativeLinkHref: nativeLink.getAttribute('href') || '',
+      pillCount: pillsContainer.querySelectorAll('.tps-gcm-linked-subitem-pill').length,
+      hostHtml: host.innerHTML,
+    });
   }
 
   private findReadingModeNativeLink(
@@ -912,6 +1299,16 @@ export class LinkedSubitemCheckboxService {
   ): HTMLAnchorElement | null {
     const scope = this.normalizeReadingModeHostElement(li) ?? li;
     const candidates = Array.from(scope.querySelectorAll<HTMLAnchorElement>('a.internal-link, a'));
+    logger.log('[TPS GCM] [LinkedSubitemTrace] reading link candidates', {
+      childFile: childFile.path,
+      displayLabel,
+      candidateCount: candidates.length,
+      candidates: candidates.map((anchor) => ({
+        text: String(anchor.textContent || '').trim(),
+        href: anchor.getAttribute('href') || '',
+        classes: anchor.className,
+      })),
+    });
     if (candidates.length === 0) return null;
     if (candidates.length === 1) return candidates[0];
 
@@ -929,21 +1326,47 @@ export class LinkedSubitemCheckboxService {
         text === basename ||
         (label && text === label)
       ) {
+        logger.log('[TPS GCM] [LinkedSubitemTrace] reading link candidate matched', {
+          childFile: childFile.path,
+          href,
+          text,
+        });
         return anchor;
       }
     }
 
+    logger.log('[TPS GCM] [LinkedSubitemTrace] reading link fallback-first', {
+      childFile: childFile.path,
+      fallbackText: String(candidates[0]?.textContent || '').trim(),
+      fallbackHref: candidates[0]?.getAttribute('href') || '',
+    });
     return candidates[0];
   }
 
   private normalizeReadingModeHostElement(el: HTMLElement | null | undefined): HTMLElement | null {
     if (!(el instanceof HTMLElement)) return null;
-    if (el.matches('li.task-list-item, li, p')) return el;
+    if (el.matches('li.task-list-item, li')) return el;
 
-    const descendantHost = el.querySelector<HTMLElement>('li.task-list-item, li, p');
+    const descendantListHost = el.querySelector<HTMLElement>('li.task-list-item, li');
+    if (descendantListHost) return descendantListHost;
+
+    const ancestorListHost = el.closest<HTMLElement>('li.task-list-item, li');
+    if (ancestorListHost) return ancestorListHost;
+
+    if (el.matches('h1, h2, h3, h4, h5, h6')) return el;
+
+    const descendantHeading = el.querySelector<HTMLElement>('h1, h2, h3, h4, h5, h6');
+    if (descendantHeading) return descendantHeading;
+
+    const ancestorHeading = el.closest<HTMLElement>('h1, h2, h3, h4, h5, h6');
+    if (ancestorHeading) return ancestorHeading;
+
+    if (el.matches('p')) return el;
+
+    const descendantHost = el.querySelector<HTMLElement>('p');
     if (descendantHost) return descendantHost;
 
-    const ancestorHost = el.closest<HTMLElement>('li.task-list-item, li, p');
+    const ancestorHost = el.closest<HTMLElement>('p');
     if (ancestorHost) return ancestorHost;
 
     return el;
@@ -1021,11 +1444,177 @@ export class LinkedSubitemCheckboxService {
   private async setLinkedSubitemStatus(file: TFile, status: string): Promise<void> {
     const normalizedStatus = String(status || '').trim();
     if (!normalizedStatus) return;
+    await this.applyLinkedSubitemStatusChange(file, normalizedStatus);
+  }
+
+  private async clearLinkedSubitemStatusKey(file: TFile): Promise<void> {
+    const statusKey = this.getStatusKey();
+    await this.plugin.bulkEditService.removeFrontmatterKey([file], statusKey);
+    await this.syncClearedStatusAcrossParents(file);
+    new Notice(`Cleared "${statusKey}" on "${file.basename}".`);
+  }
+
+  private async setLinkedSubitemStatusEmpty(file: TFile): Promise<void> {
+    const statusKey = this.getStatusKey();
+    await this.plugin.bulkEditService.updateFrontmatter([file], { [statusKey]: '' });
+    await this.syncClearedStatusAcrossParents(file);
+    new Notice(`Set "${statusKey}" empty on "${file.basename}".`);
+  }
+
+  private async applyLinkedSubitemStatusChange(file: TFile, normalizedStatus: string): Promise<void> {
     await this.plugin.bulkEditService.setStatus([file], normalizedStatus);
+    await this.syncCheckboxStateAcrossParents(file, normalizedStatus);
     await this.refreshReferencesForChild(file);
+    this.triggerLinkedSubitemRenderRefresh();
+    new Notice(`Set "${file.basename}" to ${normalizedStatus}.`);
+  }
+
+  private showLinkedSubitemStatusMenu(childFile: TFile, x: number, y: number): void {
+    const statuses = this.getStatusOptions();
+    const currentStatus = this.getNormalizedStatus(childFile);
+    const statusKey = this.getStatusKey();
+    const childFrontmatter = (this.plugin.app.metadataCache.getFileCache(childFile)?.frontmatter || {}) as Record<string, unknown>;
+    const actualStatusKey = Object.keys(childFrontmatter).find((key) => key.toLowerCase() === statusKey.toLowerCase());
+    const hasStatusKey = !!actualStatusKey;
+    const currentRawStatus = actualStatusKey ? childFrontmatter[actualStatusKey] : undefined;
+    const isEmptyStatus = hasStatusKey && (currentRawStatus === '' || currentRawStatus === null || currentRawStatus === undefined);
+
+    const menu = new Menu();
+    menu.addItem((item) => {
+      item
+        .setTitle('(none)')
+        .setChecked(!hasStatusKey)
+        .onClick(() => {
+          void this.clearLinkedSubitemStatusKey(childFile);
+        });
+    });
+    menu.addItem((item) => {
+      item
+        .setTitle('(empty)')
+        .setChecked(isEmptyStatus)
+        .onClick(() => {
+          void this.setLinkedSubitemStatusEmpty(childFile);
+        });
+    });
+    if (statuses.length > 0) menu.addSeparator();
+    for (const status of statuses) {
+      menu.addItem((item) => {
+        const normalized = String(status || '').trim().toLowerCase();
+        item.setTitle(status);
+        if (normalized && normalized === currentStatus) {
+          item.setChecked(true);
+        }
+        item.onClick(() => {
+          void this.setLinkedSubitemStatus(childFile, status);
+        });
+      });
+    }
+    menu.showAtPosition({ x, y });
+  }
+
+  async syncClearedStatusAcrossParents(childFile: TFile): Promise<void> {
+    await this.convertChecklistLinksToBulletForChild(childFile);
+    await this.refreshReferencesForChild(childFile);
+    this.triggerLinkedSubitemRenderRefresh();
+  }
+
+  async syncCheckboxStateAcrossParents(childFile: TFile, status: string): Promise<void> {
+    const checkboxState = this.mapStatusToCheckboxState(status);
+    if (!checkboxState) return;
+
+    const references = await this.plugin.subitemReferenceIndexService.getReferencesForChild(childFile);
+    const parentPaths = Array.from(new Set(references.map((entry) => String(entry.parentPath || '').trim()).filter(Boolean)));
+    for (const parentPath of parentPaths) {
+      const parentFile = this.plugin.app.vault.getFileByPath(parentPath);
+      if (!(parentFile instanceof TFile)) continue;
+      await this.plugin.subitemRelationshipSyncService.mutateMarkdownBody(parentFile, async (lines) => {
+        let changed = false;
+        for (let i = 0; i < lines.length; i += 1) {
+          const raw = String(lines[i] || '');
+          const parsed = this.plugin.bodySubitemLinkService.parseLine(raw);
+          if (!parsed || (parsed.kind !== 'checkbox' && parsed.kind !== 'bullet' && parsed.kind !== 'heading')) continue;
+          const resolved = this.resolveLinkedFile(parsed.linkTarget, parentFile.path);
+          if (!(resolved instanceof TFile) || resolved.path !== childFile.path) continue;
+          let nextLine = raw;
+          if (parsed.kind === 'checkbox') {
+            nextLine = raw.replace(
+              CheckboxPatterns.CHECKBOX_LINE_CAPTURE,
+              (_match, prefix, _state, text) => `${prefix}[${checkboxState}] ${text || ''}`.replace(/\s+$/, ' ')
+            );
+          } else if (parsed.kind === 'bullet') {
+            const bulletPrefix = raw.match(CheckboxPatterns.TASK_LINE);
+            if (bulletPrefix) {
+              const prefix = bulletPrefix[0];
+              nextLine = `${prefix}${checkboxState} ${raw.slice(prefix.length)}`;
+            }
+          }
+          if (nextLine !== raw) {
+            lines[i] = nextLine;
+            changed = true;
+          }
+        }
+        return changed;
+      });
+    }
+  }
+
+  private queueClearedStatusSync(childFile: TFile): void {
+    const key = childFile.path;
+    if (this.pendingClearedStatusSyncs.has(key)) return;
+    this.pendingClearedStatusSyncs.add(key);
+    window.setTimeout(() => {
+      void this.syncClearedStatusAcrossParents(childFile)
+        .catch((error) => {
+          logger.warn('[TPS GCM] Failed queued cleared-status sync', {
+            childFile: childFile.path,
+            error,
+          });
+        })
+        .finally(() => {
+          this.pendingClearedStatusSyncs.delete(key);
+        });
+    }, 0);
+  }
+
+  async convertChecklistLinksToBulletForChild(childFile: TFile): Promise<void> {
+    const references = await this.plugin.subitemReferenceIndexService.getReferencesForChild(childFile);
+    const parentPaths = Array.from(
+      new Set(
+        references
+          .map((entry) => String(entry.parentPath || '').trim())
+          .filter(Boolean),
+      ),
+    );
+    for (const parentPath of parentPaths) {
+      const parentFile = this.plugin.app.vault.getFileByPath(parentPath);
+      if (!(parentFile instanceof TFile)) continue;
+      await this.plugin.subitemRelationshipSyncService.mutateMarkdownBody(parentFile, async (lines) => {
+        let changed = false;
+        for (let i = 0; i < lines.length; i += 1) {
+          const raw = String(lines[i] || '');
+          const parsed = this.plugin.bodySubitemLinkService.parseLine(raw);
+          if (!parsed || parsed.kind !== 'checkbox') continue;
+          const resolved = this.resolveLinkedFile(parsed.linkTarget, parentFile.path);
+          if (!(resolved instanceof TFile) || resolved.path !== childFile.path) continue;
+          const bulletLine = raw.replace(CheckboxPatterns.CHECKBOX_LINE_CAPTURE, (_match, prefix, _state, text) => `${prefix}${text}`);
+          if (bulletLine !== raw) {
+            lines[i] = bulletLine;
+            changed = true;
+          }
+        }
+        return changed;
+      });
+    }
+  }
+
+  private triggerLinkedSubitemRenderRefresh(): void {
     this.scheduleDecorateForActiveView();
     this.refreshLivePreviewEditors();
-    new Notice(`Set "${file.basename}" to ${normalizedStatus}.`);
+    // Metadata cache/frontmatter updates can lag one tick; run a second pass.
+    window.setTimeout(() => {
+      this.scheduleDecorateForActiveView();
+      this.refreshLivePreviewEditors();
+    }, 180);
   }
 
   private getNormalizedStatus(file: TFile): string {
@@ -1047,6 +1636,7 @@ export class LinkedSubitemCheckboxService {
       class {
         decorations: DecorationSet;
         lastMatchCount = 0;
+        lastPotentialCount = 0;
         lastDocLength = 0;
         initialized = false;
 
@@ -1054,6 +1644,7 @@ export class LinkedSubitemCheckboxService {
           const result = service.buildEditorDecorations(view);
           this.decorations = result.decorations;
           this.lastMatchCount = result.matchCount;
+          this.lastPotentialCount = result.potentialCount;
           this.lastDocLength = view.state.doc.length;
           this.initialized = true;
         }
@@ -1062,61 +1653,48 @@ export class LinkedSubitemCheckboxService {
           const hasRefreshEffect = update.transactions.some((tr) =>
             tr.effects.some((effect) => effect.is(refreshLinkedSubitemEffect))
           );
-          const docLengthChanged = update.state.doc.length !== this.lastDocLength;
           
-          // SAFETY: Always rebuild decorations on document changes or explicit refresh.
-          // Never preserve stale decorations across actual document-length changes, or
-          // they may point past the end of the document and throw RangeError.
+          // SAFETY: Treat a fresh rebuild as authoritative even when it returns
+          // zero matches. Keeping stale decorations is what causes ghost rows in
+          // plain source mode and partially broken rows after focus/mode churn.
           if (update.docChanged) {
             const result = service.buildEditorDecorations(update.view);
-            if (
-              result.matchCount > 0
-              || this.lastMatchCount === 0
-              || update.state.doc.length === 0
-              || docLengthChanged
-            ) {
-              this.decorations = result.decorations;
-              this.lastMatchCount = result.matchCount;
-              this.lastDocLength = update.state.doc.length;
-              if (result.matchCount === 0 && docLengthChanged && update.state.doc.length > 0) {
-                window.setTimeout(() => {
-                  try {
-                    update.view.dispatch({ effects: refreshLinkedSubitemEffect.of(Date.now()) });
-                  } catch {
-                    // Ignore stale editor refresh attempts during workspace churn.
-                  }
-                }, 0);
-              }
-            } else {
-              window.setTimeout(() => {
-                try {
-                  update.view.dispatch({ effects: refreshLinkedSubitemEffect.of(Date.now()) });
-                } catch {
-                  // Ignore stale editor refresh attempts during workspace churn.
-                }
-              }, 0);
+            if (service.shouldKeepExistingEditorDecorations(update.view, result, this.lastMatchCount, this.lastPotentialCount, this.lastDocLength)) {
+              service.scheduleEditorRefresh(update.view, 90);
+              return;
             }
+            this.decorations = result.decorations;
+            this.lastMatchCount = result.matchCount;
+            this.lastPotentialCount = result.potentialCount;
+            this.lastDocLength = update.state.doc.length;
             return;
           }
 
           if (hasRefreshEffect) {
             const result = service.buildEditorDecorations(update.view);
-            if (result.matchCount > 0 || this.lastMatchCount === 0) {
-              this.decorations = result.decorations;
-              this.lastMatchCount = result.matchCount;
-              this.lastDocLength = update.state.doc.length;
+            if (service.shouldKeepExistingEditorDecorations(update.view, result, this.lastMatchCount, this.lastPotentialCount, this.lastDocLength)) {
+              service.scheduleEditorRefresh(update.view, 90);
+              return;
             }
+            this.decorations = result.decorations;
+            this.lastMatchCount = result.matchCount;
+            this.lastPotentialCount = result.potentialCount;
+            this.lastDocLength = update.state.doc.length;
             return;
           }
           
-          // Only rebuild on viewportChanged if we have no decorations yet (initial render)
-          if (update.viewportChanged && this.lastMatchCount === 0 && this.initialized) {
+          // Rebuild on viewport changes while visible so newly exposed lines and
+          // cleared rows stay in sync as the editor reflows.
+          if (update.viewportChanged && this.initialized) {
             const result = service.buildEditorDecorations(update.view);
-            if (result.matchCount > 0) {
-              this.decorations = result.decorations;
-              this.lastMatchCount = result.matchCount;
-              this.lastDocLength = update.state.doc.length;
+            if (service.shouldKeepExistingEditorDecorations(update.view, result, this.lastMatchCount, this.lastPotentialCount, this.lastDocLength)) {
+              service.scheduleEditorRefresh(update.view, 90);
+              return;
             }
+            this.decorations = result.decorations;
+            this.lastMatchCount = result.matchCount;
+            this.lastPotentialCount = result.potentialCount;
+            this.lastDocLength = update.state.doc.length;
           }
         }
       },
@@ -1131,8 +1709,8 @@ export class LinkedSubitemCheckboxService {
    * TaskNotes-style behavior: keep the native markdown checkbox/list marker and
    * hide only the wikilink token, then render an inline widget beside it.
    *
-   * Important: use mark+widget, not Decoration.replace. Replacing ranges from a
-   * ViewPlugin can trip CodeMirror invariants during document/layout churn.
+   * Important: only append a widget after the native wikilink token. Do not
+   * replace text, list markers, or checkboxes.
    */
   private buildEditorDecorations(view: EditorView): {
     decorations: DecorationSet;
@@ -1140,29 +1718,35 @@ export class LinkedSubitemCheckboxService {
     potentialCount: number;
     filePath: string | null;
   } {
-    if (!this.plugin.settings.enableLinkedSubitemCheckboxes) {
-      return { decorations: Decoration.none, matchCount: 0, potentialCount: 0, filePath: null };
-    }
     const markdownView = this.resolveMarkdownViewForEditor(view);
     const parentFile = markdownView?.file;
+
+    if (!this.shouldEnhanceLinkedSubitems()) {
+      return { decorations: Decoration.none, matchCount: 0, potentialCount: 0, filePath: null };
+    }
     if (!(markdownView instanceof MarkdownView) || !(parentFile instanceof TFile)) {
       return { decorations: Decoration.none, matchCount: 0, potentialCount: 0, filePath: parentFile instanceof TFile ? parentFile.path : null };
+    }
+    if (!this.isLivePreviewEditorVisible(markdownView)) {
+      return { decorations: Decoration.none, matchCount: 0, potentialCount: 0, filePath: parentFile.path };
     }
 
     const builder = new RangeSetBuilder<Decoration>();
     let matchCount = 0;
     let potentialCount = 0;
-    
-    for (const range of view.visibleRanges) {
-      let pos = range.from;
-      while (pos <= range.to) {
-        const line = view.state.doc.lineAt(pos);
+    let hadRecoverableFailure = false;
+
+    for (const lineNumber of this.getVisibleLineNumbers(view)) {
+        const line = view.state.doc.line(lineNumber);
         const parsed = this.plugin.bodySubitemLinkService.parseLine(line.text);
         if (parsed) {
           potentialCount++;
           const childFile = this.resolveLinkedFile(parsed.linkTarget, parentFile.path);
           if (childFile instanceof TFile) {
             const model = this.subitemLineModelService.buildModel(parsed, childFile, parentFile);
+            if (parsed.kind === 'checkbox' && !model.hasExplicitStatus) {
+              this.queueClearedStatusSync(childFile);
+            }
             matchCount++;
             logger.log('[TPS GCM] [DIAG] live-preview model', {
               parentFile: parentFile.path,
@@ -1175,86 +1759,101 @@ export class LinkedSubitemCheckboxService {
               modelPills: model.pills.map((pill) => ({ kind: pill.kind, label: pill.label, value: pill.value })),
             });
             
-            // Suspend takeover only for an actual range selection.
-            // A collapsed cursor should keep the row stable instead of falling back
-            // to mixed native/widget rendering on the active line.
             if (this.lineHasRangeSelection(view, line.from, line.to)) {
-               if (line.to >= range.to) break;
-               pos = line.to + 1;
                continue;
-             }
-            
-            // Add line class for styling
-            builder.add(
-              line.from,
-              line.from,
-              Decoration.line({
-                class: `tps-gcm-linked-subitem-task tps-gcm-linked-subitem-cm-line ${model.visualStateClass}`,
-              }),
-            );
+            }
             
             const linkOffset = line.text.indexOf(parsed.wikilink);
             if (linkOffset < 0) {
-              if (line.to >= range.to) break;
-              pos = line.to + 1;
+              logger.warn('[TPS GCM] [RenderSkip] live-preview wikilink offset missing', {
+                parentFile: parentFile.path,
+                childFile: childFile.path,
+                lineNumber: line.number,
+                lineText: line.text,
+                wikilink: parsed.wikilink,
+              });
+              hadRecoverableFailure = true;
               continue;
             }
 
-            let replaceFrom = line.from + linkOffset;
-            let replaceTo = replaceFrom + parsed.wikilink.length;
+            const replaceFrom = line.from + linkOffset;
+            const replaceTo = replaceFrom + parsed.wikilink.length;
 
-            // SAFETY: Validate all positions are within line bounds and document bounds.
-            // This prevents "RangeError: Invalid position" and "Decorations that replace line breaks" errors.
             const docLength = view.state.doc.length;
-            replaceFrom = Math.max(line.from, Math.min(replaceFrom, line.to));
-            replaceTo = Math.max(replaceFrom, Math.min(replaceTo, line.to));
+            const safeReplaceFrom = Math.max(line.from, Math.min(replaceFrom, line.to));
+            const safeReplaceTo = Math.max(safeReplaceFrom, Math.min(replaceTo, line.to));
             
-            // Skip if positions are invalid or would create an empty/invalid range
-            if (replaceFrom >= replaceTo || replaceTo > docLength || replaceFrom < 0) {
-              if (line.to >= range.to) break;
-              pos = line.to + 1;
+            if (safeReplaceTo > docLength || safeReplaceFrom < 0) {
+              logger.warn('[TPS GCM] [RenderSkip] live-preview invalid insert position', {
+                parentFile: parentFile.path,
+                childFile: childFile.path,
+                lineNumber: line.number,
+                lineText: line.text,
+                replaceFrom: safeReplaceFrom,
+                replaceTo: safeReplaceTo,
+                lineFrom: line.from,
+                lineTo: line.to,
+                docLength,
+                kind: model.kind,
+              });
+              hadRecoverableFailure = true;
               continue;
             }
+
+            this.logLivePreviewRenderDecision(
+              parentFile.path,
+              childFile.path,
+              line.number,
+              line.text,
+              model,
+              safeReplaceFrom,
+              safeReplaceTo,
+            );
             
-            // Replace the wikilink token directly instead of collapsing it with CSS.
-            // This keeps CodeMirror's coordinate math stable while leaving the
-            // native task/list DOM in place.
+            const widget = new LinkedSubitemPillsWidget(
+              model,
+              (evt, pill) => {
+                void this.handlePropertyPillClick(
+                  evt,
+                  (evt.target as HTMLElement).closest('.tps-gcm-linked-subitem-pill') as HTMLElement,
+                );
+              },
+            );
+
             builder.add(
-              replaceFrom,
-              replaceTo,
-              Decoration.replace({
-                widget: new LinkedSubitemRowWidget(
-                  model,
-                  (evt) => {
-                    void this.handleCustomCheckboxClick(
-                      evt,
-                      (evt.target as HTMLElement).closest(`.${VIRTUAL_CHECKBOX_CLASS}`) as HTMLElement,
-                    );
-                  },
-                  (path) => this.openLinkedSubitemPath(path),
-                  (evt, pill) => {
-                    void this.handlePropertyPillClick(
-                      evt,
-                      (evt.target as HTMLElement).closest('.tps-gcm-linked-subitem-pill') as HTMLElement,
-                    );
-                  },
-                ),
+              safeReplaceTo,
+              safeReplaceTo,
+              Decoration.widget({
+                widget,
+                side: 1,
                 inclusive: false,
               }),
             );
-            builder.add(
-              replaceTo,
-              replaceTo,
-              Decoration.widget({
-                side: 1,
-                widget: new LinkedSubitemSpacerWidget(),
-              }),
-            );
+
+            if (parsed.kind === 'heading') {
+              builder.add(
+                line.from,
+                line.from,
+                Decoration.line({
+                  class: `tps-gcm-linked-subitem-task kind-heading ${model.visualStateClass}`,
+                }),
+              );
+            }
+            logger.log('[TPS GCM] [LinkedSubitemTrace] live widget added', {
+              parentFile: parentFile.path,
+              childFile: childFile.path,
+              lineNumber: line.number,
+              lineFrom: line.from,
+              lineTo: line.to,
+              linkOffset,
+              widgetInsertAt: safeReplaceTo,
+              wikilink: parsed.wikilink,
+              pillCount: model.pills.length,
+              lineText: line.text,
+            });
+            this.logLivePreviewLineDiagnostics(parentFile.path, childFile.path, line.number, view, line.from, line.to);
           }
         }
-        if (line.to >= range.to) break;
-        pos = line.to + 1;
-      }
     }
     
     logger.log('[TPS GCM] [LinkedSubitemCM] decoration build', {
@@ -1262,7 +1861,12 @@ export class LinkedSubitemCheckboxService {
       matchCount,
       potentialCount,
       visibleRanges: view.visibleRanges.length,
+      hadRecoverableFailure,
     });
+
+    if (hadRecoverableFailure && potentialCount > 0 && matchCount > 0) {
+      this.scheduleEditorRefresh(view, 120);
+    }
     
     // SAFETY: Always return fresh decorations - never cache or reuse stale decorations.
     // This prevents "RangeError: Invalid position" errors when document changes.
@@ -1272,6 +1876,30 @@ export class LinkedSubitemCheckboxService {
       potentialCount,
       filePath: parentFile.path,
     };
+  }
+
+  private getVisibleLineNumbers(view: EditorView): number[] {
+    const doc = view.state.doc;
+    const maxLine = doc.lines;
+    if (maxLine <= 0) return [];
+
+    const lineNumbers = new Set<number>();
+    const overscan = 2;
+    const ranges = Array.isArray(view.visibleRanges) && view.visibleRanges.length > 0
+      ? view.visibleRanges
+      : [{ from: 0, to: doc.length }];
+
+    for (const range of ranges) {
+      const safeFrom = Math.max(0, Math.min(range.from, doc.length));
+      const safeTo = Math.max(safeFrom, Math.min(range.to, doc.length));
+      const startLine = Math.max(1, doc.lineAt(safeFrom).number - overscan);
+      const endLine = Math.min(maxLine, doc.lineAt(safeTo).number + overscan);
+      for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+        lineNumbers.add(lineNumber);
+      }
+    }
+
+    return Array.from(lineNumbers).sort((a, b) => a - b);
   }
 
   private resolveMarkdownViewForEditor(editorView: EditorView): MarkdownView | null {
@@ -1288,16 +1916,168 @@ export class LinkedSubitemCheckboxService {
   }
 
   public refreshLivePreviewEditors(): void {
-    const markdownView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!(markdownView instanceof MarkdownView)) return;
-    if (this.getLinkedSubitemRenderMode(markdownView) !== 'source') return;
-    const cm = (markdownView.editor as any)?.cm as EditorView | undefined;
-    if (!cm || typeof cm.dispatch !== 'function') return;
-    try {
-      cm.dispatch({ effects: refreshLinkedSubitemEffect.of(Date.now()) });
-    } catch {
-      // Ignore stale editors during workspace churn.
+    for (const leaf of this.plugin.app.workspace.getLeavesOfType('markdown')) {
+      const markdownView = leaf.view;
+      if (!(markdownView instanceof MarkdownView)) continue;
+      if (this.getLinkedSubitemRenderMode(markdownView) !== 'source') continue;
+      const cm = (markdownView.editor as any)?.cm as EditorView | undefined;
+      if (!cm || typeof cm.dispatch !== 'function') continue;
+      try {
+        cm.dispatch({ effects: refreshLinkedSubitemEffect.of(Date.now()) });
+      } catch {
+        // Ignore stale editors during workspace churn.
+      }
     }
+  }
+
+  private scheduleEditorRefresh(editorView: EditorView, delayMs = 90): void {
+    window.setTimeout(() => {
+      try {
+        editorView.dispatch({ effects: refreshLinkedSubitemEffect.of(Date.now()) });
+      } catch {
+        // Ignore stale editors during workspace churn.
+      }
+    }, Math.max(0, delayMs));
+  }
+
+  private logReadingModeHostDiagnostics(
+    parentPath: string,
+    childPath: string,
+    lineNumber: number,
+    host: HTMLElement,
+    row: HTMLElement,
+  ): void {
+    const computed = window.getComputedStyle(host);
+    const rect = host.getBoundingClientRect();
+    logger.log('[TPS GCM] [DIAG] reading-mode host layout', {
+      parentFile: parentPath,
+      childFile: childPath,
+      lineNumber,
+      hostTag: host.tagName,
+      hostClasses: host.className,
+      childElementCount: host.childElementCount,
+      rectTop: Math.round(rect.top),
+      rectHeight: Math.round(rect.height),
+      rectLeft: Math.round(rect.left),
+      rectWidth: Math.round(rect.width),
+      marginTop: computed.marginTop,
+      marginBottom: computed.marginBottom,
+      marginLeft: computed.marginLeft,
+      paddingTop: computed.paddingTop,
+      paddingBottom: computed.paddingBottom,
+      paddingLeft: computed.paddingLeft,
+      textIndent: computed.textIndent,
+      listStyleType: computed.listStyleType,
+      display: computed.display,
+      alignItems: computed.alignItems,
+      lineHeight: computed.lineHeight,
+      rowHtml: row.outerHTML,
+      hostHtml: host.innerHTML,
+    });
+  }
+
+  private logLivePreviewLineDiagnostics(
+    parentPath: string,
+    childPath: string,
+    lineNumber: number,
+    view: EditorView,
+    from: number,
+    to: number,
+  ): void {
+    try {
+      const safeFrom = Math.max(0, Math.min(from, view.state.doc.length));
+      const safeTo = Math.max(safeFrom, Math.min(to, view.state.doc.length));
+      const line = view.state.doc.lineAt(safeFrom);
+      const lineText = line.text;
+      const visibleLine = Array.from(view.dom.querySelectorAll('.cm-line')).find((node) => {
+        if (!(node instanceof HTMLElement)) return false;
+        const text = node.textContent ?? '';
+        return text.includes(lineText) || lineText.includes(text);
+      }) as HTMLElement | undefined;
+
+      if (!(visibleLine instanceof HTMLElement)) {
+        logger.log('[TPS GCM] [DIAG] live-preview line layout skipped', {
+          parentFile: parentPath,
+          childFile: childPath,
+          lineNumber,
+          from: safeFrom,
+          to: safeTo,
+          reason: 'cm-line not found in visible DOM',
+          lineText,
+        });
+        return;
+      }
+      const computed = window.getComputedStyle(visibleLine);
+      const rect = visibleLine.getBoundingClientRect();
+      logger.log('[TPS GCM] [DIAG] live-preview line layout', {
+        parentFile: parentPath,
+        childFile: childPath,
+        lineNumber,
+        from: safeFrom,
+        to: safeTo,
+        lineClasses: visibleLine.className,
+        rectTop: Math.round(rect.top),
+        rectHeight: Math.round(rect.height),
+        rectLeft: Math.round(rect.left),
+        rectWidth: Math.round(rect.width),
+        paddingTop: computed.paddingTop,
+        paddingBottom: computed.paddingBottom,
+        paddingLeft: computed.paddingLeft,
+        textIndent: computed.textIndent,
+        lineHeight: computed.lineHeight,
+        marginLeft: computed.marginLeft,
+        display: computed.display,
+        lineHtml: visibleLine.innerHTML,
+        lineText,
+      });
+    } catch (error) {
+      logger.log('[TPS GCM] [DIAG] live-preview line layout skipped', {
+        parentFile: parentPath,
+        childFile: childPath,
+        lineNumber,
+        from,
+        to,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private logLivePreviewRenderDecision(
+    parentPath: string,
+    childPath: string,
+    lineNumber: number,
+    lineText: string,
+    model: SubitemLineModel,
+    replaceFrom: number,
+    replaceTo: number,
+  ): void {
+    logger.log('[TPS GCM] [RenderPlan] live-preview', this.buildRenderPlan('live-preview', model, {
+      lineNumber,
+      sourceLine: lineText,
+      sourceIndent: this.getLeadingIndentInfo(lineText),
+    }), {
+      replaceFrom,
+      replaceTo,
+      replaceLength: Math.max(0, replaceTo - replaceFrom),
+    });
+  }
+
+  private shouldKeepExistingEditorDecorations(
+    editorView: EditorView,
+    result: { matchCount: number; potentialCount: number; filePath: string | null },
+    previousMatchCount: number,
+    previousPotentialCount: number,
+    previousDocLength: number,
+  ): boolean {
+    if (result.matchCount > 0 || result.potentialCount > 0) return false;
+    if (previousMatchCount <= 0 && previousPotentialCount <= 0) return false;
+    if (editorView.state.doc.length !== previousDocLength) return false;
+
+    const markdownView = this.resolveMarkdownViewForEditor(editorView);
+    if (!(markdownView instanceof MarkdownView)) return false;
+    if (!this.isLivePreviewEditorVisible(markdownView)) return false;
+
+    return true;
   }
 
   private getMappings() {
@@ -1309,10 +2089,16 @@ export class LinkedSubitemCheckboxService {
     if (previewContainer) return 'preview';
 
     const root = view.contentEl as HTMLElement | undefined;
-    const sourceContainer = root?.querySelector('.markdown-source-view') as HTMLElement | null;
+    const sourceContainer = root?.querySelector('.markdown-source-view.is-live-preview') as HTMLElement | null;
     if (this.isVisibleRenderContainer(sourceContainer)) return 'source';
 
     return getViewMode(view);
+  }
+
+  private isLivePreviewEditorVisible(view: MarkdownView): boolean {
+    const root = view.contentEl as HTMLElement | undefined;
+    const livePreviewContainer = root?.querySelector('.markdown-source-view.is-live-preview') as HTMLElement | null;
+    return this.isVisibleRenderContainer(livePreviewContainer);
   }
 
   private getVisiblePreviewContainer(view: MarkdownView): HTMLElement | null {

@@ -274,7 +274,7 @@ export class SubitemMetadataService {
 
     const pluginsApi: any = (this.app as any)?.plugins;
     const companion: any = pluginsApi?.plugins?.['tps-notebook-navigator-companion'];
-    const configuredIconField = pickString(companion?.settings?.frontmatterIconField);
+    const configuredIconField = pickString(this.plugin.settings.notebookNavigatorIconField);
     if (configuredIconField) {
       const configuredValue = pickString(this.getFrontmatterValueCaseInsensitive(frontmatter, configuredIconField));
       if (configuredValue) return configuredValue;
@@ -289,7 +289,7 @@ export class SubitemMetadataService {
       try {
         const cache = this.app.metadataCache.getFileCache(file) as any;
         const cacheTags = parseTagInput([...(getAllTags(cache) || []), frontmatter?.tags, frontmatter?.tag]);
-        const visual = ruleEngine.resolveVisualOutputs(companion.settings.rules || [], {
+        const visual = ruleEngine.resolveVisualOutputs(this.plugin.settings.notebookNavigatorRules || [], {
           file: {
             path: file.path,
             name: file.name,

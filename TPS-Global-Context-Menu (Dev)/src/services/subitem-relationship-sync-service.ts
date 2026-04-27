@@ -3,6 +3,7 @@ import type TPSGlobalContextMenuPlugin from '../main';
 import type { BodySubitemLink, ReconcileResult } from './subitem-types';
 import { resolveLinkTargetToFile } from './link-target-service';
 import { getCompatibleMarkdownViewFromLeaf, pickBestMarkdownLeaf } from './leaf-resolver';
+import { getFileDisplayTitle } from '../utils/file-display-title';
 
 export class SubitemRelationshipSyncService {
   private bodyWriteChains = new Map<string, Promise<void>>();
@@ -57,7 +58,8 @@ export class SubitemRelationshipSyncService {
       const existingLinks = this.plugin.bodySubitemLinkService.scanText(parentFile, raw);
       const existingChildPaths = new Set(existingLinks.map((entry) => entry.childPath));
       const missingChildren = this.getMarkdownChildrenForParent(parentFile)
-        .filter((childFile) => !existingChildPaths.has(childFile.path));
+        .filter((childFile) => !existingChildPaths.has(childFile.path))
+        .filter((childFile) => !this.isCalendarManagedPromotedChild(childFile));
 
       if (missingChildren.length === 0) return false;
 
@@ -207,59 +209,84 @@ export class SubitemRelationshipSyncService {
     return { childChanged, parentChanged };
   }
 
-  public async insertBodyLink(parentFile: TFile, childFile: TFile, checkboxState?: string | null): Promise<boolean> {
+  async removeBodyLinkOnly(parentFile: TFile, childFile: TFile): Promise<boolean> {
+    if (parentFile.extension?.toLowerCase() !== 'md') return false;
+    return await this.removeBodyLink(parentFile, childFile);
+  }
+
+  async detachBodyLinkOnly(parentFile: TFile, childFile: TFile): Promise<boolean> {
+    if (parentFile.extension?.toLowerCase() !== 'md') return false;
+    return await this.mutateMarkdownBody(parentFile, async (lines) => {
+      let changed = false;
+      for (let index = 0; index < lines.length; index += 1) {
+        const raw = String(lines[index] || '');
+        if (this.plugin.bodySubitemLinkService.isDetachedSubitemLine(raw)) continue;
+        const parsed = this.plugin.bodySubitemLinkService.parseLine(raw);
+        if (!parsed) continue;
+        const resolved = resolveLinkTargetToFile(this.plugin.app, parsed.linkTarget, parentFile.path);
+        if (!(resolved instanceof TFile) || resolved.path !== childFile.path) continue;
+        const next = this.plugin.bodySubitemLinkService.appendDetachedMarker(raw);
+        if (next !== raw) {
+          lines[index] = next;
+          changed = true;
+        }
+      }
+      return changed;
+    });
+  }
+
+  public async insertBodyLink(
+    parentFile: TFile,
+    childFile: TFile,
+    checkboxState?: string | null,
+    options?: { insertionMode?: 'after-subitem-block' | 'after-frontmatter' },
+  ): Promise<boolean> {
     return await this.mutateMarkdownBody(parentFile, async (lines, raw) => {
       const existing = this.plugin.bodySubitemLinkService.scanText(parentFile, raw);
-      if (existing.some((entry) => entry.childPath === childFile.path)) return false;
+      if (existing.some((entry) => entry.childPath === childFile.path)) {
+        console.debug?.('[TPS GCM] [RelationshipSync] insertBodyLink skipped existing', {
+          parentFile: parentFile.path,
+          childFile: childFile.path,
+        });
+        return false;
+      }
 
       const line = this.buildBodyLinkLine(parentFile, childFile, checkboxState);
 
       const repaired = this.replaceBrokenPlaceholderWithLine(raw, line);
-      const normalized = repaired !== raw ? repaired : this.insertLineAfterSubitemBlock(raw, line, existing);
-      if (normalized === raw) return false;
+      const insertionMode = options?.insertionMode || 'after-subitem-block';
+      const normalized =
+        repaired !== raw
+          ? repaired
+          : insertionMode === 'after-frontmatter'
+            ? this.insertLineAfterFrontmatter(raw, line)
+            : this.insertLineAfterSubitemBlock(raw, line, existing);
+      if (normalized === raw) {
+        console.debug?.('[TPS GCM] [RelationshipSync] insertBodyLink no-op', {
+          parentFile: parentFile.path,
+          childFile: childFile.path,
+          line,
+          insertionMode,
+        });
+        return false;
+      }
 
       const nextLines = normalized.split('\n');
       lines.splice(0, lines.length, ...nextLines);
+      console.debug?.('[TPS GCM] [RelationshipSync] insertBodyLink prepared write', {
+        parentFile: parentFile.path,
+        childFile: childFile.path,
+        line,
+        insertionMode,
+      });
       return true;
     });
   }
 
   /**
-   * Insert a line after the existing subitem link block, maintaining ordering.
-   * Falls back to inserting after frontmatter if no existing subitem links.
+   * Insert a line at the top of the body, immediately after frontmatter when present.
    */
   private insertLineAfterSubitemBlock(content: string, line: string, existingLinks: BodySubitemLink[]): string {
-    const lines = content.split('\n');
-    
-    // Find the insertion point: after the last existing subitem link
-    let insertAfterLine = -1;
-    if (existingLinks.length > 0) {
-      // Sort by line number descending to find the last one
-      const sortedLinks = [...existingLinks].sort((a, b) => b.line - a.line);
-      insertAfterLine = sortedLinks[0].line;
-    }
-    
-    // If we found existing subitem links, insert after the last one
-    if (insertAfterLine >= 0) {
-      // Check if there's a blank line after the last subitem link
-      const nextLineIndex = insertAfterLine + 1;
-      const hasNextBlankLine = nextLineIndex < lines.length && lines[nextLineIndex]?.trim() === '';
-      
-      const resultLines = [...lines];
-      if (hasNextBlankLine) {
-        // Insert before the blank line to keep subitems grouped
-        resultLines.splice(nextLineIndex, 0, line);
-      } else {
-        // Insert right after the last subitem link
-        resultLines.splice(nextLineIndex, 0, line);
-      }
-      
-      let result = resultLines.join('\n');
-      if (!result.endsWith('\n')) result += '\n';
-      return result;
-    }
-    
-    // No existing subitem links - find frontmatter end and insert after it
     return this.insertLineAfterFrontmatter(content, line);
   }
 
@@ -294,7 +321,9 @@ export class SubitemRelationshipSyncService {
     }
 
     // Insert after frontmatter closing ---
-    // Keep one blank line between frontmatter and content if there was one
+    // Keep the restored/inserted subitem as the first body line, but preserve
+    // a blank separator before the remaining body so headings/paragraphs do not
+    // collapse into the list item.
     const afterFrontmatter = lines.slice(frontmatterEndIndex + 1);
     const hasBlankLineAfter = afterFrontmatter.length > 0 && afterFrontmatter[0]?.trim() === '';
     
@@ -305,6 +334,7 @@ export class SubitemRelationshipSyncService {
     // Add remaining content, skipping leading blank line if we already added one
     const remainingContent = hasBlankLineAfter ? afterFrontmatter.slice(1) : afterFrontmatter;
     if (remainingContent.length > 0) {
+      resultLines.push('');
       resultLines.push(...remainingContent);
     }
     
@@ -315,10 +345,16 @@ export class SubitemRelationshipSyncService {
   }
 
   private buildBodyLinkLine(parentFile: TFile, childFile: TFile, checkboxState?: string | null): string {
-    const sourcePath = this.plugin.app.metadataCache.fileToLinktext(childFile, parentFile.path, true) || childFile.path;
+    const wikilink = this.buildWikilink(parentFile, childFile);
     return checkboxState
-      ? `- ${checkboxState} [[${sourcePath}|${childFile.basename}]]`
-      : `- [[${sourcePath}|${childFile.basename}]]`;
+      ? `- ${checkboxState} ${wikilink}`
+      : `- ${wikilink}`;
+  }
+
+  private buildWikilink(parentFile: TFile, childFile: TFile): string {
+    const sourcePath = this.plugin.app.metadataCache.fileToLinktext(childFile, parentFile.path, true) || childFile.path;
+    const displayTitle = getFileDisplayTitle(this.plugin.app, childFile);
+    return `[[${sourcePath}|${displayTitle}]]`;
   }
 
   private resolveCheckboxStateForChild(childFile: TFile): string | null {
@@ -478,6 +514,18 @@ export class SubitemRelationshipSyncService {
     return result;
   }
 
+  private isCalendarManagedPromotedChild(file: TFile): boolean {
+    const cache = this.plugin.app.metadataCache.getFileCache(file);
+    const frontmatter = (cache?.frontmatter || {}) as Record<string, unknown>;
+    return ['externalEventId', 'tpsCalendarUid', 'tpsCalendarSourceUrl'].some((key) => {
+      const actualKey = Object.keys(frontmatter || {}).find((candidate) => candidate.toLowerCase() === key.toLowerCase());
+      if (!actualKey) return false;
+      const value = frontmatter[actualKey];
+      if (Array.isArray(value)) return value.length > 0;
+      return String(value ?? '').trim().length > 0;
+    });
+  }
+
   private getMarkdownChildrenForParent(parentFile: TFile): TFile[] {
     return this.plugin.app.vault
       .getMarkdownFiles()
@@ -550,15 +598,17 @@ export class SubitemRelationshipSyncService {
 
     const primaryView = editorViews[0] as any;
     if (typeof primaryView?.requestSave === 'function') {
-      primaryView.requestSave();
-      return;
+      try {
+        primaryView.requestSave();
+      } catch (error) {
+        // Fall through to direct persistence below.
+      }
     }
-    if (typeof primaryView?.save === 'function') {
+    else if (typeof primaryView?.save === 'function') {
       try {
         await primaryView.save(false);
-        return;
       } catch (error) {
-        // Fall back to direct vault persistence if the live view save path fails.
+        // Fall through to direct persistence below.
       }
     }
 

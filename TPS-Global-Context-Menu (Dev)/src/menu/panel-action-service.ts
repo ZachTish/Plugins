@@ -503,11 +503,16 @@ export class PanelActionService {
       return;
     }
 
-    const isPreviewMode = (view as any).currentMode?.type === 'preview';
+    const state = activeLeaf.getViewState() as any;
+    const isPreviewMode = state?.state?.mode === 'preview';
     if (isPreviewMode) {
-      const state = activeLeaf.getViewState();
-      state.state.mode = 'source';
-      await activeLeaf.setViewState(state);
+      const nextState = JSON.parse(JSON.stringify(state));
+      if (!nextState.state || typeof nextState.state !== 'object') {
+        nextState.state = {};
+      }
+      nextState.state.mode = 'source';
+      nextState.state.source = false;
+      await activeLeaf.setViewState(nextState);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
@@ -550,7 +555,7 @@ export class PanelActionService {
     if (!uniqueFiles.length) return 0;
 
     let added = 0;
-    await this.app.fileManager.processFrontMatter(parentFile, (frontmatter: Record<string, any>) => {
+    await this.plugin.frontmatterMutationService.processUserInitiated(parentFile, (frontmatter: Record<string, any>) => {
       const existingRaw = this.getFrontmatterValueCaseInsensitive(frontmatter, ATTACHMENTS_FRONTMATTER_KEY);
       const values: string[] = [];
       const seen = new Set<string>();
@@ -585,7 +590,7 @@ export class PanelActionService {
   }
 
   private async removeFromAttachmentsFrontmatter(rootFile: TFile, targetFile: TFile): Promise<void> {
-    await this.app.fileManager.processFrontMatter(rootFile, (fm: Record<string, any>) => {
+    await this.plugin.frontmatterMutationService.processUserInitiated(rootFile, (fm: Record<string, any>) => {
       const existingRaw = this.getFrontmatterValueCaseInsensitive(fm, ATTACHMENTS_FRONTMATTER_KEY);
       const existing = parseLinksFromFrontmatterValue(this.app, existingRaw, rootFile.path);
       const filtered = existing.filter((file) => file.path !== targetFile.path);
@@ -645,7 +650,7 @@ export class PanelActionService {
       const existingAttachments = parseLinksFromFrontmatterValue(this.app, existingRaw, parentFile.path);
       const allAttachments = [...existingAttachments, created];
       const attachmentLinks = allAttachments.map((file) => `[[${file.path}]]`).join(', ');
-      await this.app.fileManager.processFrontMatter(parentFile, (fm) => {
+      await this.plugin.frontmatterMutationService.processUserInitiated(parentFile, (fm) => {
         this.setFrontmatterValueCaseInsensitive(fm, ATTACHMENTS_FRONTMATTER_KEY, attachmentLinks);
       });
     } catch (error) {
@@ -721,7 +726,7 @@ export class PanelActionService {
 
       const allAttachments = [...existingAttachments, selection];
       const attachmentLinks = allAttachments.map((file) => `[[${file.path}]]`).join(', ');
-      await this.app.fileManager.processFrontMatter(parentFile, (fm) => {
+      await this.plugin.frontmatterMutationService.processUserInitiated(parentFile, (fm) => {
         this.setFrontmatterValueCaseInsensitive(fm, ATTACHMENTS_FRONTMATTER_KEY, attachmentLinks);
       });
 

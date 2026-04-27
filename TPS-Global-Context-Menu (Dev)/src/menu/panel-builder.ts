@@ -1,4 +1,4 @@
-﻿import { App, TFile, TFolder, Notice, Setting, setIcon, WorkspaceLeaf, normalizePath, Menu, MarkdownView, getAllTags } from 'obsidian';
+﻿import { App, TFile, TFolder, Notice, Setting, setIcon, WorkspaceLeaf, normalizePath, Menu, MarkdownView, getAllTags, Modal } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
 import { BuildPanelOptions } from '../types';
 import { SYSTEM_COMMANDS, STATUSES, PRIORITIES } from '../constants';
@@ -7,14 +7,20 @@ import { FileSuggestModal } from '../modals/FileSuggestModal';
 import { MultiFileSelectModal } from '../modals/MultiFileSelectModal';
 import { addSafeClickListener } from './menu-controller';
 import { mergeNormalizedTags, normalizeTagValue, parseTagInput } from '../utils/tag-utils';
+import { setValueCaseInsensitive } from '../core/record-utils';
+import { getArchiveBucketPath, normalizeArchiveFolderMode, resolveArchiveTargetInfo } from '../utils/archive-path';
+import { getFileDisplayTitle } from '../utils/file-display-title';
 import * as logger from '../logger';
 import { resolveCustomProperties } from '../resolve-profiles';
 import { ViewModeService } from '../services/view-mode-service';
+import { CheckboxPatterns, type CheckboxStateChar, statusForCheckboxState } from '../core';
 import { parseLinksFromFrontmatterValue, resolveLinkTargetToFile } from '../services/link-target-service';
 import { applyCompanionRulesToFile, createSubitemForParentWithTitle, getDefaultSubitemFolderPath, promptAndCreateSubitemForParent } from '../services/subitem-creation-service';
 import { resolveLinkValueToFile } from '../handlers/parent-link-format';
 import { PanelActionService } from './panel-action-service';
 import { SubitemMetadataService, SubitemRelationEntry, SubitemRelationKind } from './subitem-metadata-service';
+import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
+import { generateSubitemId, SUBITEM_ID_KEY } from '../utils/subitem-id';
 
 interface SubitemNode {
   file: TFile;
@@ -23,7 +29,7 @@ interface SubitemNode {
   hidden?: boolean;
 }
 
-type ChecklistTaskState = ' ' | 'x' | 'X' | '?' | '-';
+  type ChecklistTaskState = CheckboxStateChar;
 
 interface ChecklistSubitem {
   lineNumber: number;
@@ -31,6 +37,7 @@ interface ChecklistSubitem {
   prefix: string;
   state: ChecklistTaskState;
   text: string;
+  subitemId: string;
 }
 
 export type ReferenceDirection = 'incoming' | 'outgoing';
@@ -124,15 +131,17 @@ export class PanelBuilder {
     }
   }
 
-  private getUniqueArchiveTargetPath(file: TFile, archiveFolder: string): string {
-    const targetBase = normalizePath(`${archiveFolder}/${file.name}`);
-    let targetPath = targetBase;
-    let counter = 1;
-    while (this.app.vault.getAbstractFileByPath(targetPath)) {
-      targetPath = normalizePath(`${archiveFolder}/${file.basename} ${counter}.${file.extension}`);
-      counter += 1;
-    }
-    return targetPath;
+  private getArchiveTargetInfo(file: TFile, archiveFolder: string): { targetFolder: string; targetPath: string } {
+    const mode = normalizeArchiveFolderMode(
+      this.plugin.settings.archiveFolderMode ?? (this.plugin.settings.archiveUseDailyFolder ? 'daily' : 'none')
+    );
+    const archiveBucket = getArchiveBucketPath(archiveFolder, mode);
+    const { targetFolder, targetPath } = resolveArchiveTargetInfo(
+      file,
+      archiveBucket,
+      (path) => !!this.app.vault.getAbstractFileByPath(path),
+    );
+    return { targetFolder, targetPath };
   }
 
   private async archiveEntries(entries: any[]): Promise<void> {
@@ -143,7 +152,11 @@ export class PanelBuilder {
       return;
     }
 
-    await this.ensureFolderPath(archiveFolder);
+    const archiveTargetRoot = getArchiveBucketPath(
+      archiveFolder,
+      normalizeArchiveFolderMode(this.plugin.settings.archiveFolderMode ?? (this.plugin.settings.archiveUseDailyFolder ? 'daily' : 'none'))
+    );
+    await this.ensureFolderPath(archiveTargetRoot);
 
     const files = entries
       .map((entry: any) => entry?.file)
@@ -154,11 +167,21 @@ export class PanelBuilder {
       for (const entry of entries) {
         const file = entry?.file as TFile;
         if (!(file instanceof TFile)) continue;
+        const originalFolder = file.parent?.path ?? '';
 
         if (file.extension?.toLowerCase() === 'md') {
           try {
-            await this.app.fileManager.processFrontMatter(file, (frontmatter: any) => {
-              frontmatter.tags = mergeNormalizedTags(frontmatter.tags, archiveTag);
+           await this.plugin.frontmatterMutationService.processUserInitiated(file, (frontmatter: any) => {
+              const mergedTags = mergeNormalizedTags(frontmatter.tags, archiveTag);
+              setValueCaseInsensitive(frontmatter, 'tags', mergedTags);
+              if (!Array.isArray(frontmatter.activity)) {
+                frontmatter.activity = [];
+              }
+              frontmatter.activity.push({
+                type: 'archive',
+                folder: originalFolder,
+                ts: Math.floor(Date.now() / 1000),
+              });
             });
           } catch (err) {
             logger.error('[TPS GCM] Failed adding archive tag', file.path, err);
@@ -171,7 +194,8 @@ export class PanelBuilder {
         }
 
         try {
-          const targetPath = this.getUniqueArchiveTargetPath(file, archiveFolder);
+          const { targetFolder, targetPath } = this.getArchiveTargetInfo(file, archiveFolder);
+          await this.ensureFolderPath(targetFolder);
           await this.app.fileManager.renameFile(file, targetPath);
           archivedCount += 1;
         } catch (err) {
@@ -1687,6 +1711,7 @@ export class PanelBuilder {
           prefix: parsed.prefix,
           state: parsed.state,
           text: parsed.text.trim(),
+          subitemId: this.extractChecklistSubitemId(parsed.text),
         });
       }
 
@@ -1698,7 +1723,7 @@ export class PanelBuilder {
   }
 
   private parseChecklistLine(line: string): { prefix: string; state: ChecklistTaskState; text: string } | null {
-    const match = line.match(/^(\s*(?:[-*+]|\d+\.)\s*)\[( |x|X|\?|-)\]\s*(.*)$/);
+    const match = line.match(CheckboxPatterns.CHECKBOX_LINE_CAPTURE);
     if (!match) return null;
     return {
       prefix: match[1],
@@ -1731,6 +1756,12 @@ export class PanelBuilder {
       this.createChecklistSubitemRow(fragment, item, rootFile, onRefresh);
     });
     checklistList.appendChild(fragment);
+
+    if (checklistItems.some((item) => !item.subitemId)) {
+      window.setTimeout(() => {
+        void this.ensureChecklistSubitemIds(rootFile, checklistItems, onRefresh);
+      }, 0);
+    }
   }
 
   private createChecklistSubitemRow(
@@ -1769,17 +1800,24 @@ export class PanelBuilder {
           });
       });
       menu.addItem((mi) => {
-        mi.setTitle('Cross out')
-          .setIcon('minus')
+        mi.setTitle('Working')
+          .setIcon('loader')
           .onClick(() => {
-            void this.setChecklistItemStateFromPanel(rootFile, item, row, '-', onRefresh);
+            void this.setChecklistItemStateFromPanel(rootFile, item, row, '/', onRefresh);
           });
       });
       menu.addItem((mi) => {
-        mi.setTitle('Question')
+        mi.setTitle('Holding')
           .setIcon('help-circle')
           .onClick(() => {
             void this.setChecklistItemStateFromPanel(rootFile, item, row, '?', onRefresh);
+          });
+      });
+      menu.addItem((mi) => {
+        mi.setTitle("Won\u2019t Do")
+          .setIcon('minus')
+          .onClick(() => {
+            void this.setChecklistItemStateFromPanel(rootFile, item, row, '-', onRefresh);
           });
       });
       menu.showAtPosition({ x, y });
@@ -1846,14 +1884,14 @@ export class PanelBuilder {
 
     const actions = document.createElement('div');
     actions.className = 'tps-gcm-subitem-actions';
-    const promoteBtn = this.createSubitemActionButton('Promote', () => {
+    const promoteBtn = this.createSubitemActionButton('Promote to note', () => {
       if (promoteBtn.disabled) return;
       promoteBtn.disabled = true;
       void this.promoteChecklistItemToChild(rootFile, item, onRefresh).finally(() => {
         promoteBtn.disabled = false;
       });
     });
-    promoteBtn.title = 'Create a linked child note from this checklist item';
+    promoteBtn.title = 'Promote this checklist item into a linked note';
     actions.appendChild(promoteBtn);
 
     metaRow.appendChild(actions);
@@ -1890,11 +1928,11 @@ export class PanelBuilder {
       if (lineIndex < 0) return;
 
       const currentLine = lines[lineIndex];
-      const stateMatch = currentLine.match(/^(\s*(?:[-*+]|\d+\.)\s*)\[( |x|X|\?|-)\](\s*.*)$/);
+      const stateMatch = currentLine.match(CheckboxPatterns.CHECKBOX_LINE_CAPTURE);
       const previousState = stateMatch ? (stateMatch[2] as ChecklistTaskState) : null;
       const updatedLine = currentLine.replace(
-        /^(\s*(?:[-*+]|\d+\.)\s*)\[( |x|X|\?|-)\](\s*.*)$/,
-        `$1[${newState}]$3`
+        CheckboxPatterns.CHECKBOX_LINE_CAPTURE,
+        (_match, prefix, _state, text) => `${prefix}[${newState}] ${text || ''}`.replace(/\s+$/, ' ')
       );
       if (updatedLine === currentLine) return;
 
@@ -1927,9 +1965,37 @@ export class PanelBuilder {
     onRefresh: () => void
   ): Promise<void> {
     const promotionTitle = this.getChecklistPromotionTitle(item.text);
+    const initialFrontmatter = this.extractChecklistInlineProperties(item.text);
+    const subitemId = this.extractChecklistSubitemId(item.text) || item.subitemId || generateSubitemId();
+    initialFrontmatter[SUBITEM_ID_KEY] = subitemId;
+    const promotedStatus = statusForCheckboxState(item.state, this.app);
+    const hasStatusKey = Object.keys(initialFrontmatter).some((key) => key.trim().toLowerCase() === 'status');
+    if (promotedStatus && !hasStatusKey) {
+      initialFrontmatter.status = promotedStatus;
+    }
     if (!promotionTitle) {
       new Notice('Checklist item title is empty.');
       return;
+    }
+
+    let preferScheduledParentForDailyNote = false;
+    if (this.plugin.fileNamingService.isDateOnlyBasename(rootFile.basename)) {
+      const dailyDateStr = getDailyNoteResolver(this.plugin.app, {
+        formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+      }).parseFilenameToDateKey(rootFile.basename) || '';
+      preferScheduledParentForDailyNote = !!dailyDateStr;
+      const existingScheduled = String(initialFrontmatter.scheduled ?? initialFrontmatter.Scheduled ?? '').trim();
+      if (dailyDateStr && existingScheduled) {
+        const currentKey = this.normalizePromotionScheduledDateKey(existingScheduled);
+        if (!currentKey || currentKey !== dailyDateStr) {
+          const shouldOverwrite = await this.promptPromotionScheduledOverwrite(existingScheduled, dailyDateStr, promotionTitle);
+          if (shouldOverwrite) {
+            initialFrontmatter.scheduled = dailyDateStr;
+          } else {
+            preferScheduledParentForDailyNote = false;
+          }
+        }
+      }
     }
 
     const created = await createSubitemForParentWithTitle(
@@ -1942,11 +2008,19 @@ export class PanelBuilder {
         seedParentTags: false,
         seedVisualMetadata: false,
         insertParentBodyLink: false,
+        initialFrontmatter,
+        preferScheduledParentForDailyNote,
       }
     );
     if (!created) return;
+    await this.syncPromotedChecklistChildStatus(created, item.state);
 
-    await this.markChecklistItemPromoted(rootFile, item, created);
+    await this.markChecklistItemPromoted(
+      rootFile,
+      { ...item, subitemId },
+      created,
+      this.isCalendarSyncedChecklistProperties(initialFrontmatter),
+    );
     onRefresh();
   }
 
@@ -1960,18 +2034,82 @@ export class PanelBuilder {
       return preferred || '';
     });
     const withoutMarkdownLinks = withoutWiki.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1');
-    return withoutMarkdownLinks
+    const withoutInlineProps = withoutMarkdownLinks.replace(/\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, ' ');
+    return withoutInlineProps
       .replace(/`([^`]*)`/g, '$1')
       .replace(/[*_~]+/g, '')
       .replace(/\s+/g, ' ')
       .trim();
   }
 
+  private extractChecklistInlineProperties(rawText: string): Record<string, string> {
+    const properties: Record<string, string> = {};
+    const regex = /\[([a-zA-Z0-9_-]+)::\s*([^\]]+)\]/g;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(String(rawText || ''))) !== null) {
+      const key = String(match[1] || '').trim();
+      const value = String(match[2] || '').trim();
+      if (!key || !value) continue;
+      properties[key] = value;
+    }
+    return properties;
+  }
+
+  private extractChecklistSubitemId(rawText: string): string {
+    return String(this.extractChecklistInlineProperties(rawText)[SUBITEM_ID_KEY] || '').trim();
+  }
+
+  private isCalendarSyncedChecklistProperties(properties: Record<string, string>): boolean {
+    const normalizedKeys = Object.keys(properties).map((key) => key.toLowerCase());
+    return normalizedKeys.includes('externaleventid')
+      || normalizedKeys.includes('tpscalendaruid')
+      || normalizedKeys.includes('tpscalendarsourceurl');
+  }
+
+  private normalizePromotionScheduledDateKey(value: string): string {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const parsed = window.moment(raw);
+    if (parsed?.isValid?.()) return parsed.format('YYYY-MM-DD');
+    return '';
+  }
+
+  private async promptPromotionScheduledOverwrite(currentValue: string, dailyValue: string, title: string): Promise<boolean> {
+    return await new Promise<boolean>((resolve) => {
+      const modal = new Modal(this.app);
+      modal.titleEl.textContent = 'Overwrite scheduled date?';
+      modal.contentEl.createEl('p', {
+        text: `"${title}" already has scheduled: ${currentValue}. Overwrite it with the daily note date ${dailyValue}?`,
+      });
+      const buttonContainer = modal.contentEl.createDiv({ cls: 'modal-button-container' });
+      const overwriteBtn = buttonContainer.createEl('button', { text: 'Overwrite', cls: 'mod-cta' });
+      overwriteBtn.onclick = () => {
+        modal.close();
+        resolve(true);
+      };
+      const keepBtn = buttonContainer.createEl('button', { text: 'Keep existing' });
+      keepBtn.onclick = () => {
+        modal.close();
+        resolve(false);
+      };
+      modal.open();
+    });
+  }
+
   private isBrokenSubitemPlaceholderText(text: string): boolean {
     return /^\s*\[\[+\s*$/.test(String(text || ''));
   }
 
-  private async markChecklistItemPromoted(rootFile: TFile, item: ChecklistSubitem, created: TFile): Promise<void> {
+  private async syncPromotedChecklistChildStatus(created: TFile, state: ChecklistTaskState): Promise<void> {
+    const promotedStatus = statusForCheckboxState(state, this.app);
+    if (!promotedStatus) {
+      await this.plugin.bulkEditService.removeFrontmatterKey([created], 'status', { userInitiated: true });
+      return;
+    }
+    await this.plugin.bulkEditService.setStatus([created], promotedStatus, { userInitiated: true });
+  }
+
+  private async markChecklistItemPromoted(rootFile: TFile, item: ChecklistSubitem, created: TFile, forceRemove = false): Promise<void> {
     try {
       const content = await this.plugin.subitemRelationshipSyncService.readMarkdownText(rootFile);
       const lines = content.split('\n');
@@ -1981,17 +2119,18 @@ export class PanelBuilder {
       const parsed = this.parseChecklistLine(lines[lineIndex]);
       if (!parsed) return;
 
-      const alias = item.text.trim() || created.basename;
+      const alias = this.getChecklistPromotionTitle(item.text) || getFileDisplayTitle(this.app, created);
       const linkPath = normalizePath(created.path.replace(/\.md$/i, ''));
       const wikilink = `[[${linkPath}|${alias}]]`;
-      const behavior = this.plugin.settings.checklistPromotionBehavior ?? 'complete-and-link';
+      const idSuffix = item.subitemId ? ` [${SUBITEM_ID_KEY}:: ${item.subitemId}]` : '';
+      const behavior = forceRemove ? 'remove' : (this.plugin.settings.checklistPromotionBehavior ?? 'complete-and-link');
       if (behavior === 'remove') {
         lines.splice(lineIndex, 1);
       } else if (behavior === 'link-only') {
         const nextState = parsed.state === 'x' || parsed.state === 'X' || parsed.state === '-' ? ' ' : parsed.state;
-        lines[lineIndex] = `${parsed.prefix}[${nextState}] ${wikilink}`;
+        lines[lineIndex] = `${parsed.prefix}[${nextState}] ${wikilink}${idSuffix}`;
       } else {
-        lines[lineIndex] = `${parsed.prefix}[x] ${wikilink}`;
+        lines[lineIndex] = `${parsed.prefix}[x] ${wikilink}${idSuffix}`;
       }
       const updatedContent = lines.join('\n');
       if (updatedContent !== content) {
@@ -2099,9 +2238,49 @@ export class PanelBuilder {
 
   private normalizeChecklistText(text: string): string {
     return String(text || '')
+      .replace(/\s*\[subitemId::\s*[^\]]+\]/gi, '')
       .replace(/\s+/g, ' ')
       .trim()
       .toLowerCase();
+  }
+
+  private async ensureChecklistSubitemIds(
+    rootFile: TFile,
+    checklistItems: ChecklistSubitem[],
+    onRefresh: () => void,
+  ): Promise<void> {
+    const missingItems = checklistItems.filter((item) => !item.subitemId);
+    if (missingItems.length === 0) return;
+
+    try {
+      let changed = false;
+      await this.plugin.subitemRelationshipSyncService.mutateMarkdownBody(rootFile, async (lines) => {
+        for (const item of missingItems) {
+          const lineIndex = this.resolveChecklistLineIndex(lines, item);
+          if (lineIndex < 0 || lineIndex >= lines.length) continue;
+          const parsed = this.parseChecklistLine(lines[lineIndex]);
+          if (!parsed) continue;
+
+          const existingId = this.extractChecklistSubitemId(parsed.text);
+          if (existingId) {
+            item.subitemId = existingId;
+            continue;
+          }
+
+          const nextId = generateSubitemId();
+          lines[lineIndex] = `${parsed.prefix}[${parsed.state}] ${String(parsed.text || '').trim()} [${SUBITEM_ID_KEY}:: ${nextId}]`;
+          item.subitemId = nextId;
+          changed = true;
+        }
+        return changed;
+      });
+
+      if (changed) {
+        window.setTimeout(() => onRefresh(), 80);
+      }
+    } catch (error) {
+      logger.warn('[TPS GCM] Failed assigning checklist subitem IDs for', rootFile.path, error);
+    }
   }
 
   private async scrollToChecklistLine(rootFile: TFile, item: ChecklistSubitem): Promise<void> {

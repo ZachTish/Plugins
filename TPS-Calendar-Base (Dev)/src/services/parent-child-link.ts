@@ -9,6 +9,10 @@ function getGlobalContextMenuSettings(app: App): Record<string, any> {
     return getPluginSettings(app, 'tps-global-context-menu');
 }
 
+function getGlobalContextMenuApi(app: App): any {
+    return (app as any)?.plugins?.getPlugin?.('tps-global-context-menu')?.api;
+}
+
 function getParentLinkFormat(app: App): ParentLinkFormat {
     const format = getGlobalContextMenuSettings(app)?.parentLinkFormat;
     return format === "markdown-title" ? "markdown-title" : "wikilink";
@@ -69,7 +73,7 @@ function resolveDisplayNameForTarget(app: App, targetFile: TFile): string {
     return cleaned || targetFile.basename;
 }
 
-function resolveLinkTargetForSource(app: App, targetFile: TFile, sourcePath: string): string {
+export function buildParentLinkTarget(app: App, sourcePath: string, targetFile: TFile): string {
     const generated = app.fileManager.generateMarkdownLink(
         targetFile,
         sourcePath,
@@ -84,7 +88,7 @@ function resolveLinkTargetForSource(app: App, targetFile: TFile, sourcePath: str
 
 export function buildParentLinkValue(app: App, sourcePath: string, targetFile: TFile): string {
     const displayName = resolveDisplayNameForTarget(app, targetFile);
-    const target = resolveLinkTargetForSource(app, targetFile, sourcePath);
+    const target = buildParentLinkTarget(app, sourcePath, targetFile);
 
     if (getParentLinkFormat(app) === "wikilink") {
         return `[[${target}|${displayName}]]`;
@@ -143,7 +147,7 @@ function encodeLinkTarget(target: string): string {
     return encodeURI(decoded);
 }
 
-function resolveLinkToFile(app: App, value: any, sourcePath: string): TFile | null {
+export function resolveLinkValueToFile(app: App, value: any, sourcePath: string): TFile | null {
     const target = extractLinkTarget(value);
     if (!target) return null;
 
@@ -164,7 +168,7 @@ function resolveLinkToFile(app: App, value: any, sourcePath: string): TFile | nu
 }
 
 function linkReferencesFile(app: App, value: any, sourcePath: string, target: TFile): boolean {
-    const resolved = resolveLinkToFile(app, value, sourcePath);
+    const resolved = resolveLinkValueToFile(app, value, sourcePath);
     return resolved ? resolved.path === target.path : false;
 }
 
@@ -180,18 +184,26 @@ function extractLinkTargetBasename(value: any): string | null {
 async function tagParentAfterChildLink(app: App, parentFile: TFile): Promise<void> {
     const tagsToAdd = getParentTagOnChildLink(app);
     if (!tagsToAdd.length) return;
-
-    await app.fileManager.processFrontMatter(parentFile, (fm) => {
-        const existingRaw = getFrontmatterValueCaseInsensitive(fm, "tags");
-        const existingTags = parseTagInput(existingRaw);
-        const mergedTags = mergeTagInputs(existingRaw, tagsToAdd);
-        const unchanged =
-            existingTags.length === mergedTags.length &&
-            existingTags.every((tag, index) => tag === mergedTags[index]);
-        if (unchanged) return;
-        setFrontmatterValueCaseInsensitive(fm, "tags", mergedTags);
-        logger.log(`[ParentChildLink] Tagged parent note with ${tagsToAdd.map((tag) => `#${tag}`).join(", ")}`);
+    const gcmApi = getGlobalContextMenuApi(app);
+    if (!gcmApi?.applyCalendarFrontmatterMutation) {
+        throw new Error('TPS Global Context Menu API unavailable for parent tag mutation');
+    }
+    await gcmApi.applyCalendarFrontmatterMutation({
+        file: parentFile,
+        folderPath: parentFile.parent?.path || '/',
+        transform: (fm: Record<string, any>) => {
+            const existingRaw = getFrontmatterValueCaseInsensitive(fm, "tags");
+            const existingTags = parseTagInput(existingRaw);
+            const mergedTags = mergeTagInputs(existingRaw, tagsToAdd);
+            const unchanged =
+                existingTags.length === mergedTags.length &&
+                existingTags.every((tag, index) => tag === mergedTags[index]);
+            if (!unchanged) {
+                setFrontmatterValueCaseInsensitive(fm, "tags", mergedTags);
+            }
+        },
     });
+    logger.log(`[ParentChildLink] Tagged parent note with ${tagsToAdd.map((tag) => `#${tag}`).join(", ")}`);
 }
 
 export async function applyParentLinkToChild(
@@ -203,11 +215,12 @@ export async function applyParentLinkToChild(
     const parentKey = String(parentLinkKey || "childOf").trim() || "childOf";
     const parentLink = buildParentLinkValue(app, childFile.path, parentFile);
 
-    await app.fileManager.processFrontMatter(childFile, (fm) => {
-        setFrontmatterValueCaseInsensitive(fm, parentKey, parentLink);
-        setFrontmatterValueCaseInsensitive(fm, "folderPath", childFile.parent?.path || "/");
-        logger.log(`[ParentChildLink] Added parent link to ${childFile.path}: ${parentKey} = ${parentLink}`);
-    });
+    const gcmApi = getGlobalContextMenuApi(app);
+    if (!gcmApi?.addParentLink) {
+        throw new Error('TPS Global Context Menu API unavailable for parent link mutation');
+    }
+    await gcmApi.addParentLink({ childFile, parentKey, parentLink });
+    logger.log(`[ParentChildLink] Added parent link to ${childFile.path}: ${parentKey} = ${parentLink}`);
 
     await tagParentAfterChildLink(app, parentFile);
 }
@@ -230,27 +243,14 @@ export async function createBidirectionalLink(
     try {
         await applyParentLinkToChild(app, childFile, parentFile, parentLinkKey);
 
-        // Add child link to parent note
-        await app.fileManager.processFrontMatter(parentFile, (fm) => {
-            const childKey = String(childLinkKey || "").trim() || "children";
-            const childLink = buildParentLinkValue(app, parentFile.path, childFile);
-
-            const existingRaw = getFrontmatterValueCaseInsensitive(fm, childKey);
-            let children: string[] = [];
-            if (Array.isArray(existingRaw)) {
-                children = existingRaw.map(String);
-            } else if (typeof existingRaw === "string" && existingRaw.trim()) {
-                children = [existingRaw];
-            }
-
-            if (!children.some((existing) => linkReferencesFile(app, existing, parentFile.path, childFile))) {
-                children.push(childLink);
-                setFrontmatterValueCaseInsensitive(fm, childKey, children);
-                logger.log(`[ParentChildLink] Added child link to ${parentFile.path}: ${childKey} now has ${children.length} items`);
-            } else {
-                logger.log(`[ParentChildLink] Child link already exists in ${parentFile.path}`);
-            }
-        });
+        const gcmApi = getGlobalContextMenuApi(app);
+        if (!gcmApi?.addChildLink) {
+            throw new Error('TPS Global Context Menu API unavailable for child link mutation');
+        }
+        const childKey = String(childLinkKey || "").trim() || "children";
+        const childLink = buildParentLinkValue(app, parentFile.path, childFile);
+        await gcmApi.addChildLink({ parentFile, childKey, childLink, childFile, tagsToAdd: getParentTagOnChildLink(app) });
+        logger.log(`[ParentChildLink] Added child link to ${parentFile.path}: ${childKey}`);
 
         logger.log(`[ParentChildLink] ✓ Bidirectional link created: ${childFile.basename} ↔ ${parentFile.basename}`);
     } catch (error) {
@@ -275,32 +275,11 @@ export async function removeBidirectionalLink(
     childLinkKey: string
 ): Promise<void> {
     try {
-        // Remove parent link from child note
-        await app.fileManager.processFrontMatter(childFile, (fm) => {
-            if (getFrontmatterValueCaseInsensitive(fm, parentLinkKey) === undefined) return;
-            deleteFrontmatterValueCaseInsensitive(fm, parentLinkKey);
-            logger.log(`[ParentChildLink] Removed parent link from ${childFile.path}`);
-        });
-
-        // Remove child link from parent note
-        await app.fileManager.processFrontMatter(parentFile, (fm) => {
-            const existingRaw = getFrontmatterValueCaseInsensitive(fm, childLinkKey);
-            if (Array.isArray(existingRaw)) {
-                const filtered = existingRaw.filter((link: any) => !linkReferencesFile(app, link, parentFile.path, childFile));
-                if (filtered.length > 0) {
-                    setFrontmatterValueCaseInsensitive(fm, childLinkKey, filtered);
-                } else {
-                    deleteFrontmatterValueCaseInsensitive(fm, childLinkKey);
-                }
-                logger.log(`[ParentChildLink] Removed child link from ${parentFile.path}`);
-                return;
-            }
-
-            if (linkReferencesFile(app, existingRaw, parentFile.path, childFile)) {
-                deleteFrontmatterValueCaseInsensitive(fm, childLinkKey);
-                logger.log(`[ParentChildLink] Removed child link from ${parentFile.path}`);
-            }
-        });
+        const gcmApi = getGlobalContextMenuApi(app);
+        if (!gcmApi?.removeBidirectionalLink) {
+            throw new Error('TPS Global Context Menu API unavailable for removing bidirectional link');
+        }
+        await gcmApi.removeBidirectionalLink({ childFile, parentFile, parentKey: parentLinkKey, childKey: childLinkKey });
 
         logger.log(`[ParentChildLink] ✓ Bidirectional link removed: ${childFile.basename} ↔ ${parentFile.basename}`);
     } catch (error) {
@@ -323,29 +302,14 @@ export async function removeChildLinkFromParent(
     childLinkKey: string
 ): Promise<void> {
     try {
-        await app.fileManager.processFrontMatter(parentFile, (fm) => {
-            const existingRaw = getFrontmatterValueCaseInsensitive(fm, childLinkKey);
-            if (Array.isArray(existingRaw)) {
-                const filtered = existingRaw.filter((link: any) => {
-                    const linkBasename = extractLinkTargetBasename(link);
-                    return !linkBasename || linkBasename.toLowerCase() !== childBasename.toLowerCase();
-                });
-                if (filtered.length !== existingRaw.length) {
-                    if (filtered.length > 0) {
-                        setFrontmatterValueCaseInsensitive(fm, childLinkKey, filtered);
-                    } else {
-                        deleteFrontmatterValueCaseInsensitive(fm, childLinkKey);
-                    }
-                    logger.log(`[ParentChildLink] Removed detached child link '${childBasename}' from ${parentFile.path}`);
-                }
-                return;
-            }
-
-            const linkBasename = extractLinkTargetBasename(existingRaw);
-            if (!linkBasename || linkBasename.toLowerCase() !== childBasename.toLowerCase()) return;
-            deleteFrontmatterValueCaseInsensitive(fm, childLinkKey);
+        const gcmApi = getGlobalContextMenuApi(app);
+        if (!gcmApi?.removeDetachedChildLink) {
+            throw new Error('TPS Global Context Menu API unavailable for removing detached child link');
+        }
+        const changed = await gcmApi.removeDetachedChildLink({ parentFile, childKey: childLinkKey, childBasename });
+        if (changed) {
             logger.log(`[ParentChildLink] Removed detached child link '${childBasename}' from ${parentFile.path}`);
-        });
+        }
     } catch (error) {
         logger.error(`[ParentChildLink] Failed to remove child link from parent:`, error);
         throw error;

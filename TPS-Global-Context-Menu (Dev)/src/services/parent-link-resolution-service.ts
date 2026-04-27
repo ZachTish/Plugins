@@ -1,6 +1,6 @@
 import { TFile, normalizePath } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from '../main';
-import { buildParentLinkValue, resolveLinkValueToFile } from '../handlers/parent-link-format';
+import { buildBaseCompatibleParentLinkValue, resolveLinkValueToFile } from '../handlers/parent-link-format';
 import type { ParentLinkKind, ResolvedParentLink } from './subitem-types';
 
 export class ParentLinkResolutionService {
@@ -43,16 +43,24 @@ export class ParentLinkResolutionService {
 
   async addParentToChild(childFile: TFile, parentFile: TFile): Promise<boolean> {
     const key = this.getParentKey();
-    const format = this.normalizeParentLinkFormat();
-    const linkValue = buildParentLinkValue(this.plugin.app, parentFile, childFile.path, format);
+    const linkValue = buildBaseCompatibleParentLinkValue(this.plugin.app, parentFile, childFile.path);
     let changed = false;
 
-    await this.plugin.app.fileManager.processFrontMatter(childFile, (fm) => {
+    await this.plugin.frontmatterMutationService.process(childFile, (fm) => {
       const existingKey = Object.keys(fm).find((candidate) => candidate.toLowerCase() === key.toLowerCase());
       const raw = existingKey ? (fm as Record<string, unknown>)[existingKey] : undefined;
       const values = this.normalizeFrontmatterValues(raw);
       const existingFiles = this.resolveFilesFromFrontmatterValue(values, childFile.path);
-      if (existingFiles.some((file) => file.path === parentFile.path)) return;
+      const matchingIndex = values.findIndex((value) => this.valueMatchesFile(value, childFile.path, parentFile));
+      if (existingFiles.some((file) => file.path === parentFile.path)) {
+        if (matchingIndex >= 0 && values[matchingIndex] !== linkValue) {
+          values[matchingIndex] = linkValue;
+          const deduped = this.dedupeValuesForSource(values, childFile.path);
+          this.setCaseInsensitive(fm as Record<string, unknown>, key, deduped.length === 1 ? deduped[0] : deduped);
+          changed = true;
+        }
+        return;
+      }
 
       values.push(linkValue);
       const deduped = this.dedupeValuesForSource(values, childFile.path);
@@ -67,7 +75,7 @@ export class ParentLinkResolutionService {
     const key = this.getParentKey();
     let changed = false;
 
-    await this.plugin.app.fileManager.processFrontMatter(childFile, (fm) => {
+    await this.plugin.frontmatterMutationService.process(childFile, (fm) => {
       const existingKey = Object.keys(fm).find((candidate) => candidate.toLowerCase() === key.toLowerCase());
       if (!existingKey) return;
       const raw = (fm as Record<string, unknown>)[existingKey];
@@ -153,9 +161,4 @@ export class ParentLinkResolutionService {
     if (existingKey && existingKey !== key) delete frontmatter[existingKey];
     frontmatter[key] = value;
   }
-
-  private normalizeParentLinkFormat(): 'wikilink' | 'markdown-title' {
-    return this.plugin.settings.parentLinkFormat === 'markdown-title' ? 'markdown-title' : 'wikilink';
-  }
 }
-

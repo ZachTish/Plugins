@@ -134,6 +134,13 @@ export interface NotebookNavigatorCompanionSettings {
   metadataDebounceMs: number;
   syncTitleFromFilename: boolean;
   syncFilenameFromTitle: boolean;
+  statusClickFlow: string[];
+  tagPageFolder: string;
+  tagPageFileType: TagPageFileType;
+  createTagPageOnOpen: boolean;
+  propertyPageFolder: string;
+  propertyPageFileType: TagPageFileType;
+  createPropertyPageOnOpen: boolean;
   frontmatterIconField: string;
   frontmatterColorField: string;
   writeBasesIconFields: boolean;
@@ -150,6 +157,8 @@ export interface NotebookNavigatorCompanionSettings {
   smartSort: SmartSortSettings;
   hideRules: HideRule[];
 }
+
+export type TagPageFileType = "canvas" | "markdown" | "base";
 
 export interface RuleFileDescriptor {
   path: string;
@@ -176,11 +185,18 @@ export const DEFAULT_SETTINGS: NotebookNavigatorCompanionSettings = {
   enabled: true,
   autoApplyOnFileOpen: true,
   autoApplyOnMetadataChange: true,
-  applyOnStartup: true,
+  applyOnStartup: false,
   startupDelayMs: 800,
   metadataDebounceMs: 150,
   syncTitleFromFilename: false,
   syncFilenameFromTitle: false,
+  statusClickFlow: [],
+  tagPageFolder: "Tag Pages",
+  tagPageFileType: "canvas",
+  createTagPageOnOpen: true,
+  propertyPageFolder: "Property Pages",
+  propertyPageFileType: "canvas",
+  createPropertyPageOnOpen: false,
   frontmatterIconField: "icon",
   frontmatterColorField: "color",
   writeBasesIconFields: false,

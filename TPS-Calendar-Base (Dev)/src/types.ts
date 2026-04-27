@@ -80,6 +80,7 @@ export interface CalendarPluginSettings {
     sidebarBasePath: string | null;
     dailyDateLinkTarget: "daily-note" | "daily-canvas";
     defaultCreateMode: "note" | "task";
+    defaultCreateDestination: string;
     defaultTaskTargetFile: string;
 
     primaryControllerId: string | null; // Synced setting to identify the controller device
@@ -128,6 +129,7 @@ export interface CalendarPluginSettings {
     allDayStickyScroll: boolean;
     dayHeaderFormat: "short" | "long" | "narrow";
     dayHeaderShowDate: boolean;
+    showSingleDayDateLabel: boolean;
     timeFormat: "12h" | "24h";
     slotDuration: number;
     minEventHeight: number;
@@ -142,7 +144,6 @@ export interface CalendarPluginSettings {
     showTaskItems: boolean;
     taskDateField: "any" | "due" | "scheduled" | "start";
     showCompletedTaskItems: boolean;
-    taskItemColor: string;
     taskItemFolderFilter: string;
 
     // Unscheduled view

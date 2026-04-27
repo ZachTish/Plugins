@@ -1,7 +1,22 @@
 
-import { BasesView, QueryController, Menu, BasesEntry, BasesEntryGroup, setIcon, TFile, debounce, normalizePath, Modal, Setting, getAllTags } from 'obsidian';
+import { BasesView, QueryController, Menu, BasesEntry, BasesEntryGroup, setIcon, TFile, debounce, normalizePath, Modal, Setting, getAllTags, Notice, Platform } from 'obsidian';
+import { FileSelectionModal } from '../../../TPS-Calendar-Base (Dev)/src/modals/file-selection-modal';
+import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
+import { ensureDailyNoteFile } from '../../../TPS-Controller (Dev)/src/utils/daily-note-create';
+import { RuleEvaluationContext } from '../../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
 
 export const KANBAN_VIEW_TYPE = 'tps-kanban';
+const TASK_LINE_UPDATED_EVENT = 'tps-task-line-updated';
+const TASK_LINKED_NOTE_PROPERTY = 'linkednote';
+const TASK_LINKED_NOTE_PROPERTY_RE = /\[linkednote::\s*([^\]]+)\]/i;
+const TASK_REFERENCE_DRAG_TYPE = 'application/x-tps-card-reference';
+
+const buildTaskSourceWikilink = (rawPath: string, rawTitle: string): string => {
+  const path = normalizePath(String(rawPath || '').trim()).replace(/\.md$/i, '');
+  const title = String(rawTitle || '').replace(/\r?\n+/g, ' ').replace(/\|/g, ' ').replace(/\]\]/g, '').trim();
+  if (!path || !title) return '';
+  return `[[${path}|${title}]]`;
+};
 
 type LaneRenderItem = {
   entry: BasesEntry;
@@ -13,7 +28,31 @@ type LaneRenderItem = {
 type VirtualKanbanTaskMeta = {
   parentPath: string;
   lineNumber: number;
+  text: string;
   tags: string[];
+  inlineProperties: Record<string, string>;
+  scheduled: string | null;
+  rawScheduled: string | null;
+  stateMarker: string;
+};
+
+type ParsedKanbanTask = {
+  lineNumber: number;
+  text: string;
+  tags: string[];
+  inlineProperties: Record<string, string>;
+  scheduled: string | null;
+  rawScheduled: string | null;
+  stateMarker: string;
+};
+
+type TaskDateValue = {
+  isEmpty: () => boolean;
+  toString: () => string;
+  valueOf: () => number;
+  format: (pattern?: string) => string;
+  toJSON: () => string;
+  toDate: () => Date;
 };
 
 type DisplayLaneGroup = {
@@ -21,6 +60,23 @@ type DisplayLaneGroup = {
   label: string;
   groups: BasesEntryGroup[];
   laneIds: string[];
+};
+
+type EntryVisualStyle = {
+  iconName: string | null;
+  colorValue: string | null;
+  iconColor: string | null;
+};
+
+type GcmTaskSemanticsApi = {
+  parseTaskLine?: (line: string) => {
+    body: string;
+    text: string;
+    inlineProperties: Record<string, string>;
+    scheduledDateToken: string | null;
+    scheduledTimeToken: string | null;
+    checkboxState: string | null;
+  } | null;
 };
 
 class LaneRenameModal extends Modal {
@@ -150,6 +206,75 @@ class LaneValueSelectModal extends Modal {
   }
 }
 
+class CardTitleModal extends Modal {
+  private readonly titleText: string;
+  private readonly initialTitle: string;
+  private readonly resolve: (value: string | null) => void;
+  private submitted = false;
+  private inputEl: HTMLInputElement | null = null;
+
+  constructor(app: any, titleText: string, initialTitle: string, resolve: (value: string | null) => void) {
+    super(app);
+    this.titleText = titleText;
+    this.initialTitle = initialTitle;
+    this.resolve = resolve;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl('h3', { text: this.titleText });
+    new Setting(contentEl)
+      .setName('Title')
+      .addText((text) => {
+        text.setValue(this.initialTitle);
+        this.inputEl = text.inputEl;
+        text.inputEl.addEventListener('keydown', (evt: KeyboardEvent) => {
+          if (evt.key === 'Enter') {
+            evt.preventDefault();
+            this.submit();
+          } else if (evt.key === 'Escape') {
+            evt.preventDefault();
+            this.cancel();
+          }
+        });
+      });
+
+    const buttons = contentEl.createDiv({ cls: 'tps-kanban-lane-rename-actions' });
+    const cancelBtn = buttons.createEl('button', { text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.cancel());
+    const saveBtn = buttons.createEl('button', { text: 'Save', cls: 'mod-cta' });
+    saveBtn.addEventListener('click', () => this.submit());
+
+    window.setTimeout(() => {
+      this.inputEl?.focus();
+      this.inputEl?.select();
+    }, 0);
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    if (!this.submitted) {
+      this.resolve(null);
+    }
+  }
+
+  private submit(): void {
+    if (this.submitted) return;
+    this.submitted = true;
+    const value = String(this.inputEl?.value ?? '').trim();
+    this.resolve(value || null);
+    this.close();
+  }
+
+  private cancel(): void {
+    if (this.submitted) return;
+    this.submitted = true;
+    this.resolve(null);
+    this.close();
+  }
+}
+
 export class KanbanView extends BasesView {
   type = KANBAN_VIEW_TYPE;
   private plugin: any;
@@ -164,6 +289,7 @@ export class KanbanView extends BasesView {
   private virtualTaskMetaByPath = new Map<string, VirtualKanbanTaskMeta>();
   private wheelHandlerTarget: HTMLElement | null = null;
   private onWheelBound: ((event: WheelEvent) => void) | null = null;
+  private renderVersion = 0;
 
   constructor(controller: QueryController, scrollEl: HTMLElement, plugin: any) {
     super(controller);
@@ -183,6 +309,8 @@ export class KanbanView extends BasesView {
     // Do not gate by visible-path checks; those can be stale while Bases is mid-refresh.
     this.registerEvent(this.app.metadataCache.on('changed', (file) => {
       if (!(file instanceof TFile)) return;
+      if (!this.shouldProcessUpdates()) return;
+      if (!this.isVisibleFile(file.path) && !this.hasRenderedVirtualTaskForFile(file.path)) return;
       this.refreshDebounced();
     }));
 
@@ -190,14 +318,30 @@ export class KanbanView extends BasesView {
     // Listen to vault modify as an additional signal so open-note edits reflect quickly.
     this.registerEvent(this.app.vault.on('modify', (file) => {
       if (!(file instanceof TFile)) return;
+      if (!this.shouldProcessUpdates()) return;
+      if (!this.isVisibleFile(file.path) && !this.hasRenderedVirtualTaskForFile(file.path)) return;
       this.refreshDebounced();
     }));
 
     // Keep board stable through file lifecycle changes while this view is open.
-    this.registerEvent(this.app.vault.on('rename', () => this.refreshDebounced()));
+    this.registerEvent(this.app.vault.on('rename', (file) => {
+      if (!this.shouldProcessUpdates()) return;
+      if (file instanceof TFile && !this.isVisibleFile(file.path) && !this.hasRenderedVirtualTaskForFile(file.path)) return;
+      this.refreshDebounced();
+    }));
     this.registerEvent(this.app.vault.on('delete', (file) => {
       if (!(file instanceof TFile)) return;
-      if (!this.isVisibleFile(file.path)) return;
+      if (!this.shouldProcessUpdates()) return;
+      if (!this.isVisibleFile(file.path) && !this.hasRenderedVirtualTaskForFile(file.path)) return;
+      this.refreshDebounced();
+    }));
+    this.registerEvent((this.app.workspace as any).on(TASK_LINE_UPDATED_EVENT as any, (payload: { path?: string; lineNumber?: number | null } | null) => {
+      if (!this.shouldProcessUpdates()) return;
+      const path = String(payload?.path || '').trim();
+      if (!path) return;
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile)) return;
+      if (!this.isVisibleVirtualTaskLine(file, payload?.lineNumber ?? null)) return;
       this.refreshDebounced();
     }));
 
@@ -228,7 +372,6 @@ export class KanbanView extends BasesView {
   onDataUpdated(): void {
     this.ensureContainer();
     this.render();
-    this.syncNativeResultsCountSoon();
   }
 
   private ensureContainer(): void {
@@ -237,69 +380,24 @@ export class KanbanView extends BasesView {
     this.applyLayoutSettings();
   }
 
-  private syncNativeResultsCountSoon(): void {
-    this.syncNativeResultsCount();
-    window.setTimeout(() => this.syncNativeResultsCount(), 0);
-    window.setTimeout(() => this.syncNativeResultsCount(), 180);
-  }
-
-  private syncNativeResultsCount(): void {
-    const header = this.getNearestBasesHeader();
-    if (!header) return;
-    const resultCount = this.getUnderlyingResultCount();
-    const text = `${resultCount} result${resultCount === 1 ? '' : 's'}`;
-    const countEl =
-      header.querySelector<HTMLElement>('.view-header-count') ??
-      header.querySelector<HTMLElement>('.bases-view-results-count') ??
-      header.querySelector<HTMLElement>('.bases-results-count') ??
-      header.querySelector<HTMLElement>('.bases-view-result-count') ??
-      header.querySelector<HTMLElement>('.bases-result-count') ??
-      header.querySelector<HTMLElement>('[class*="results-count"]') ??
-      header.querySelector<HTMLElement>('[class*="result-count"]') ??
-      header.querySelector<HTMLElement>('.bases-view-results') ??
-      header.querySelector<HTMLElement>('.bases-results');
-    if (countEl && countEl.textContent?.trim() !== text) {
-      countEl.textContent = text;
-    }
-  }
-
-  private getUnderlyingResultCount(): number {
-    const dataRows = (this.data as any)?.data;
-    if (Array.isArray(dataRows)) return dataRows.length;
-    const unique = new Set<string>();
-    const groups: BasesEntryGroup[] = this.data?.groupedData ?? [];
-    for (const group of groups) {
-      for (const entry of group.entries) unique.add(entry.file.path);
-    }
-    return unique.size;
-  }
-
-  private getNearestBasesHeader(): HTMLElement | null {
-    const selectors = '.bases-view-header, .base-view-header, .bases-toolbar, .bases-header, .view-header';
-    const embedRoot = this.containerEl.closest(
-      '.tps-auto-base-embed__panel, .block-language-bases, .cm-preview-code-block, .internal-embed, .markdown-embed, .cm-embed-block, .sync-embed, .sync-container',
-    ) as HTMLElement | null;
-    const searchRoot = embedRoot ?? (this.containerEl.closest('.workspace-leaf') as HTMLElement | null);
-    if (!searchRoot) return null;
-    const headers = Array.from(searchRoot.querySelectorAll<HTMLElement>(selectors));
-    if (!headers.length) return null;
-    const preceding = headers.filter((header) => {
-      if (header === this.containerEl) return false;
-      const relation = header.compareDocumentPosition(this.containerEl);
-      return Boolean(relation & Node.DOCUMENT_POSITION_FOLLOWING);
-    });
-    if (preceding.length > 0) return preceding[preceding.length - 1];
-    return headers[headers.length - 1];
-  }
-
   applyLayoutSettings(): void {
     const raw = Number(this.plugin?.settings?.scale ?? 1);
     const scale = Number.isFinite(raw) ? Math.max(0.7, Math.min(1.4, raw)) : 1;
-    const layoutMode = this.getLayoutMode();
+    const layoutMode = this.getEffectiveLayoutMode();
     this.containerEl?.style.setProperty('--tps-kanban-scale', String(scale));
     this.containerEl?.setAttr('data-kanban-view-id', this.getLaneOrderViewId());
     this.containerEl?.classList.toggle('tps-kanban-container--list', layoutMode === 'list');
+    this.scrollEl?.classList.toggle('tps-kanban-scroll--list', layoutMode === 'list');
     this.bindWheelHandler();
+  }
+
+  private getEffectiveLayoutMode(): 'board' | 'list' {
+    if (this.isCompactViewport()) return 'list';
+    return this.getLayoutMode();
+  }
+
+  private isCompactViewport(): boolean {
+    return Platform.isMobile;
   }
 
   private getBoardScale(): number {
@@ -312,7 +410,7 @@ export class KanbanView extends BasesView {
     renderItemsByDisplayLane: Map<string, LaneRenderItem[]>,
   ): boolean {
     if (!this.plugin.settings.dynamicEmptyLaneWidth) return false;
-    if (this.getLayoutMode() !== 'board') return false;
+    if (this.getEffectiveLayoutMode() !== 'board') return false;
 
     const laneCount = displayLanes.length;
     if (laneCount <= 0) return false;
@@ -381,15 +479,16 @@ export class KanbanView extends BasesView {
     const laneCards = target.closest('.tps-kanban-cards') as HTMLElement | null;
     if (laneCards) {
       const verticalDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
-      if (verticalDelta !== 0) {
+      const canScrollVertically = laneCards.scrollHeight > laneCards.clientHeight + 1;
+      if (verticalDelta !== 0 && canScrollVertically) {
         const previous = laneCards.scrollTop;
         laneCards.scrollTop += verticalDelta;
         if (laneCards.scrollTop !== previous) event.preventDefault();
+        if (laneCards.scrollTop !== previous) return;
       }
-      return;
     }
 
-    if (this.getLayoutMode() === 'list') {
+    if (this.getEffectiveLayoutMode() === 'list') {
       const verticalDelta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
       if (verticalDelta === 0) return;
       const previous = this.containerEl.scrollTop;
@@ -405,6 +504,24 @@ export class KanbanView extends BasesView {
     if (this.containerEl.scrollLeft !== previous) event.preventDefault();
   }
 
+  private isTaskScopedVirtualProp(normalizedPropId: string): boolean {
+    if (!normalizedPropId) return false;
+    const bare = normalizedPropId.startsWith('note.') ? normalizedPropId.slice(5) : normalizedPropId;
+    return bare === 'status'
+      || bare === 'scheduled'
+      || bare === 'start'
+      || bare === 'scheduleddate'
+      || bare === 'scheduled-date'
+      || bare === 'priority'
+      || bare === 'allday'
+      || bare === 'recurrence'
+      || bare === 'completed'
+      || bare === 'completeddate'
+      || bare === 'due'
+      || bare === 'date'
+      || bare === 'timeestimate';
+  }
+
   private isVisibleFile(path: string): boolean {
     const groups: BasesEntryGroup[] = this.data?.groupedData ?? [];
     for (const group of groups) {
@@ -413,6 +530,10 @@ export class KanbanView extends BasesView {
       }
     }
     return false;
+  }
+
+  private shouldProcessUpdates(): boolean {
+    return this.containerEl.isConnected && this.containerEl.isShown();
   }
 
   /**
@@ -459,6 +580,38 @@ export class KanbanView extends BasesView {
     return null;
   }
 
+  private getViewCreationMode(): 'inherit' | 'note' | 'task' {
+    const raw = String(this.config?.get?.('tpsCreateMode') ?? '').trim().toLowerCase();
+    if (raw === 'note' || raw === 'task' || raw === 'inherit') return raw;
+    return 'inherit';
+  }
+
+  private getResolvedCreationMode(): 'note' | 'task' {
+    const mode = this.getViewCreationMode();
+    if (mode === 'note' || mode === 'task') return mode;
+    return this.plugin.settings.defaultCreateMode || 'note';
+  }
+
+  private getViewCreationDestination(): string {
+    return String(this.config?.get?.('tpsCreateDestination') ?? '').trim();
+  }
+
+  private getResolvedCreationDestination(): string {
+    const viewValue = this.getViewCreationDestination();
+    if (viewValue) return viewValue;
+    return String(this.plugin.settings.defaultCreateDestination ?? '').trim();
+  }
+
+  private normalizeNoteDestination(destination: string): string {
+    const trimmed = String(destination || '').trim();
+    if (!trimmed) return '';
+    if (trimmed.toLowerCase().endsWith('.md')) {
+      const slash = trimmed.lastIndexOf('/');
+      return slash !== -1 ? trimmed.slice(0, slash) : '';
+    }
+    return trimmed;
+  }
+
   private getGroupByPropId(propName: string | null): string | null {
     if (!propName) return null;
 
@@ -493,8 +646,7 @@ export class KanbanView extends BasesView {
     return false;
   }
 
-  private buildMultiValueGroups(propId: string): BasesEntryGroup[] {
-    const entries: BasesEntry[] = this.data?.data ?? [];
+  private buildGroupsFromEntries(entries: BasesEntry[], propId: string): BasesEntryGroup[] {
     const byKey = new Map<string, BasesEntry[]>();
     const keyLabel = new Map<string, string>();
     const ungrouped: BasesEntry[] = [];
@@ -540,6 +692,11 @@ export class KanbanView extends BasesView {
     }
 
     return groups;
+  }
+
+  private buildMultiValueGroups(propId: string): BasesEntryGroup[] {
+    const entries: BasesEntry[] = this.data?.data ?? [];
+    return this.buildGroupsFromEntries(entries, propId);
   }
 
   private extractGroupValues(raw: unknown): string[] {
@@ -728,6 +885,10 @@ export class KanbanView extends BasesView {
     return value === 'board';
   }
 
+  private shouldExpandTaskCardsFromFile(file: TFile): boolean {
+    return file.extension.toLowerCase() === 'md';
+  }
+
   private stripKanbanDateTokens(text: string): string {
     return String(text || '')
       .replace(/@@\{[^}]*\}/g, '')
@@ -735,6 +896,118 @@ export class KanbanView extends BasesView {
       // Also strip Tasks-plugin dataview inline properties (e.g. [scheduled:: 2026-03-17])
       .replace(/\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, '')
       .trim();
+  }
+
+  private isStoredTaskVisualPropertyKey(key: string): boolean {
+    const normalized = String(key || '').trim().toLowerCase();
+    return normalized === 'icon'
+      || normalized === 'iconname'
+      || normalized === 'icon-name'
+      || normalized === 'iconcolor'
+      || normalized === 'icon-color'
+      || normalized === 'color';
+  }
+
+  private getStoredVirtualTaskVisualStyle(meta: VirtualKanbanTaskMeta): EntryVisualStyle {
+    const iconName = String(
+      meta.inlineProperties.icon
+        || meta.inlineProperties.iconname
+        || meta.inlineProperties['icon-name']
+        || '',
+    ).trim() || null;
+    const colorValue = String(
+      meta.inlineProperties.color
+        || meta.inlineProperties.iconcolor
+        || meta.inlineProperties['icon-color']
+        || '',
+    ).trim() || null;
+    if (!iconName && !colorValue) {
+      return { iconName: null, colorValue: null, iconColor: null };
+    }
+    return {
+      iconName,
+      colorValue,
+      iconColor: iconName ? 'var(--text-on-accent)' : null,
+    };
+  }
+
+  private applyTaskVisualInlineProperties(line: string, iconName: string | null, colorValue: string | null): string {
+    const iconRe = /\s*\[(icon|iconname|icon-name)::\s*[^\]]+\]/i;
+    const colorRe = /\s*\[(color|iconcolor|icon-color)::\s*[^\]]+\]/i;
+    let updated = String(line || '');
+
+    if (iconName && iconName.trim()) {
+      const prop = `[icon:: ${iconName.trim()}]`;
+      updated = iconRe.test(updated) ? updated.replace(iconRe, ` ${prop}`) : `${updated} ${prop}`;
+    } else {
+      updated = updated.replace(iconRe, '');
+    }
+
+    if (colorValue && colorValue.trim()) {
+      const prop = `[color:: ${this.serializeTaskInlineColorValue(colorValue)}]`;
+      updated = colorRe.test(updated) ? updated.replace(colorRe, ` ${prop}`) : `${updated} ${prop}`;
+    } else {
+      updated = updated.replace(colorRe, '');
+    }
+
+    return updated.replace(/\s{2,}/g, ' ').trimEnd();
+  }
+
+  private serializeTaskInlineColorValue(colorValue: string): string {
+    const value = String(colorValue || '').trim();
+    if (!value) return '';
+
+    const hex = this.parseHexColorToRgba(value);
+    if (!hex) return value;
+
+    const { r, g, b, a } = hex;
+    if (a >= 0.999) {
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+    const alpha = Math.round(a * 1000) / 1000;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  private parseHexColorToRgba(value: string): { r: number; g: number; b: number; a: number } | null {
+    const raw = String(value || '').trim();
+    const match = raw.match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+    if (!match) return null;
+
+    const hex = match[1];
+    if (hex.length === 3 || hex.length === 4) {
+      const expanded = hex.split('').map((char) => char + char).join('');
+      return this.parseHexColorToRgba(`#${expanded}`);
+    }
+
+    const r = Number.parseInt(hex.slice(0, 2), 16);
+    const g = Number.parseInt(hex.slice(2, 4), 16);
+    const b = Number.parseInt(hex.slice(4, 6), 16);
+    const a = hex.length === 8 ? Number.parseInt(hex.slice(6, 8), 16) / 255 : 1;
+    return { r, g, b, a };
+  }
+
+  private createSyntheticVirtualTaskEntry(parentFile: TFile, taskText: string, lineNumber: number): BasesEntry {
+    const syntheticFile = {
+      ...parentFile,
+      path: `${parentFile.path}::kanban-task:${lineNumber}`,
+      basename: taskText || parentFile.basename,
+      name: `${taskText || parentFile.basename}.md`,
+      extension: 'md',
+    } as TFile;
+    return { file: syntheticFile } as BasesEntry;
+  }
+
+  private createVirtualTaskMeta(parentPath: string, task: ParsedKanbanTask): VirtualKanbanTaskMeta {
+    return {
+      parentPath,
+      lineNumber: task.lineNumber,
+      text: task.text,
+      tags: task.tags,
+      inlineProperties: task.inlineProperties,
+      scheduled: task.scheduled,
+      rawScheduled: task.rawScheduled,
+      stateMarker: task.stateMarker,
+    };
   }
 
   private extractInlineTags(text: string): string[] {
@@ -779,7 +1052,7 @@ export class KanbanView extends BasesView {
     laneTags: Set<string>,
     targetTag: string | null,
   ): { changed: boolean; line: string } {
-    const taskMatch = line.match(/^([\t ]*-\s+\[[ xX]\]\s+)(.*)$/);
+    const taskMatch = line.match(/^([\t ]*-\s+\[[^\]]\]\s+)(.*)$/);
     if (!taskMatch) return { changed: false, line };
 
     const prefix = taskMatch[1];
@@ -830,7 +1103,16 @@ export class KanbanView extends BasesView {
     if (!updated.changed) return false;
 
     lines[meta.lineNumber] = updated.line;
+    const parsed = this.parseKanbanBoardTasks(`${updated.line}\n`)[0];
+    if (parsed) {
+      const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
+        ...this.createVirtualTaskMeta(parentFile.path, parsed),
+        lineNumber: meta.lineNumber,
+      });
+      lines[meta.lineNumber] = this.applyTaskVisualInlineProperties(lines[meta.lineNumber], visual.iconName, visual.colorValue);
+    }
     await this.app.vault.modify(parentFile, lines.join('\n'));
+    this.emitTaskLineUpdated(parentFile, meta.lineNumber);
     return true;
   }
 
@@ -854,12 +1136,51 @@ export class KanbanView extends BasesView {
     if (meta.lineNumber < 0 || meta.lineNumber >= lines.length) return false;
 
     const line = lines[meta.lineNumber];
-    const taskMatch = line.match(/^([\t ]*-\s+\[[^\]]\]\s+)(.*)$/);
-    if (!taskMatch) return false;
+    const checkboxMatch = line.match(/^([\t ]*-\s+\[[^\]]\]\s+)(.*)$/);
+    const bulletMatch = checkboxMatch ? null : line.match(/^([\t ]*-\s+)(.*)$/);
+    const lineMatch = checkboxMatch || bulletMatch;
+    if (!lineMatch) return false;
 
-    const prefix = taskMatch[1];
-    let body = taskMatch[2] ?? '';
+    const prefix = lineMatch[1];
+    let body = lineMatch[2] ?? '';
     const propLower = propName.trim().toLowerCase();
+
+    if (propLower === 'status' || propLower === 'note.status') {
+      if (targetValue == null || !String(targetValue).trim()) {
+        const strippedBody = body.replace(/\[[Ss]tatus::\s*[^\]]+\]\s*/g, '').trim();
+        const newLine = `${prefix.replace(/\[[^\]]\]\s+$/, '')}${strippedBody}`.replace(/-\s+$/, '- ');
+        if (newLine === line) return false;
+        lines[meta.lineNumber] = newLine;
+        const parsed = this.parseKanbanBoardTasks(`${newLine}\n`)[0];
+        if (parsed) {
+          const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
+            ...this.createVirtualTaskMeta(parentFile.path, parsed),
+            lineNumber: meta.lineNumber,
+          });
+          lines[meta.lineNumber] = this.applyTaskVisualInlineProperties(lines[meta.lineNumber], visual.iconName, visual.colorValue);
+        }
+        await this.app.vault.modify(parentFile, lines.join('\n'));
+        this.emitTaskLineUpdated(parentFile, meta.lineNumber);
+        return true;
+      }
+      const marker = this.getMarkerForTaskStatus(targetValue);
+      if (marker == null) return false;
+      const nextPrefix = prefix.replace(/\[[^\]]\]/, `[${marker}]`);
+      const newLine = `${nextPrefix}${body}`;
+      if (newLine === line) return false;
+      lines[meta.lineNumber] = newLine;
+      const parsed = this.parseKanbanBoardTasks(`${newLine}\n`)[0];
+      if (parsed) {
+        const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
+          ...this.createVirtualTaskMeta(parentFile.path, parsed),
+          lineNumber: meta.lineNumber,
+        });
+        lines[meta.lineNumber] = this.applyTaskVisualInlineProperties(lines[meta.lineNumber], visual.iconName, visual.colorValue);
+      }
+      await this.app.vault.modify(parentFile, lines.join('\n'));
+      this.emitTaskLineUpdated(parentFile, meta.lineNumber);
+      return true;
+    }
 
     // Aliases that map to Kanban @{date} token
     const kanbanDateAliases = new Set(['scheduled', 'start', 'scheduleddate', 'scheduled-date']);
@@ -875,6 +1196,14 @@ export class KanbanView extends BasesView {
       const newLine = `${prefix}${body}`;
       if (newLine === line) return false;
       lines[meta.lineNumber] = newLine;
+      const parsed = this.parseKanbanBoardTasks(`${newLine}\n`)[0];
+      if (parsed) {
+        const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
+          ...this.createVirtualTaskMeta(parentFile.path, parsed),
+          lineNumber: meta.lineNumber,
+        });
+        lines[meta.lineNumber] = this.applyTaskVisualInlineProperties(lines[meta.lineNumber], visual.iconName, visual.colorValue);
+      }
       await this.app.vault.modify(parentFile, lines.join('\n'));
       return true;
     }
@@ -886,21 +1215,435 @@ export class KanbanView extends BasesView {
       if (targetValue == null) {
         body = body.replace(propRe, '').replace(/\s+/g, ' ').trim();
       } else {
-        body = body.replace(propRe, `[${propName}:: ${targetValue}]`);
+        const storedValue = this.isStoredTaskVisualColorProperty(propLower)
+          ? this.serializeTaskInlineColorValue(targetValue)
+          : targetValue;
+        body = body.replace(propRe, `[${propName}:: ${storedValue}]`);
       }
     } else if (targetValue != null) {
       // Append before trailing Kanban tokens so they stay at the end
       const trailingMatch = body.match(/(\s+@@?\{[^}]*\})+$/);
       const trailing = trailingMatch?.[0] ?? '';
       const mainBody = trailing ? body.slice(0, -trailing.length) : body;
-      body = `${mainBody.trimEnd()} [${propName}:: ${targetValue}]${trailing}`;
+      const storedValue = this.isStoredTaskVisualColorProperty(propLower)
+        ? this.serializeTaskInlineColorValue(targetValue)
+        : targetValue;
+      body = `${mainBody.trimEnd()} [${propName}:: ${storedValue}]${trailing}`;
     }
 
     const newLine = `${prefix}${body}`.trimEnd();
     if (newLine === line) return false;
     lines[meta.lineNumber] = newLine;
+    const parsed = this.parseKanbanBoardTasks(`${newLine}\n`)[0];
+    if (parsed) {
+      const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
+        ...this.createVirtualTaskMeta(parentFile.path, parsed),
+        lineNumber: meta.lineNumber,
+      });
+      lines[meta.lineNumber] = this.applyTaskVisualInlineProperties(lines[meta.lineNumber], visual.iconName, visual.colorValue);
+    }
     await this.app.vault.modify(parentFile, lines.join('\n'));
+    this.emitTaskLineUpdated(parentFile, meta.lineNumber);
     return true;
+  }
+
+  private isStoredTaskVisualColorProperty(propLower: string): boolean {
+    return propLower === 'color' || propLower === 'iconcolor' || propLower === 'icon-color';
+  }
+
+  private getTaskPriorityValuesForMenu(): string[] {
+    const calendarPlugin: any = (this.app as any)?.plugins?.plugins?.['tps-calendar-base'];
+    const values =
+      typeof calendarPlugin?.getPriorityValues === 'function'
+        ? calendarPlugin.getPriorityValues()
+        : [];
+    const normalized = Array.from(
+      new Set(
+        (Array.isArray(values) ? values : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean),
+      ),
+    );
+    return normalized.length > 0 ? normalized : ['low', 'normal', 'medium', 'high'];
+  }
+
+  private async mutateVirtualTaskLine(
+    meta: VirtualKanbanTaskMeta,
+    mutate: (line: string, parentFile: TFile) => string,
+  ): Promise<boolean> {
+    const parentFile = this.app.vault.getFileByPath(meta.parentPath);
+    if (!parentFile) return false;
+
+    const content = await this.app.vault.read(parentFile);
+    const lines = content.split('\n');
+    if (meta.lineNumber < 0 || meta.lineNumber >= lines.length) return false;
+
+    const original = lines[meta.lineNumber];
+    const updated = mutate(original, parentFile);
+    if (!updated || updated === original) return false;
+
+    const parsed = this.parseKanbanBoardTasks(`${updated}\n`)[0];
+    const visual = parsed
+      ? this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
+          ...this.createVirtualTaskMeta(parentFile.path, parsed),
+          lineNumber: meta.lineNumber,
+        })
+      : { iconName: null, colorValue: null, iconColor: null };
+    lines[meta.lineNumber] = parsed
+      ? this.applyTaskVisualInlineProperties(updated, visual.iconName, visual.colorValue)
+      : updated;
+    await this.app.vault.modify(parentFile, lines.join('\n'));
+    this.emitTaskLineUpdated(parentFile, meta.lineNumber);
+    return true;
+  }
+
+  private async syncMostRecentVirtualTaskVisualProperties(file: TFile): Promise<boolean> {
+    const content = await this.app.vault.read(file);
+    const tasks = this.parseKanbanBoardTasks(content);
+    if (!tasks.length) return false;
+
+    const latestTask = tasks.reduce((latest, task) => (task.lineNumber > latest.lineNumber ? task : latest));
+    const lines = content.split('\n');
+    if (latestTask.lineNumber < 0 || latestTask.lineNumber >= lines.length) return false;
+
+    const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(file, latestTask.text, latestTask.lineNumber), {
+      ...this.createVirtualTaskMeta(file.path, latestTask),
+    });
+    const updatedLine = this.applyTaskVisualInlineProperties(lines[latestTask.lineNumber], visual.iconName, visual.colorValue);
+    if (updatedLine === lines[latestTask.lineNumber]) return false;
+
+    lines[latestTask.lineNumber] = updatedLine;
+    await this.app.vault.modify(file, lines.join('\n'));
+    this.emitTaskLineUpdated(file, latestTask.lineNumber);
+    return true;
+  }
+
+  private getVirtualTaskLinkedNoteValue(meta: VirtualKanbanTaskMeta, rawLine: string): string | null {
+    const inlineValue = String(meta.inlineProperties[TASK_LINKED_NOTE_PROPERTY] || '').trim();
+    if (inlineValue) return inlineValue;
+    const match = String(rawLine || '').match(TASK_LINKED_NOTE_PROPERTY_RE);
+    return match?.[1]?.trim() || null;
+  }
+
+  private resolveLinkValueToFile(value: string, sourcePath: string): TFile | null {
+    const target = this.extractLinkTarget(value);
+    if (!target) return null;
+    const resolvedPath = this.resolveLinkTargetToPath(target, sourcePath);
+    if (!resolvedPath) return null;
+    const file = this.app.vault.getAbstractFileByPath(resolvedPath);
+    return file instanceof TFile ? file : null;
+  }
+
+  private async promptForTaskLinkedNoteSelection(): Promise<TFile | null> {
+    return await new Promise((resolve) => {
+      let settled = false;
+      const ModalCtor: any = FileSelectionModal as any;
+      const modal = new ModalCtor(this.app as any, (file: TFile) => {
+        if (settled) return;
+        settled = true;
+        resolve(file);
+      });
+      const originalOnClose = modal.onClose.bind(modal);
+      modal.onClose = () => {
+        originalOnClose();
+        if (settled) return;
+        settled = true;
+        resolve(null);
+      };
+      modal.open();
+    });
+  }
+
+  private async setVirtualTaskLinkedNote(meta: VirtualKanbanTaskMeta, linkedFile: TFile): Promise<boolean> {
+    return await this.mutateVirtualTaskLine(meta, (line, parentFile) => {
+      const linktext = this.app.metadataCache.fileToLinktext(linkedFile, parentFile.path, true);
+      const propertyText = `[${TASK_LINKED_NOTE_PROPERTY}:: [[${linktext}]]]`;
+      if (TASK_LINKED_NOTE_PROPERTY_RE.test(line)) {
+        return line.replace(TASK_LINKED_NOTE_PROPERTY_RE, propertyText);
+      }
+      return `${line} ${propertyText}`;
+    });
+  }
+
+  private async removeVirtualTaskLinkedNote(meta: VirtualKanbanTaskMeta): Promise<boolean> {
+    return await this.mutateVirtualTaskLine(meta, (line) =>
+      line.replace(new RegExp(`\\s*\\[${TASK_LINKED_NOTE_PROPERTY}::\\s*[^\\]]+\\]`, 'i'), ''),
+    );
+  }
+
+  private async addTagsToVirtualTask(meta: VirtualKanbanTaskMeta, tagsToAdd: string[]): Promise<boolean> {
+    const normalizedToAdd = Array.from(
+      new Set(tagsToAdd.map((tag) => this.normalizeTagValue(tag)).filter(Boolean)),
+    );
+    if (!normalizedToAdd.length) return false;
+
+    return await this.mutateVirtualTaskLine(meta, (line) => {
+      const existing = new Set<string>();
+      const re = /(^|\s)#([^\s#]+)/g;
+      let match: RegExpExecArray | null = null;
+      while ((match = re.exec(line)) !== null) {
+        const normalized = this.normalizeTagValue(match[2] ?? '').toLowerCase();
+        if (normalized) existing.add(normalized);
+      }
+      const missing = normalizedToAdd.filter((tag) => !existing.has(tag.toLowerCase()));
+      if (!missing.length) return line;
+      return `${line}${missing.map((tag) => ` #${tag}`).join('')}`;
+    });
+  }
+
+  private async removeTagFromVirtualTask(meta: VirtualKanbanTaskMeta, tagToRemove: string): Promise<boolean> {
+    const normalizedTarget = this.normalizeTagValue(tagToRemove).toLowerCase();
+    if (!normalizedTarget) return false;
+
+    return await this.mutateVirtualTaskLine(meta, (line) => {
+      const updated = line.replace(/(^|\s)#([^\s#]+)/g, (full, prefix, rawTag) => {
+        const normalized = this.normalizeTagValue(rawTag ?? '').toLowerCase();
+        if (normalized !== normalizedTarget) return full;
+        return prefix || '';
+      });
+      return updated.replace(/\s{2,}/g, ' ').trimEnd();
+    });
+  }
+
+  private sanitizeFileName(value: string): string {
+    return String(value || '')
+      .replace(/[\\/:*?"<>|\x00-\x1F\x7F]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private async ensureFolderExists(folderPath: string): Promise<void> {
+    const normalized = normalizePath(String(folderPath || '').trim());
+    if (!normalized) return;
+    if (normalized === '/') return;
+    const existing = this.app.vault.getAbstractFileByPath(normalized);
+    if (!existing) {
+      await this.app.vault.createFolder(normalized);
+    }
+  }
+
+  private async buildUniqueNotePath(folderPath: string, title: string): Promise<string> {
+    const folder = normalizePath(String(folderPath || '').trim());
+    const baseTitle = this.sanitizeFileName(title) || 'Untitled';
+    const basePath = normalizePath(`${folder}/${baseTitle}.md`);
+    const withoutExt = basePath.endsWith('.md') ? basePath.slice(0, -3) : basePath;
+    const baseWithoutCounter = withoutExt.replace(/ \d+$/, '');
+    const MAX_RETRIES = 20;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const candidate = attempt === 0 ? basePath : normalizePath(`${baseWithoutCounter} ${attempt}.md`);
+      const existing = this.app.vault.getAbstractFileByPath(candidate);
+      if (!existing) return candidate;
+    }
+    return normalizePath(`${baseWithoutCounter} ${MAX_RETRIES + 1}.md`);
+  }
+
+  private async promptForCardTitle(titleText: string, initialTitle: string): Promise<string | null> {
+    return await new Promise((resolve) => {
+      let settled = false;
+      const modal = new CardTitleModal(this.app as any, titleText, initialTitle, (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      });
+      const originalOnClose = modal.onClose.bind(modal);
+      modal.onClose = () => {
+        originalOnClose();
+        if (settled) return;
+        settled = true;
+        resolve(null);
+      };
+      modal.open();
+    });
+  }
+
+  private buildTaskLineForCreation(
+    title: string,
+    propName: string | null,
+    targetValue: string | null,
+    scheduledValue: string | null = null,
+  ): string {
+    const trimmedTitle = String(title || '').trim();
+    const prop = String(propName || '').trim().toLowerCase();
+    const value = String(targetValue || '').trim();
+    const properties: string[] = [];
+
+    if (scheduledValue) {
+      properties.push(`[scheduled:: ${scheduledValue}]`);
+    }
+
+    if ((prop === 'status' || prop === 'note.status') && value) {
+      const marker = this.getMarkerForTaskStatus(value) || ' ';
+      const suffix = properties.length ? ` ${properties.join(' ')}` : '';
+      return `- [${marker}] ${trimmedTitle}${suffix}`;
+    }
+
+    if (prop === 'status' || prop === 'note.status') {
+      const suffix = properties.length ? ` ${properties.join(' ')}` : '';
+      return `- ${trimmedTitle}${suffix}`;
+    }
+
+    if (prop && value) {
+      if (prop === 'tags' || prop === 'note.tags') {
+        const tags = value.split(/[,;\n]/g).map((tag) => this.normalizeTagValue(tag)).filter(Boolean);
+        if (tags.length) {
+          properties.push(...tags.map((tag) => `#${tag}`));
+        }
+      } else {
+        properties.push(`[${prop}:: ${value}]`);
+      }
+    }
+
+    const suffix = properties.length ? ` ${properties.join(' ')}` : '';
+    return `- ${trimmedTitle}${suffix}`;
+  }
+
+  private async createNoteCardAtDestination(
+    title: string,
+    destinationFolder: string,
+    propName: string | null,
+    targetValue: string | null,
+  ): Promise<boolean> {
+    const folder = normalizePath(String(destinationFolder || '').trim());
+    if (!folder) return false;
+    await this.ensureFolderExists(folder);
+    const path = await this.buildUniqueNotePath(folder, title);
+    const file = await this.app.vault.create(path, '---\n---\n');
+    if (propName) {
+      await this.app.fileManager.processFrontMatter(file, (fm) => {
+        if (targetValue === null) {
+          delete fm[propName];
+        } else {
+          if (String(propName).trim().toLowerCase() === 'tags') {
+            fm[propName] = targetValue
+              .split(/[,;\n]/g)
+              .map((tag) => this.normalizeTagValue(tag))
+              .filter(Boolean);
+          } else {
+            fm[propName] = targetValue;
+          }
+        }
+      });
+    }
+    await this.applyCompanionRulesToFile(file);
+    await this.app.workspace.getLeaf(false).openFile(file);
+    this.render();
+    return true;
+  }
+
+  private async appendTaskCardToDestination(
+    title: string,
+    destinationFilePath: string,
+    propName: string | null,
+    targetValue: string | null,
+    scheduledValue: string | null = null,
+  ): Promise<boolean> {
+    const normalizedRaw = normalizePath(String(destinationFilePath || '').trim());
+    if (!normalizedRaw) return false;
+    const normalized = normalizedRaw.toLowerCase().endsWith('.md') ? normalizedRaw : `${normalizedRaw}.md`;
+
+    const existing = this.app.vault.getAbstractFileByPath(normalized);
+    if (existing && !(existing instanceof TFile)) {
+      throw new Error(`Task destination is not a markdown file: ${normalized}`);
+    }
+    const file = existing instanceof TFile ? existing : await this.app.vault.create(normalized, '');
+    const line = this.buildTaskLineForCreation(title, propName, targetValue, scheduledValue);
+    const content = await this.app.vault.cachedRead(file);
+    const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+    const next = `${content}${separator}${line}\n`;
+    if (content !== next) {
+      await this.app.vault.modify(file, next);
+    }
+    await this.applyCompanionRulesToFile(file);
+    const syncedVisuals = await this.syncMostRecentVirtualTaskVisualProperties(file);
+    if (!syncedVisuals) {
+      const createdTasks = this.parseKanbanBoardTasks(next);
+      const createdTask = createdTasks.length > 0 ? createdTasks[createdTasks.length - 1] : null;
+      this.emitTaskLineUpdated(file, createdTask?.lineNumber ?? null);
+    }
+    await this.app.workspace.getLeaf(false).openFile(file);
+    this.render();
+    return true;
+  }
+
+  private async resolveDefaultTaskDestinationPath(): Promise<{ path: string | null; scheduledValue: string | null; }> {
+    const resolver = getDailyNoteResolver(this.app as any);
+    const today = new Date();
+    const scheduledValue = resolver.formatDateKey(today);
+    const dailyNote = await ensureDailyNoteFile(this.app as any, today);
+    if (dailyNote instanceof TFile) {
+      return { path: dailyNote.path, scheduledValue };
+    }
+    return { path: this.getActiveMarkdownPath(), scheduledValue };
+  }
+
+  private buildCardFrontmatterProcessor(
+    propName: string | null,
+    targetValue: string | null,
+  ): ((frontmatter: Record<string, unknown>) => void) | undefined {
+    if (!propName) return undefined;
+    return (frontmatter: Record<string, unknown>) => {
+      if (targetValue == null) {
+        delete frontmatter[propName];
+        return;
+      }
+      if (String(propName).trim().toLowerCase() === 'tags') {
+        frontmatter[propName] = targetValue
+          .split(/[,;\n]/g)
+          .map((tag) => this.normalizeTagValue(tag))
+          .filter(Boolean);
+        return;
+      }
+      frontmatter[propName] = targetValue;
+    };
+  }
+
+  private async handleAddCard(displayLane: DisplayLaneGroup, propName: string | null): Promise<void> {
+    const targetSelection = propName
+      ? await this.resolveDropValueForDisplayLane(displayLane)
+      : { selected: true, value: null as string | null };
+    if (!targetSelection.selected) return;
+
+    const targetValue = targetSelection.value;
+    const mode = this.getResolvedCreationMode();
+    const destination = this.getResolvedCreationDestination();
+
+    if (mode === 'note' && !destination) {
+      await this.createFileForView(undefined, this.buildCardFrontmatterProcessor(propName, targetValue));
+      return;
+    }
+
+    const title = await this.promptForCardTitle(
+      mode === 'task' ? 'Create task card' : 'Create card note',
+      '',
+    );
+    if (!title) return;
+
+    if (mode === 'note') {
+      const created = await this.createNoteCardAtDestination(title, this.normalizeNoteDestination(destination), propName, targetValue);
+      if (!created) {
+        new Notice('Failed to create card at the configured destination.');
+      }
+      return;
+    }
+
+    const taskTarget = destination
+      ? { path: destination, scheduledValue: null }
+      : await this.resolveDefaultTaskDestinationPath();
+    const taskDestination = taskTarget.path;
+    if (!taskDestination) {
+      new Notice('No task destination configured.');
+      return;
+    }
+    const created = await this.appendTaskCardToDestination(
+      title,
+      taskDestination,
+      propName,
+      targetValue,
+      taskTarget.scheduledValue,
+    );
+    if (!created) {
+      new Notice('Failed to create task card at the configured destination.');
+    }
   }
 
   private parseVirtualTaskStateLabel(rawLine: string): string {
@@ -934,16 +1677,117 @@ export class KanbanView extends BasesView {
     const content = await this.app.vault.cachedRead(parentFile);
     const lines = content.split('\n');
     const rawLine = lines[meta.lineNumber] || '';
+    const currentState = rawLine.match(/^[\t ]*-\s+\[([^\]]*)\]/)?.[1]?.trim() ?? '';
     const stateLabel = this.parseVirtualTaskStateLabel(rawLine);
+    const linkedNoteValue = this.getVirtualTaskLinkedNoteValue(meta, rawLine);
+    const linkedNoteFile = linkedNoteValue ? this.resolveLinkValueToFile(linkedNoteValue, parentFile.path) : null;
+    const scheduledLabel = String(
+      meta.inlineProperties.scheduled
+      || meta.inlineProperties.start
+      || meta.inlineProperties.scheduleddate
+      || meta.inlineProperties['scheduled-date']
+      || '',
+    ).trim();
+    const durationLabel = String(meta.inlineProperties.timeestimate || '').trim();
+    const currentPriority = String(meta.inlineProperties.priority || '').trim();
+    const currentTags = Array.from(new Set(meta.tags.map((tag) => this.normalizeTagValue(tag)).filter(Boolean)));
 
     const menu = new Menu();
     menu.addItem((item) => item.setTitle(text || 'Task').setIcon('square').setDisabled(true));
+    menu.addSeparator();
+    const states: Array<{ char: string; label: string }> = [
+      { char: ' ', label: 'Todo' },
+      { char: '/', label: 'Working' },
+      { char: 'x', label: 'Complete' },
+      { char: '?', label: 'Holding' },
+      { char: '-', label: "Won't Do" },
+    ];
+    for (const state of states) {
+      const isActive = currentState === state.char;
+      menu.addItem((item) =>
+        item
+          .setTitle(`${state.label} [${state.char === ' ' ? ' ' : state.char}]`)
+          .setChecked(isActive)
+          .onClick(async () => {
+            const changed = await this.applyPropertyToVirtualTask(meta, 'status', this.getTaskStatusFromMarker(state.char));
+            if (changed) {
+              new Notice(`Task marked ${state.label.toLowerCase()}.`);
+              this.render();
+            }
+          }),
+      );
+    }
+
+    menu.addSeparator();
+
+    for (const priority of this.getTaskPriorityValuesForMenu()) {
+      const isActive = currentPriority.toLowerCase() === priority.toLowerCase();
+      menu.addItem((item) =>
+        item
+          .setTitle(`Priority: ${priority}`)
+          .setChecked(isActive)
+          .onClick(async () => {
+            const changed = await this.applyPropertyToVirtualTask(meta, 'priority', priority);
+            if (changed) {
+              new Notice(`Priority set to ${priority}.`);
+              this.render();
+            }
+          }),
+      );
+    }
+    if (currentPriority) {
+      menu.addItem((item) =>
+        item
+          .setTitle('Clear priority')
+          .setIcon('eraser')
+          .onClick(async () => {
+            const changed = await this.applyPropertyToVirtualTask(meta, 'priority', null);
+            if (changed) {
+              new Notice('Priority cleared.');
+              this.render();
+            }
+          }),
+      );
+    }
+
+    menu.addItem((item) =>
+      item
+        .setTitle('Add tags...')
+        .setIcon('tags')
+        .onClick(async () => {
+          const entered = window.prompt('Add tags (comma separated, with or without #):', '');
+          if (entered == null) return;
+          const changed = await this.addTagsToVirtualTask(meta, entered.split(',').map((tag) => tag.trim()).filter(Boolean));
+          if (changed) {
+            new Notice('Tags updated.');
+            this.render();
+          }
+        }),
+    );
+    for (const tag of currentTags) {
+      menu.addItem((item) =>
+        item
+          .setTitle(`Remove tag: #${tag}`)
+          .setIcon('tag')
+          .onClick(async () => {
+            const changed = await this.removeTagFromVirtualTask(meta, tag);
+            if (changed) {
+              new Notice(`Removed #${tag}.`);
+              this.render();
+            }
+          }),
+      );
+    }
+
+    menu.addSeparator();
     menu.addItem((item) => item.setTitle(`State: ${stateLabel}`).setDisabled(true));
     menu.addItem((item) => item.setTitle(`Line: ${meta.lineNumber + 1}`).setDisabled(true));
-    if (meta.tags.length > 0) {
-      menu.addItem((item) => item.setTitle(`Tags: ${meta.tags.join(', ')}`).setDisabled(true));
+    if (scheduledLabel) {
+      menu.addItem((item) => item.setTitle(`Scheduled: ${scheduledLabel}`).setDisabled(true));
     }
-    menu.addSeparator();
+    if (durationLabel) {
+      menu.addItem((item) => item.setTitle(`Duration: ${durationLabel}m`).setDisabled(true));
+    }
     menu.addItem((item) =>
       item
         .setTitle('Open task line')
@@ -954,12 +1798,65 @@ export class KanbanView extends BasesView {
     );
     menu.addItem((item) =>
       item
-        .setTitle('Open board note')
+        .setTitle('Open parent note')
         .setIcon('file-text')
         .onClick(async () => {
           await this.app.workspace.getLeaf(false).openFile(parentFile);
         }),
     );
+    if (linkedNoteValue) {
+      menu.addItem((item) =>
+        item
+          .setTitle(linkedNoteFile ? `Open linked note: ${linkedNoteFile.basename}` : 'Open linked note')
+          .setIcon('link')
+          .setDisabled(!linkedNoteFile)
+          .onClick(async () => {
+            if (!linkedNoteFile) return;
+            await this.app.workspace.getLeaf(false).openFile(linkedNoteFile);
+          }),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle('Replace linked note')
+          .setIcon('link')
+          .onClick(async () => {
+            const selectedFile = await this.promptForTaskLinkedNoteSelection();
+            if (!selectedFile) return;
+            const changed = await this.setVirtualTaskLinkedNote(meta, selectedFile);
+            if (changed) {
+              new Notice(`Linked task to "${selectedFile.basename}".`);
+              this.render();
+            }
+          }),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle('Remove linked note')
+          .setIcon('unlink')
+          .onClick(async () => {
+            const changed = await this.removeVirtualTaskLinkedNote(meta);
+            if (changed) {
+              new Notice('Removed linked note from task.');
+              this.render();
+            }
+          }),
+      );
+    } else {
+      menu.addItem((item) =>
+        item
+          .setTitle('Link to Existing Note')
+          .setIcon('link')
+          .onClick(async () => {
+            const selectedFile = await this.promptForTaskLinkedNoteSelection();
+            if (!selectedFile) return;
+            const changed = await this.setVirtualTaskLinkedNote(meta, selectedFile);
+            if (changed) {
+              new Notice(`Linked task to "${selectedFile.basename}".`);
+              this.render();
+            }
+          }),
+      );
+    }
     menu.addItem((item) =>
       item
         .setTitle('Copy task text')
@@ -971,35 +1868,217 @@ export class KanbanView extends BasesView {
     menu.showAtPosition({ x: e.clientX, y: e.clientY });
   }
 
-  private simplifyTaskText(raw: string): string {
-    const text = this.stripKanbanDateTokens(raw);
-    const mdLink = text.match(/^\[([^\]]+)\]\([^)]+\)$/);
-    if (mdLink?.[1]) return mdLink[1].trim();
-    return text;
+  private normalizeTaskScheduleValue(raw: string): string | null {
+    const value = String(raw || '').trim();
+    if (!value) return null;
+
+    const isoDateMatch = value.match(/^(\d{4}-\d{2}-\d{2})(?:[T\s].*)?$/);
+    if (isoDateMatch?.[1]) return isoDateMatch[1];
+
+    const momentFactory = (window as any).moment;
+    if (typeof momentFactory === 'function') {
+      const parsed = momentFactory(value, [
+        'YYYY-MM-DD',
+        'YYYY-MM-DD HH:mm',
+        'YYYY-MM-DD HH:mm:ss',
+        'YYYY-MM-DDTHH:mm',
+        'YYYY-MM-DDTHH:mm:ss',
+        'ddd, MMM DD YYYY',
+        'MMM DD YYYY',
+      ], true);
+      if (parsed?.isValid?.()) {
+        return parsed.format('YYYY-MM-DD');
+      }
+    }
+
+    const fallback = new Date(value);
+    if (!Number.isNaN(fallback.getTime())) {
+      return fallback.toISOString().slice(0, 10);
+    }
+
+    return null;
   }
 
-  private parseKanbanBoardTasks(content: string): Array<{ lineNumber: number; text: string; tags: string[] }> {
+  private parseTaskBooleanValue(raw: unknown): boolean | null {
+    const normalized = String(raw ?? '').trim().toLowerCase();
+    if (!normalized) return null;
+    if (['true', 'yes', '1', 'on'].includes(normalized)) return true;
+    if (['false', 'no', '0', 'off'].includes(normalized)) return false;
+    return null;
+  }
+
+  private hasExplicitTimeComponent(raw: string | null): boolean {
+    const value = String(raw ?? '').trim();
+    if (!value) return false;
+    return /(?:[T\s])\d{1,2}:\d{2}(?::\d{2})?$/.test(value);
+  }
+
+  private getTaskStatusFromMarker(marker: string): string {
+    const normalized = String(marker ?? '').trim();
+    if (!normalized) return '';
+    if (/^[xX]$/.test(normalized)) return 'complete';
+    if (normalized === '-') return 'wont-do';
+    if (normalized === '?') return 'holding';
+    if (normalized === '/') return 'working';
+    return 'todo';
+  }
+
+  private getMarkerForTaskStatus(rawStatus: string | null): string | null {
+    const normalized = String(rawStatus ?? '').trim().toLowerCase();
+    if (!normalized) return null;
+    if (['complete', 'completed', 'done', 'closed', 'x'].includes(normalized)) return 'x';
+    if (['wont-do', 'won’t-do', 'wontdo', 'cancelled', 'canceled', 'archived', '-'].includes(normalized)) return '-';
+    if (['holding', 'question', 'blocked', '?'].includes(normalized)) return '?';
+    if (['working', 'in-progress', 'in progress', 'doing', '/'].includes(normalized)) return '/';
+    if (['todo', 'open', 'scheduled', 'backlog', 'pending', ' '].includes(normalized)) return ' ';
+    return null;
+  }
+
+  private createTaskDateValue(dateString: string): TaskDateValue {
+    const normalized = String(dateString || '').trim();
+    const momentFactory = (window as any).moment;
+    const momentValue =
+      typeof momentFactory === 'function'
+        ? momentFactory(normalized, 'YYYY-MM-DD', true)
+        : null;
+    if (momentValue?.isValid?.()) {
+      const dateValue = momentValue as typeof momentValue & TaskDateValue;
+      dateValue.isEmpty = () => !normalized;
+      dateValue.toJSON = () => normalized;
+      dateValue.toDate = () => momentValue.toDate();
+      return dateValue;
+    }
+    const fallbackDate = new Date(`${normalized}T00:00:00`);
+    const safeDate = Number.isNaN(fallbackDate.getTime()) ? new Date(normalized) : fallbackDate;
+    const dateValue = safeDate as Date & TaskDateValue;
+    dateValue.isEmpty = () => !normalized;
+    dateValue.toString = () => normalized;
+    dateValue.valueOf = () => safeDate.getTime();
+    dateValue.format = () => normalized;
+    dateValue.toJSON = () => normalized;
+    dateValue.toDate = () => safeDate;
+    return dateValue;
+  }
+
+  private parseKanbanBoardTasks(content: string): ParsedKanbanTask[] {
     const lines = content.split('\n');
-    const tasks: Array<{ lineNumber: number; text: string; tags: string[] }> = [];
-    const taskLine = /^[\t ]*-\s+\[([ xX])\]\s+(.*)$/;
+    const tasks: ParsedKanbanTask[] = [];
+    const gcmSemantics = this.getGcmTaskSemanticsApi();
 
     for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(taskLine);
-      if (!m) continue;
-      const rawText = m[2];
-      const text = this.simplifyTaskText(rawText);
+      const parsedTask = gcmSemantics?.parseTaskLine?.(lines[i]);
+      if (parsedTask) {
+        const inlineProperties = parsedTask.inlineProperties || {};
+        const text = String(parsedTask.text || '').trim();
+        if (!text) continue;
+        const rawText = String(parsedTask.body || '');
+        const tags = this.extractInlineTags(this.stripKanbanDateTokens(rawText));
+        tasks.push({
+          lineNumber: i,
+          text,
+          tags,
+          inlineProperties,
+          scheduled: inlineProperties.scheduled || inlineProperties.start || inlineProperties.scheduleddate || inlineProperties['scheduled-date'] || null,
+          rawScheduled:
+            inlineProperties.scheduled
+            || inlineProperties.start
+            || inlineProperties.scheduleddate
+            || inlineProperties['scheduled-date']
+            || null,
+          stateMarker: parsedTask.checkboxState ? String(parsedTask.checkboxState || '').replace(/^\[|\]$/g, '') : '',
+        });
+        continue;
+      }
+
+      const checkboxMatch = lines[i].match(/^[\t ]*-\s+\[([^\]])\]\s+(.*)$/);
+      const bulletMatch = checkboxMatch ? null : lines[i].match(/^[\t ]*-\s+(?!\[[^\]]\]\s+)(.*)$/);
+      if (!checkboxMatch && !bulletMatch) continue;
+      const rawText = checkboxMatch ? checkboxMatch[2] : (bulletMatch?.[1] ?? '');
+      const inlineProperties: Record<string, string> = {};
+      const inlineRe = /\[([a-zA-Z0-9_-]+)::\s*([^\]]+)\]/g;
+      let inlineMatch: RegExpExecArray | null;
+      while ((inlineMatch = inlineRe.exec(rawText)) !== null) {
+        const key = String(inlineMatch[1] ?? '').trim().toLowerCase();
+        const value = String(inlineMatch[2] ?? '').trim();
+        if (key && value) inlineProperties[key] = value;
+      }
+      const text = this.stripKanbanDateTokens(rawText).replace(/^\[([^\]]+)\]\([^)]+\)$/, '$1').trim();
       if (!text) continue;
       const tags = this.extractInlineTags(this.stripKanbanDateTokens(rawText));
-      tasks.push({ lineNumber: i, text, tags });
+      tasks.push({
+        lineNumber: i,
+        text,
+        tags,
+        inlineProperties,
+        scheduled: inlineProperties.scheduled || inlineProperties.start || inlineProperties.scheduleddate || inlineProperties['scheduled-date'] || null,
+        rawScheduled:
+          inlineProperties.scheduled
+          || inlineProperties.start
+          || inlineProperties.scheduleddate
+          || inlineProperties['scheduled-date']
+          || null,
+        stateMarker: checkboxMatch ? String(checkboxMatch[1] ?? '') : '',
+      });
     }
 
     return tasks;
   }
 
-  private createVirtualTaskEntry(parentEntry: BasesEntry, task: { lineNumber: number; text: string; tags: string[] }): BasesEntry {
+  private getGcmTaskSemanticsApi(): GcmTaskSemanticsApi | null {
+    const gcm =
+      (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu') ??
+      (this.app as any)?.plugins?.plugins?.['TPS-Global-Context-Menu (Dev)'];
+    const api = gcm?.api ?? gcm;
+    if (!api?.parseTaskLine) return null;
+    return api as GcmTaskSemanticsApi;
+  }
+
+  private createVirtualTaskEntry(parentEntry: BasesEntry, task: ParsedKanbanTask): BasesEntry {
     const parentFile = parentEntry.file;
     const syntheticPath = `${parentFile.path}::kanban-task:${task.lineNumber}`;
-    this.virtualTaskMetaByPath.set(syntheticPath, { parentPath: parentFile.path, lineNumber: task.lineNumber, tags: task.tags });
+    this.virtualTaskMetaByPath.set(syntheticPath, this.createVirtualTaskMeta(parentFile.path, task));
+
+    const taskPropertyLookup = new Map<string, unknown>();
+    for (const [key, value] of Object.entries(task.inlineProperties)) {
+      const normalizedKey = String(key || '').trim().toLowerCase();
+      const normalizedValue = String(value || '').trim();
+      if (!normalizedKey || !normalizedValue) continue;
+      if (normalizedKey === 'timeestimate') {
+        const numeric = Number(normalizedValue);
+        taskPropertyLookup.set(normalizedKey, Number.isFinite(numeric) ? numeric : normalizedValue);
+        continue;
+      }
+      if (normalizedKey === 'allday') {
+        const boolValue = this.parseTaskBooleanValue(normalizedValue);
+        taskPropertyLookup.set(normalizedKey, boolValue ?? normalizedValue);
+        continue;
+      }
+      taskPropertyLookup.set(normalizedKey, normalizedValue);
+    }
+    const derivedStatus = String(taskPropertyLookup.get('status') ?? this.getTaskStatusFromMarker(task.stateMarker)).trim();
+    if (derivedStatus) {
+      taskPropertyLookup.set('status', derivedStatus);
+      taskPropertyLookup.set('note.status', derivedStatus);
+    }
+    const explicitAllDay = this.parseTaskBooleanValue(taskPropertyLookup.get('allday'));
+    const derivedAllDay = explicitAllDay ?? (task.rawScheduled ? !this.hasExplicitTimeComponent(task.rawScheduled) : null);
+    if (derivedAllDay != null) {
+      taskPropertyLookup.set('allday', derivedAllDay);
+      taskPropertyLookup.set('allDay', derivedAllDay);
+      taskPropertyLookup.set('note.allday', derivedAllDay);
+      taskPropertyLookup.set('note.allDay', derivedAllDay);
+    }
+    if (task.scheduled) {
+      const scheduledValue = this.createTaskDateValue(task.scheduled);
+      taskPropertyLookup.set('scheduled', scheduledValue);
+      taskPropertyLookup.set('start', scheduledValue);
+      taskPropertyLookup.set('scheduleddate', scheduledValue);
+      taskPropertyLookup.set('scheduled-date', scheduledValue);
+      taskPropertyLookup.set('note.scheduled', scheduledValue);
+      taskPropertyLookup.set('note.start', scheduledValue);
+      taskPropertyLookup.set('note.scheduleddate', scheduledValue);
+      taskPropertyLookup.set('note.scheduled-date', scheduledValue);
+    }
 
     const syntheticFile = {
       ...parentFile,
@@ -1012,7 +2091,32 @@ export class KanbanView extends BasesView {
     return {
       file: syntheticFile,
       getValue: (propId: any) => {
+        const normalizedPropId = String(propId ?? '').trim().toLowerCase();
+        if (!normalizedPropId) return parentEntry.getValue(propId);
         if (this.isTagsPropId(propId)) return task.tags;
+        if (taskPropertyLookup.has(normalizedPropId)) {
+          return taskPropertyLookup.get(normalizedPropId);
+        }
+        if (this.isTaskScopedVirtualProp(normalizedPropId)) {
+          return null;
+        }
+        if (normalizedPropId.startsWith('note.')) {
+          const strippedPropId = normalizedPropId.slice(5);
+          if (taskPropertyLookup.has(strippedPropId)) {
+            return taskPropertyLookup.get(strippedPropId);
+          }
+          if (strippedPropId === 'title' || strippedPropId === 'name' || strippedPropId === 'file.name' || strippedPropId === 'file.basename') {
+            return task.text;
+          }
+        }
+        if (
+          normalizedPropId === 'title' ||
+          normalizedPropId === 'name' ||
+          normalizedPropId === 'file.name' ||
+          normalizedPropId === 'file.basename'
+        ) {
+          return task.text;
+        }
         return parentEntry.getValue(propId);
       },
     } as unknown as BasesEntry;
@@ -1027,7 +2131,7 @@ export class KanbanView extends BasesView {
       const expandedEntries: BasesEntry[] = [];
       for (const entry of group.entries) {
         const file = entry.file;
-        if (!(file instanceof TFile) || !this.isKanbanBoardFile(file)) {
+        if (!(file instanceof TFile) || !this.shouldExpandTaskCardsFromFile(file)) {
           expandedEntries.push(entry);
           continue;
         }
@@ -1289,6 +2393,283 @@ export class KanbanView extends BasesView {
   private getFrontmatterValueCaseInsensitive(frontmatter: Record<string, unknown>, key: string): unknown {
     const actual = this.findFrontmatterKeyCaseInsensitive(frontmatter, key);
     return actual ? frontmatter[actual] : undefined;
+  }
+
+  private getCalendarPlugin(): any {
+    const plugins = (this.app as any)?.plugins?.plugins;
+    if (!plugins || typeof plugins !== 'object') return null;
+    return plugins['tps-calendar-base'] ?? plugins['TPS-Calendar-Base (Dev)'] ?? null;
+  }
+
+  private createTaskCheckboxIcon(state: string, size: number): HTMLElement {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.style.width = `${size}px`;
+    svg.style.height = `${size}px`;
+    svg.style.marginRight = '4px';
+    svg.style.flexShrink = '0';
+    svg.style.opacity = '0.9';
+
+    const normalized = String(state || '').trim();
+    if (!normalized) {
+      const bullet = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      bullet.setAttribute('cx', '12');
+      bullet.setAttribute('cy', '12');
+      bullet.setAttribute('r', '3');
+      bullet.setAttribute('fill', 'currentColor');
+      bullet.setAttribute('stroke', 'none');
+      svg.appendChild(bullet);
+      return svg as unknown as HTMLElement;
+    }
+
+    const box = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    box.setAttribute('x', '3');
+    box.setAttribute('y', '3');
+    box.setAttribute('width', '18');
+    box.setAttribute('height', '18');
+    box.setAttribute('rx', '2');
+    box.setAttribute('ry', '2');
+    svg.appendChild(box);
+
+    if (/^[xX]$/.test(normalized)) {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M8 12l3 3 5-6');
+      svg.appendChild(path);
+    } else if (normalized === '-') {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M8 12h8');
+      svg.appendChild(path);
+    } else if (normalized === '\\') {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M8 8l8 8');
+      svg.appendChild(path);
+    } else if (normalized === '?') {
+      const p1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p1.setAttribute('d', 'M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-.9.8-1.7 1.3-1.7 2.7');
+      const p2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p2.setAttribute('d', 'M12 17h.01');
+      svg.appendChild(p1);
+      svg.appendChild(p2);
+    }
+
+    return svg as unknown as HTMLElement;
+  }
+
+  private computeVirtualTaskVisualStyleFromRules(entry: BasesEntry, virtualMeta: VirtualKanbanTaskMeta): EntryVisualStyle {
+    const companion = this.getNotebookNavigatorCompanion();
+    const useApiResolver = typeof companion?.api?.resolveVisualOutputsForContext === 'function';
+    const useEngineResolver = typeof companion?.ruleEngine?.resolveVisualOutputs === 'function';
+    const rules = Array.isArray(companion?.settings?.rules) ? companion.settings.rules : [];
+    if ((!useApiResolver && !useEngineResolver) || !companion?.settings?.enabled || rules.length === 0) {
+      return { iconName: null, colorValue: null, iconColor: null };
+    }
+
+    const parentFile = this.app.vault.getFileByPath(virtualMeta.parentPath);
+    if (!(parentFile instanceof TFile)) {
+      return { iconName: null, colorValue: null, iconColor: null };
+    }
+
+    const parentCache = this.app.metadataCache.getFileCache(parentFile);
+    const parentFrontmatter = (parentCache?.frontmatter || {}) as Record<string, unknown>;
+    const parentTags = this.collectNormalizedEntryTags(parentFile, parentFrontmatter);
+    const taskTags = Array.from(new Set(virtualMeta.tags.map((tag) => this.normalizeTagValue(tag)).filter(Boolean)));
+    const taskFrontmatter: Record<string, unknown> = { ...parentFrontmatter };
+
+    for (const [key, value] of Object.entries(virtualMeta.inlineProperties || {})) {
+      if (this.isStoredTaskVisualPropertyKey(key)) continue;
+      if (String(value || '').trim()) {
+        taskFrontmatter[key] = value;
+      }
+    }
+
+    const status = this.getTaskStatusFromMarker(virtualMeta.stateMarker);
+    if (!String(taskFrontmatter.status ?? '').trim()) {
+      taskFrontmatter.status = status;
+    }
+    if (virtualMeta.inlineProperties.priority) {
+      taskFrontmatter.priority = virtualMeta.inlineProperties.priority;
+    }
+    if (virtualMeta.scheduled) {
+      const scheduledValue = this.createTaskDateValue(virtualMeta.scheduled);
+      taskFrontmatter.scheduled = scheduledValue;
+      taskFrontmatter.start = scheduledValue;
+    }
+    const dueValue = String(virtualMeta.inlineProperties.due || '').trim();
+    if (dueValue) {
+      const normalizedDue = this.normalizeTaskScheduleValue(dueValue);
+      if (normalizedDue) {
+        taskFrontmatter.due = this.createTaskDateValue(normalizedDue);
+      }
+    }
+    const startValue = String(
+      virtualMeta.inlineProperties.start
+        || virtualMeta.inlineProperties.scheduled
+        || virtualMeta.inlineProperties.scheduleddate
+        || virtualMeta.inlineProperties['scheduled-date']
+        || '',
+    ).trim();
+    if (startValue) {
+      const normalizedStart = this.normalizeTaskScheduleValue(startValue);
+      if (normalizedStart) {
+        taskFrontmatter.start = this.createTaskDateValue(normalizedStart);
+      }
+    }
+    taskFrontmatter.title = virtualMeta.text;
+    taskFrontmatter.name = virtualMeta.text;
+    taskFrontmatter.text = virtualMeta.text;
+    taskFrontmatter.body = virtualMeta.text;
+
+    const taskContext: RuleEvaluationContext = {
+      file: {
+        path: entry.file.path,
+        name: entry.file.name,
+        basename: entry.file.basename,
+        extension: entry.file.extension,
+      },
+      frontmatter: taskFrontmatter,
+      tags: Array.from(new Set([...parentTags, ...taskTags])),
+      body: virtualMeta.text,
+      parent: {
+        file: {
+          path: parentFile.path,
+          name: parentFile.name,
+          basename: parentFile.basename,
+          extension: parentFile.extension,
+        },
+        frontmatter: parentFrontmatter,
+        tags: parentTags,
+      },
+    };
+
+    try {
+      const visual = useApiResolver
+        ? companion.api.resolveVisualOutputsForContext(taskContext)
+        : companion.ruleEngine.resolveVisualOutputs(rules, taskContext);
+      const iconName = String(visual?.icon?.value || '').trim() || null;
+      const colorValue = String(visual?.color?.value || '').trim() || null;
+      return {
+        iconName,
+        colorValue,
+        iconColor: iconName ? 'var(--text-on-accent)' : null,
+      };
+    } catch {
+      return { iconName: null, colorValue: null, iconColor: null };
+    }
+  }
+
+  private getResolvedVirtualTaskVisualStyle(entry: BasesEntry, virtualMeta: VirtualKanbanTaskMeta): EntryVisualStyle {
+    const stored = this.getStoredVirtualTaskVisualStyle(virtualMeta);
+    if (stored.iconName || stored.colorValue) {
+      return stored;
+    }
+    return this.computeVirtualTaskVisualStyleFromRules(entry, virtualMeta);
+  }
+
+  private emitTaskLineUpdated(file: TFile, lineNumber: number | null): void {
+    (this.app.workspace as any)?.trigger?.(TASK_LINE_UPDATED_EVENT, {
+      path: file.path,
+      lineNumber,
+    });
+  }
+
+  private hasRenderedVirtualTaskForFile(filePath: string): boolean {
+    const prefix = `${normalizePath(filePath)}::kanban-task:`;
+    for (const path of this.renderedFileOrder) {
+      if (path.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  private isVisibleVirtualTaskLine(file: TFile, lineNumber: number | null): boolean {
+    const syntheticPath = `${file.path}::kanban-task:${lineNumber}`;
+    return this.renderedFileOrder.includes(syntheticPath) || this.virtualTaskMetaByPath.has(syntheticPath);
+  }
+
+  private resolveNoteVisualStyle(sourceFile: TFile): EntryVisualStyle {
+    const kanbanSettings = this.plugin.settings;
+    const calendarPlugin = this.getCalendarPlugin();
+    const calendarSettings = calendarPlugin?.settings ?? {};
+    const frontmatter = this.app.metadataCache.getFileCache(sourceFile)?.frontmatter as Record<string, unknown> | undefined;
+    const colorSource = String(calendarSettings.noteEventColorSource || 'frontmatter');
+    const iconSource = String(calendarSettings.noteEventIconSource || 'frontmatter');
+    const colorTarget = String(calendarSettings.noteEventFrontmatterColorTarget || 'both');
+    const frontmatterColorField = String(calendarSettings.frontmatterColorField || kanbanSettings.colorKey || 'color');
+    const frontmatterIconField = String(calendarSettings.frontmatterIconField || kanbanSettings.iconKey || 'icon');
+
+    const canUseFrontmatterColor = colorSource === 'frontmatter' && colorTarget !== 'off';
+    const canUseFrontmatterIcon = iconSource === 'frontmatter';
+
+    const colorValue = canUseFrontmatterColor
+      ? String(
+        frontmatter
+          ? this.getFrontmatterValueCaseInsensitive(frontmatter, frontmatterColorField)
+          ?? this.getFrontmatterValueCaseInsensitive(frontmatter, 'iconColor')
+          ?? ''
+          : '',
+      ).trim()
+      : '';
+    const iconName = canUseFrontmatterIcon
+      ? String(
+        frontmatter
+          ? this.getFrontmatterValueCaseInsensitive(frontmatter, frontmatterIconField) ?? ''
+          : '',
+      ).trim()
+      : '';
+
+    return {
+      iconName: iconName || null,
+      colorValue: colorValue || null,
+      iconColor: colorValue || null,
+    };
+  }
+
+  private resolveEntryVisualStyle(entry: BasesEntry): EntryVisualStyle {
+    const kanbanSettings = this.plugin.settings;
+    const virtualMeta = this.virtualTaskMetaByPath.get(entry.file.path);
+    if (virtualMeta) {
+      return this.getResolvedVirtualTaskVisualStyle(entry, virtualMeta);
+    }
+
+    const calendarPlugin = this.getCalendarPlugin();
+    const calendarSettings = calendarPlugin?.settings ?? {};
+    const sourceFile = entry.file;
+    const frontmatter = this.app.metadataCache.getFileCache(sourceFile)?.frontmatter as Record<string, unknown> | undefined;
+    const colorSource = String(calendarSettings.noteEventColorSource || 'frontmatter');
+    const iconSource = String(calendarSettings.noteEventIconSource || 'frontmatter');
+    const colorTarget = String(calendarSettings.noteEventFrontmatterColorTarget || 'both');
+    const frontmatterColorField = String(calendarSettings.frontmatterColorField || kanbanSettings.colorKey || 'color');
+    const frontmatterIconField = String(calendarSettings.frontmatterIconField || kanbanSettings.iconKey || 'icon');
+
+    const canUseFrontmatterColor = colorSource === 'frontmatter' && colorTarget !== 'off';
+    const canUseFrontmatterIcon = iconSource === 'frontmatter';
+
+    const colorValue = canUseFrontmatterColor
+      ? String(
+        frontmatter
+          ? this.getFrontmatterValueCaseInsensitive(frontmatter, frontmatterColorField)
+          ?? this.getFrontmatterValueCaseInsensitive(frontmatter, 'iconColor')
+          ?? ''
+          : '',
+      ).trim()
+      : '';
+    const iconName = canUseFrontmatterIcon
+      ? String(
+        frontmatter
+          ? this.getFrontmatterValueCaseInsensitive(frontmatter, frontmatterIconField) ?? ''
+          : '',
+      ).trim()
+      : '';
+
+    return {
+      iconName: iconName || (!calendarPlugin ? this.resolveCompanionIconValue(sourceFile, frontmatter) : '') || null,
+      colorValue: colorValue || null,
+      iconColor: colorValue || null,
+    };
   }
 
   private getNotebookNavigatorCompanion(): any {
@@ -1650,6 +3031,89 @@ export class KanbanView extends BasesView {
     } as unknown as BasesEntryGroup;
   }
 
+  private createFileBackedEntry(file: TFile): BasesEntry {
+    return {
+      file,
+      getValue: (propId: any) => {
+        const normalizedPropId = String(propId ?? '').trim().toLowerCase();
+        if (!normalizedPropId) return null;
+        if (this.isTagsPropId(propId)) {
+          const tags = this.collectNormalizedEntryTags(file, this.app.metadataCache.getFileCache(file)?.frontmatter || {});
+          return tags;
+        }
+        if (
+          normalizedPropId === 'title'
+          || normalizedPropId === 'name'
+          || normalizedPropId === 'file.name'
+          || normalizedPropId === 'file.basename'
+          || normalizedPropId === 'note.title'
+          || normalizedPropId === 'note.name'
+          || normalizedPropId === 'note.file.name'
+          || normalizedPropId === 'note.file.basename'
+        ) {
+          return file.basename;
+        }
+        const fm = (this.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, unknown>;
+        const actualKey = this.findFrontmatterKeyCaseInsensitive(fm, normalizedPropId);
+        if (actualKey) return fm[actualKey];
+        if (normalizedPropId.startsWith('note.')) {
+          const stripped = normalizedPropId.slice(5);
+          const strippedKey = this.findFrontmatterKeyCaseInsensitive(fm, stripped);
+          if (strippedKey) return fm[strippedKey];
+        }
+        return null;
+      },
+    } as unknown as BasesEntry;
+  }
+
+  private getCurrentDayKey(): string | null {
+    const activePath = this.getActiveMarkdownPath();
+    if (!activePath) return null;
+    const file = this.app.vault.getFileByPath(activePath);
+    if (!(file instanceof TFile)) return null;
+    const normalized = this.normalizeTaskScheduleValue(file.basename);
+    return normalized || null;
+  }
+
+  private shouldUseScheduledTaskFallback(): boolean {
+    return true;
+  }
+
+  private async buildScheduledTaskFallbackGroups(targetDate: string): Promise<BasesEntryGroup[]> {
+    const taskEntries: BasesEntry[] = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!this.shouldExpandTaskCardsFromFile(file)) continue;
+      try {
+        const content = await this.app.vault.cachedRead(file);
+        const tasks = this.parseKanbanBoardTasks(content);
+        const matchingTasks = tasks.filter((task) => task.scheduled && this.normalizeTaskScheduleValue(task.scheduled) === targetDate);
+        if (!matchingTasks.length) continue;
+        const parentEntry = this.createFileBackedEntry(file);
+        for (const task of matchingTasks) {
+          taskEntries.push(this.createVirtualTaskEntry(parentEntry, task));
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (!taskEntries.length) return [];
+    return [{
+      key: null,
+      entries: taskEntries,
+      hasKey: () => false,
+    } as unknown as BasesEntryGroup];
+  }
+
+  private hasVirtualTaskEntries(groups: BasesEntryGroup[]): boolean {
+    for (const group of groups) {
+      for (const entry of group.entries) {
+        if (this.virtualTaskMetaByPath.has(entry.file.path)) return true;
+      }
+    }
+    return false;
+  }
+
   private getSavedLaneFallbackGroups(): BasesEntryGroup[] {
     const map = (this.plugin.settings?.laneOrderByView || {}) as Record<string, string[]>;
     const viewId = this.getLaneOrderViewId();
@@ -1853,6 +3317,34 @@ export class KanbanView extends BasesView {
     return `${sourcePath}::${viewName}`;
   }
 
+  static getOptions(): any[] {
+    return [
+      {
+        displayName: 'Creation',
+        type: 'group',
+        items: [
+          {
+            displayName: 'Creation mode',
+            type: 'dropdown',
+            key: 'tpsCreateMode',
+            default: 'inherit',
+            options: {
+              inherit: 'Use global default',
+              note: 'Full note',
+              task: 'Task line',
+            },
+          },
+          {
+            displayName: 'Creation destination',
+            type: 'text',
+            key: 'tpsCreateDestination',
+            placeholder: 'Leave blank to use the global default',
+          },
+        ],
+      },
+    ];
+  }
+
   private getLayoutMode(): 'board' | 'list' {
     const viewId = this.getLaneOrderViewId();
     const map = (this.plugin.settings?.layoutModeByView || {}) as Record<string, 'board' | 'list'>;
@@ -1992,10 +3484,17 @@ export class KanbanView extends BasesView {
     groups: BasesEntryGroup[],
     propName: string | null,
     item: LaneRenderItem,
+    layoutMode: 'board' | 'list',
   ): HTMLElement {
     const cardEl = document.createElement('div');
     const virtualMeta = this.virtualTaskMetaByPath.get(entry.file.path);
     const isVirtualTask = !!virtualMeta;
+    const isListLayout = layoutMode === 'list';
+    const taskState = virtualMeta?.stateMarker ?? '';
+    const taskStatus = isVirtualTask ? this.getTaskStatusFromMarker(taskState) : '';
+    const taskIsDone = isVirtualTask && (/^[xX]$/.test(taskState) || taskState === '-');
+    const visualStyle = this.resolveEntryVisualStyle(entry);
+    const taskColor = isVirtualTask ? visualStyle.colorValue || '' : '';
     let suppressNextClick = false;
     let clearSuppressTimer: number | null = null;
 
@@ -2010,6 +3509,21 @@ export class KanbanView extends BasesView {
     };
 
     cardEl.className = 'tps-kanban-card';
+    if (isListLayout) {
+      cardEl.classList.add('tps-kanban-card--list');
+    }
+    if (isVirtualTask) {
+      cardEl.classList.add('tps-kanban-card--task');
+      cardEl.classList.add('bases-calendar-event', 'is-task');
+      if (taskStatus) {
+        cardEl.classList.add(`bases-calendar-event-status-${taskStatus}`);
+      }
+      cardEl.style.setProperty('--tps-card-color', taskColor);
+      cardEl.style.setProperty('--tps-card-icon-color', 'var(--text-on-accent)');
+      cardEl.style.backgroundColor = taskColor;
+      cardEl.style.borderColor = taskColor;
+      cardEl.style.color = 'var(--text-on-accent)';
+    }
     cardEl.title = entry.file.path;
     cardEl.draggable = true;
     cardEl.dataset.path = entry.file.path;
@@ -2018,40 +3532,49 @@ export class KanbanView extends BasesView {
       cardEl.classList.add('tps-kanban-card--open-note');
     }
 
-    // Read icon and color from the note's frontmatter using configured keys
-    const settings = this.plugin.settings;
-    const fm = this.app.metadataCache.getFileCache(entry.file)?.frontmatter as Record<string, unknown> | undefined;
-    const iconName = fm && settings.iconKey
-      ? String(this.getFrontmatterValueCaseInsensitive(fm, settings.iconKey) ?? '').trim()
-      : '';
-    const resolvedIconName = iconName || this.resolveCompanionIconValue(entry.file, fm);
-    const colorValue = fm && settings.colorKey
-      ? String(this.getFrontmatterValueCaseInsensitive(fm, settings.colorKey) ?? '').trim()
-      : '';
-    const colorTarget = settings.frontmatterColorTarget || 'both';
+    const colorTarget = this.plugin.settings.frontmatterColorTarget || 'both';
     const applyColorToCard = colorTarget === 'card' || colorTarget === 'both';
     const applyColorToIcon = colorTarget === 'icon' || colorTarget === 'both';
 
-    if (colorValue && applyColorToCard) {
-      cardEl.style.setProperty('--tps-card-color', colorValue);
-      cardEl.classList.add('tps-kanban-card--colored');
-    }
-    if (colorValue && applyColorToIcon) {
-      cardEl.style.setProperty('--tps-card-icon-color', colorValue);
+    if (!isVirtualTask) {
+      if (visualStyle.colorValue && applyColorToCard) {
+        cardEl.style.setProperty('--tps-card-color', visualStyle.colorValue);
+        cardEl.classList.add('tps-kanban-card--colored');
+      }
+      if (visualStyle.iconColor && applyColorToIcon) {
+        cardEl.style.setProperty('--tps-card-icon-color', visualStyle.iconColor);
+      }
     }
 
     // Card inner: optional icon + title text
     const inner = cardEl.createDiv({ cls: 'tps-kanban-card-inner' });
-    if (resolvedIconName) {
+    if (isVirtualTask) {
+      if (visualStyle.iconName) {
+        const iconEl = inner.createDiv({ cls: 'tps-kanban-card-icon tps-kanban-task-icon' });
+        setIcon(iconEl, this.normalizeLucideIconValue(visualStyle.iconName));
+        iconEl.style.color = visualStyle.iconColor || 'var(--text-on-accent)';
+      } else {
+        const iconEl = inner.createDiv({ cls: 'tps-kanban-card-icon tps-kanban-task-checkbox' });
+        iconEl.appendChild(this.createTaskCheckboxIcon(taskState, isListLayout ? 12 : 14));
+        if (taskIsDone) {
+          iconEl.classList.add('tps-kanban-task-checkbox--done');
+        }
+        iconEl.style.color = 'var(--text-on-accent)';
+      }
+    } else if (visualStyle.iconName) {
       const iconEl = inner.createDiv({ cls: 'tps-kanban-card-icon' });
-      const bareIcon = this.normalizeLucideIconValue(resolvedIconName);
+      const bareIcon = this.normalizeLucideIconValue(visualStyle.iconName);
       setIcon(iconEl, bareIcon);
       // If setIcon couldn't find the icon it renders nothing — remove the empty div
       // so it doesn't add unwanted spacing.
       if (!iconEl.querySelector('svg')) iconEl.remove();
     }
 
-    inner.createSpan({ text: entry.file.basename, cls: 'tps-kanban-card-title' });
+    const titleEl = inner.createSpan({ text: entry.file.basename, cls: 'tps-kanban-card-title' });
+    if (isVirtualTask && taskIsDone) {
+      titleEl.style.textDecoration = 'line-through';
+      titleEl.style.opacity = '0.72';
+    }
 
     if (item.hasChildren) {
       const collapsed = !this.expandedSubtreePaths.has(entry.file.path);
@@ -2082,10 +3605,30 @@ export class KanbanView extends BasesView {
       if (!e.dataTransfer) return;
       suppressNextClick = true;
       scheduleSuppressReset();
+      const referenceTitle = isVirtualTask
+        ? String(virtualMeta?.text || entry.file.basename).trim()
+        : String(entry.file.basename || '').trim();
+      const referencePath = isVirtualTask
+        ? String(virtualMeta?.parentPath || entry.file.path).trim()
+        : String(entry.file.path).trim();
+      const wikilink = buildTaskSourceWikilink(referencePath, referenceTitle);
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('application/x-kanban-entry', entry.file.path);
       if (isVirtualTask) e.dataTransfer.setData('application/x-kanban-virtual-task', '1');
-      e.dataTransfer.setData('obsidian/file', entry.file.path);
+      if (referenceTitle && referencePath) {
+        const cardRefPayload: Record<string, string> = {
+          title: referenceTitle,
+          linkPath: referencePath,
+        };
+        if (isVirtualTask) {
+          cardRefPayload.isTask = '1';
+          cardRefPayload.checkboxState = `[${taskState || ' '}]`;
+        }
+        e.dataTransfer.setData(TASK_REFERENCE_DRAG_TYPE, JSON.stringify(cardRefPayload));
+      }
+      if (wikilink) {
+        e.dataTransfer.setData('text/plain', wikilink);
+      }
       cardEl.style.opacity = '0.5';
     });
     cardEl.addEventListener('dragend', () => {
@@ -2251,10 +3794,10 @@ export class KanbanView extends BasesView {
   }
 
   private render(): void {
+    const renderVersion = ++this.renderVersion;
     this.applyLayoutSettings();
     this.ensureContainer();
     this.containerEl.empty();
-    this.syncNativeResultsCountSoon();
 
     const propName = this.getGroupByPropName();
     const propId = this.getGroupByPropId(propName);
@@ -2262,80 +3805,113 @@ export class KanbanView extends BasesView {
     const sourceGroups: BasesEntryGroup[] = (listGrouping && propId)
       ? this.buildMultiValueGroups(propId)
       : (this.data?.groupedData ?? []);
-    void this.renderAsync(sourceGroups, propName);
+    void this.renderAsync(sourceGroups, propName, renderVersion, propId);
   }
 
-  private async renderAsync(sourceGroups: BasesEntryGroup[], propName: string | null): Promise<void> {
+  private async renderAsync(
+    sourceGroups: BasesEntryGroup[],
+    propName: string | null,
+    renderVersion: number,
+    propId: string | null,
+  ): Promise<void> {
     this.activeNotePath = this.getActiveMarkdownPath();
-    const expandedSourceGroups = this.plugin.settings.enableKanbanTaskCards === false
-      ? sourceGroups
-      : await this.expandGroupEntriesWithKanbanTasks(sourceGroups);
-    const allGroups = this.mergeGroupsByLaneId(expandedSourceGroups);
+    try {
+      let expandedSourceGroups = this.plugin.settings.enableKanbanTaskCards === false
+        ? sourceGroups
+        : await this.expandGroupEntriesWithKanbanTasks(sourceGroups);
+      if (renderVersion !== this.renderVersion) return;
+      if (
+        this.plugin.settings.enableKanbanTaskCards !== false
+        && !this.hasVirtualTaskEntries(expandedSourceGroups)
+        && this.shouldUseScheduledTaskFallback()
+      ) {
+        const targetDate = this.getCurrentDayKey();
+        if (targetDate) {
+          const fallbackGroups = await this.buildScheduledTaskFallbackGroups(targetDate);
+          if (fallbackGroups.length) {
+            if (propId) {
+              const fallbackEntries = fallbackGroups.flatMap((group) => group.entries);
+              expandedSourceGroups = this.buildGroupsFromEntries(fallbackEntries, propId);
+            } else {
+              expandedSourceGroups = fallbackGroups;
+            }
+          }
+        }
+      }
+      if (renderVersion !== this.renderVersion) return;
+      if (propId) {
+        const regroupedEntries = expandedSourceGroups.flatMap((group) => group.entries);
+        expandedSourceGroups = this.buildGroupsFromEntries(regroupedEntries, propId);
+      }
+      if (renderVersion !== this.renderVersion) return;
+      const allGroups = this.mergeGroupsByLaneId(expandedSourceGroups);
 
-    // Separate keyed groups from the ungrouped lane, then reorder per settings
-    const keyed = allGroups.filter((g) => this.getLaneId(g) !== 'ungrouped');
-    const ungrouped = allGroups.filter((g) => this.getLaneId(g) === 'ungrouped');
-    const forced = this.getForcedLanesFromFilters(propName);
+      // Separate keyed groups from the ungrouped lane, then reorder per settings
+      const keyed = allGroups.filter((g) => this.getLaneId(g) !== 'ungrouped');
+      const ungrouped = allGroups.filter((g) => this.getLaneId(g) === 'ungrouped');
+      const forced = this.getForcedLanesFromFilters(propName);
 
-    const keyedWithForced: BasesEntryGroup[] = [...keyed];
-    const existingKeys = new Set(keyed.map((g) => String(g.key).trim().toLowerCase()));
-    for (const forcedKey of forced.keys) {
-      const normalized = forcedKey.trim().toLowerCase();
-      if (!normalized || existingKeys.has(normalized)) continue;
-      keyedWithForced.push(this.createSyntheticGroup(forcedKey));
-      existingKeys.add(normalized);
-    }
+      const keyedWithForced: BasesEntryGroup[] = [...keyed];
+      const existingKeys = new Set(keyed.map((g) => String(g.key).trim().toLowerCase()));
+      for (const forcedKey of forced.keys) {
+        const normalized = forcedKey.trim().toLowerCase();
+        if (!normalized || existingKeys.has(normalized)) continue;
+        keyedWithForced.push(this.createSyntheticGroup(forcedKey));
+        existingKeys.add(normalized);
+      }
 
-    const ungroupedWithForced = [...ungrouped];
-    if (forced.includeUngrouped && ungroupedWithForced.length === 0) {
-      ungroupedWithForced.push(this.createSyntheticGroup(null));
-    }
+      const ungroupedWithForced = [...ungrouped];
+      if (forced.includeUngrouped && ungroupedWithForced.length === 0) {
+        ungroupedWithForced.push(this.createSyntheticGroup(null));
+      }
 
-    const ungroupedPos = this.plugin.settings.ungroupedPosition;
-    let mergedGroups = ungroupedPos === 'first'
-      ? [...ungroupedWithForced, ...keyedWithForced]
-      : [...keyedWithForced, ...ungroupedWithForced];
-    if (mergedGroups.length === 0) {
-      const savedFallback = this.getSavedLaneFallbackGroups();
-      mergedGroups = savedFallback.length > 0
-        ? savedFallback
-        : [this.createSyntheticGroup(null)];
-    }
-    const groups = this.applyManualLaneOrder(mergedGroups);
-    const parentByChild = this.buildParentByChild(groups);
-    const laneRenderItemsByLane = this.buildLaneRenderItemsByLane(groups, parentByChild);
-    const displayLanes = this.buildDisplayLaneGroups(groups);
-    const renderItemsByDisplayLane = new Map<string, LaneRenderItem[]>();
-    for (const displayLane of displayLanes) {
-      renderItemsByDisplayLane.set(
-        displayLane.id,
-        this.getRenderItemsForDisplayLane(displayLane, laneRenderItemsByLane),
-      );
-    }
+      const ungroupedPos = this.plugin.settings.ungroupedPosition;
+      let mergedGroups = ungroupedPos === 'first'
+        ? [...ungroupedWithForced, ...keyedWithForced]
+        : [...keyedWithForced, ...ungroupedWithForced];
+      if (mergedGroups.length === 0) {
+        const savedFallback = this.getSavedLaneFallbackGroups();
+        mergedGroups = savedFallback.length > 0
+          ? savedFallback
+          : [this.createSyntheticGroup(null)];
+      }
+      const groups = this.applyManualLaneOrder(mergedGroups);
+      const parentByChild = this.buildParentByChild(groups);
+      const laneRenderItemsByLane = this.buildLaneRenderItemsByLane(groups, parentByChild);
+      const displayLanes = this.buildDisplayLaneGroups(groups);
+      const renderItemsByDisplayLane = new Map<string, LaneRenderItem[]>();
+      for (const displayLane of displayLanes) {
+        renderItemsByDisplayLane.set(
+          displayLane.id,
+          this.getRenderItemsForDisplayLane(displayLane, laneRenderItemsByLane),
+        );
+      }
+      if (renderVersion !== this.renderVersion) return;
 
     this.renderedFileOrder = this.getOrderedVisiblePaths(displayLanes, renderItemsByDisplayLane);
-    const visible = new Set(this.renderedFileOrder);
-    this.selectedPaths = new Set(Array.from(this.selectedPaths).filter((p) => visible.has(p)));
-    if (this.selectionAnchorPath && !visible.has(this.selectionAnchorPath)) this.selectionAnchorPath = null;
+      const visible = new Set(this.renderedFileOrder);
+      this.selectedPaths = new Set(Array.from(this.selectedPaths).filter((p) => visible.has(p)));
+      if (this.selectionAnchorPath && !visible.has(this.selectionAnchorPath)) this.selectionAnchorPath = null;
 
-    const layoutMode = this.getLayoutMode();
-    const controls = this.containerEl.createDiv({ cls: 'tps-kanban-view-controls' });
-    controls
-      .createEl('button', {
+      const layoutMode = this.getEffectiveLayoutMode();
+      const controls = this.containerEl.createDiv({ cls: 'tps-kanban-view-controls' });
+      const layoutToggle = controls.createEl('button', {
         cls: 'tps-kanban-view-toggle',
-        text: layoutMode === 'list' ? 'Switch to board' : 'Switch to list',
-      })
-      .addEventListener('click', () => {
+        text: Platform.isMobile ? 'Mobile list' : (layoutMode === 'list' ? 'Switch to board' : 'Switch to list'),
+      });
+      layoutToggle.disabled = Platform.isMobile;
+      layoutToggle.addEventListener('click', () => {
+        if (Platform.isMobile) return;
         void this.toggleLayoutMode();
       });
-    controls
-      .createEl('button', {
-        cls: 'tps-kanban-view-toggle',
-        text: this.plugin.settings.dynamicEmptyLaneWidth ? 'Dynamic width: on' : 'Dynamic width: off',
-      })
-      .addEventListener('click', () => {
-        void this.toggleDynamicEmptyLaneWidth();
-      });
+      controls
+        .createEl('button', {
+          cls: 'tps-kanban-view-toggle',
+          text: this.plugin.settings.dynamicEmptyLaneWidth ? 'Dynamic width: on' : 'Dynamic width: off',
+        })
+        .addEventListener('click', () => {
+          void this.toggleDynamicEmptyLaneWidth();
+        });
 
     const boardClasses = ['tps-kanban-board'];
     if (layoutMode === 'list') boardClasses.push('tps-kanban-board--list');
@@ -2447,23 +4023,15 @@ export class KanbanView extends BasesView {
 
       const cardsWrap = laneEl.createEl('div', { cls: 'tps-kanban-cards' });
 
-      // drop zone — dragging a card here updates its groupBy property in frontmatter
+      // Whole-lane drop zone — dragging a card anywhere in the lane updates its
+      // groupBy property in frontmatter. Card-level nesting still handles drops
+      // on specific cards because those handlers stop propagation.
       if (propName) {
-        cardsWrap.addEventListener('dragover', (e: DragEvent) => {
-          if (!e.dataTransfer) return;
-          if (Array.from(e.dataTransfer.types).includes('application/x-kanban-entry')) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            cardsWrap.addClass('tps-kanban-drop-target');
-          }
-        });
-        cardsWrap.addEventListener('dragleave', () => cardsWrap.removeClass('tps-kanban-drop-target'));
-        cardsWrap.addEventListener('drop', async (e: DragEvent) => {
-          e.preventDefault();
+        const clearLaneDropTarget = () => {
+          laneEl.removeClass('tps-kanban-lane-drop-target');
           cardsWrap.removeClass('tps-kanban-drop-target');
-          if (!e.dataTransfer) return;
-          const filePath = e.dataTransfer.getData('application/x-kanban-entry');
-          if (!filePath) return;
+        };
+        const applyLaneDrop = async (filePath: string) => {
           const targetSelection = await this.resolveDropValueForDisplayLane(displayLane);
           if (!targetSelection.selected) return;
           const targetValue = targetSelection.value;
@@ -2486,11 +4054,56 @@ export class KanbanView extends BasesView {
           await this.applyFrontmatterProperty(file, propName, targetValue);
           await this.applyCompanionRulesToFile(file);
           this.render();
+        };
+        laneEl.addEventListener('dragover', (e: DragEvent) => {
+          if (!e.dataTransfer) return;
+          if (!Array.from(e.dataTransfer.types).includes('application/x-kanban-entry')) return;
+          if ((e.target as HTMLElement | null)?.closest('.tps-kanban-card')) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          laneEl.addClass('tps-kanban-lane-drop-target');
+          cardsWrap.addClass('tps-kanban-drop-target');
+        });
+        laneEl.addEventListener('dragleave', (e: DragEvent) => {
+          const relatedTarget = e.relatedTarget as Node | null;
+          if (relatedTarget && laneEl.contains(relatedTarget)) return;
+          clearLaneDropTarget();
+        });
+        laneEl.addEventListener('drop', async (e: DragEvent) => {
+          if (!e.dataTransfer) return;
+          if (!Array.from(e.dataTransfer.types).includes('application/x-kanban-entry')) return;
+          if ((e.target as HTMLElement | null)?.closest('.tps-kanban-card')) return;
+          e.preventDefault();
+          clearLaneDropTarget();
+          const filePath = e.dataTransfer.getData('application/x-kanban-entry');
+          if (!filePath) return;
+          await applyLaneDrop(filePath);
+        });
+        cardsWrap.addEventListener('dragover', (e: DragEvent) => {
+          if (!e.dataTransfer) return;
+          if (!Array.from(e.dataTransfer.types).includes('application/x-kanban-entry')) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          laneEl.addClass('tps-kanban-lane-drop-target');
+          cardsWrap.addClass('tps-kanban-drop-target');
+        });
+        cardsWrap.addEventListener('dragleave', (e: DragEvent) => {
+          const relatedTarget = e.relatedTarget as Node | null;
+          if (relatedTarget && cardsWrap.contains(relatedTarget)) return;
+          clearLaneDropTarget();
+        });
+        cardsWrap.addEventListener('drop', async (e: DragEvent) => {
+          e.preventDefault();
+          clearLaneDropTarget();
+          if (!e.dataTransfer) return;
+          const filePath = e.dataTransfer.getData('application/x-kanban-entry');
+          if (!filePath) return;
+          await applyLaneDrop(filePath);
         });
       }
 
       for (const item of renderItems) {
-        const card = this.createEntryCard(item.entry, groups, propName, item);
+        const card = this.createEntryCard(item.entry, groups, propName, item, layoutMode);
         if (item.depth > 0) {
           card.addClass('tps-kanban-card--nested');
           card.style.setProperty('--tps-kanban-depth', String(Math.min(item.depth, 8)));
@@ -2501,24 +4114,13 @@ export class KanbanView extends BasesView {
       // "Add card" creates a new note pre-populated with this lane's groupBy value
       laneEl.createEl('button', { text: '+ Add card', cls: 'tps-kanban-add-card' })
         .addEventListener('click', async () => {
-          const targetSelection = propName
-            ? await this.resolveDropValueForDisplayLane(displayLane)
-            : { selected: true, value: null as string | null };
-          if (!targetSelection.selected) return;
-          const targetValue = targetSelection.value;
-          const proc = propName
-            ? (fm: Record<string, unknown>) => {
-              if (targetValue == null) {
-                delete fm[propName];
-              } else {
-                fm[propName] = targetValue;
-              }
-            }
-            : undefined;
-          await this.createFileForView(undefined, proc);
+          await this.handleAddCard(displayLane, propName);
         });
     }
-    this.syncSelectionClasses();
-    this.syncNativeResultsCountSoon();
+      this.syncSelectionClasses();
+    } catch (error) {
+      console.error('TPS Kanban renderAsync failed', error);
+      this.containerEl.createEl('div', { text: 'Kanban view failed to render.', cls: 'tps-kanban-debug-marker' });
+    }
   }
 }

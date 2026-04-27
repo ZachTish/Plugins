@@ -8,6 +8,12 @@
   padding: 0;
 }
 
+.tps-kanban-scroll--list {
+  height: auto;
+  min-height: auto;
+  overflow: visible;
+}
+
 /* ─── Inner container ─────────────────────────────────────────────────────── */
 .tps-kanban-container {
   --tps-kanban-scale: 1;
@@ -52,8 +58,10 @@
 }
 
 .tps-kanban-container--list {
+  flex: 0 0 auto;
+  min-height: auto;
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: visible;
 }
 
 .tps-kanban-board--list {
@@ -79,6 +87,7 @@
 .tps-kanban-board--list .tps-kanban-lane {
   width: 100%;
   max-height: none;
+  overflow: visible;
 }
 
 .tps-kanban-board--dynamic-empty .tps-kanban-lane.tps-kanban-lane--empty {
@@ -178,6 +187,11 @@
   overflow-y: auto;
   flex: 1 1 0%;
   min-height: 40px;
+}
+
+.tps-kanban-board--list .tps-kanban-cards {
+  overflow: visible;
+  flex: 0 0 auto;
 }
 
 .tps-kanban-lane-rename-actions {
@@ -323,6 +337,8 @@
   text-align: left;
   transition: border-color 80ms ease, color 80ms ease;
   flex-shrink: 0;
+  position: relative;
+  z-index: 0;
 }
 
 .tps-kanban-add-card:hover {

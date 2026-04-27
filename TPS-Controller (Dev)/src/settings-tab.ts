@@ -3,35 +3,22 @@ import type TPSControllerPlugin from './main';
 import type { PropertyReminder, ExternalCalendarConfig } from './types';
 import { normalizeCalendarUrl } from './utils';
 import { renderListWithControls } from './utils/list-renderer';
+import { createTPSCollapsibleSection } from './utils/settings-layout';
 
 const createCalendarId = () => `calendar-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-const createCollapsibleSection = (
-    parent: HTMLElement,
-    title: string,
-    description?: string,
-    defaultOpen = false
-): HTMLElement => {
-    const details = parent.createEl('details', { cls: 'tps-collapsible-section' });
-    if (defaultOpen) {
-        details.setAttr('open', 'true');
-    }
-
-    const summary = details.createEl('summary', { cls: 'tps-collapsible-section-summary' });
-    summary.createSpan({ cls: 'tps-collapsible-section-title', text: title });
-
+const createSettingsGroup = (parent: HTMLElement, title: string, description?: string): HTMLElement => {
+    const group = parent.createDiv({ cls: 'tps-settings-flat-group' });
+    group.style.marginBottom = '18px';
+    group.style.padding = '14px 16px';
+    group.style.border = '1px solid var(--background-modifier-border)';
+    group.style.borderRadius = '12px';
+    group.style.background = 'var(--background-secondary)';
+    group.createEl('h3', { text: title });
     if (description) {
-        details.createEl('p', {
-            cls: 'tps-collapsible-section-description',
-            text: description
-        });
+        group.createEl('p', { text: description, cls: 'setting-item-description' });
     }
-
-    return details.createDiv({ cls: 'tps-collapsible-section-content' });
+    return group;
 };
-
-// ============================================================================
-// Controller Settings Tab
-// ============================================================================
 
 export class TPSControllerSettingTab extends PluginSettingTab {
     plugin: TPSControllerPlugin;
@@ -53,34 +40,32 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
         const debouncedSave = debounce(() => this.plugin.saveSettings(), 300);
 
-        containerEl.createEl('h2', { text: 'TPS Controller Settings' });
-        containerEl.createEl('p', {
-            text: 'This is the suite-level owner for background automation, calendar sync, reminders, and shared calendar field mappings. Other TPS plugins should stay focused on UI and local interaction.',
-            cls: 'setting-item-description'
-        });
+        containerEl.createEl('h2', { text: 'TPS Controller' });
 
-        const createMainCategory = (title: 'Features' | 'Rules' | 'Interaction' | 'UI Display', defaultOpen = true): HTMLElement => {
-            const details = containerEl.createEl('details', { cls: 'tps-settings-main-category' });
-            if (defaultOpen) details.setAttr('open', 'true');
-            const summary = details.createEl('summary', { cls: 'tps-settings-main-summary' });
-            summary.createEl('h3', { text: title });
-            return details.createDiv({ cls: 'tps-settings-main-content' });
-        };
+        const calendarsGroup = createSettingsGroup(containerEl, 'Calendars', 'Device role, external calendar sources, and sync behavior.');
+        const remindersGroup = createSettingsGroup(containerEl, 'Reminders', 'Reminder evaluation, rules, snooze, and notification delivery.');
+        const advancedGroup = createSettingsGroup(containerEl, 'Advanced', 'Companion automation, diagnostics, and recovery.');
 
-        const featuresCategory = createMainCategory('Features');
-        const rulesCategory = createMainCategory('Rules');
-        const interactionCategory = createMainCategory('Interaction');
-        const uiDisplayCategory = createMainCategory('UI Display');
+        this.renderDeviceRole(calendarsGroup);
+        this.renderExternalCalendarsSection(calendarsGroup);
+        this.renderCalendarSyncSettings(calendarsGroup, debouncedSave);
+        this.renderFrontmatterKeysSection(calendarsGroup, debouncedSave);
+        this.renderReminderSection(remindersGroup, debouncedSave);
+        this.renderAdvancedSection(advancedGroup, debouncedSave);
+        this.renderEditorDropSection(advancedGroup, debouncedSave);
 
-        // ── Device Role ─────────────────────────────────────────────
-        const roleSection = createCollapsibleSection(
-            featuresCategory,
+        this.restoreSettingsViewState(containerEl);
+    }
+
+    private renderDeviceRole(parent: HTMLElement): void {
+        const section = createTPSCollapsibleSection(
+            parent,
             'Device Role',
             'Choose whether this device runs suite-level automation or stays in normal user mode.',
             false
         );
 
-        const roleDesc = roleSection.createDiv({ cls: 'tps-controller-role-desc' });
+        const roleDesc = section.createDiv({ cls: 'tps-controller-role-desc' });
         const updateRoleDesc = (role: string) => {
             const isCtrl = role === 'controller';
             roleDesc.innerHTML = `
@@ -96,7 +81,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         const currentRole = this.plugin.deviceRoleManager?.role || 'user';
         updateRoleDesc(currentRole);
 
-        new Setting(roleSection)
+        new Setting(section)
             .setName('Set Device Role')
             .addDropdown(drop => drop
                 .addOption('controller', 'Controller (Background Automation)')
@@ -107,18 +92,19 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     updateRoleDesc(value);
                     new Notice(`Device set to ${value === 'controller' ? 'CONTROLLER' : 'USER'} mode.`);
                 }));
+    }
 
-        // ── External Calendars ─────────────────────────────────────
-        const extCalSection = createCollapsibleSection(
-            featuresCategory,
+    private renderExternalCalendarsSection(parent: HTMLElement): void {
+        const section = createTPSCollapsibleSection(
+            parent,
             'External Calendars',
-            'Calendar sources and auto-create destinations. These are the controller settings most users will change first.',
+            'Calendar sources and auto-create destinations.',
             false
         );
-        const calendarsContainer = extCalSection.createDiv();
+        const calendarsContainer = section.createDiv();
         this.renderExternalCalendars(calendarsContainer);
 
-        new Setting(extCalSection)
+        new Setting(section)
             .setName('Add New Calendar')
             .setDesc('Add an external iCal feed (Google, Outlook, etc).')
             .addButton((btn) => btn
@@ -143,16 +129,17 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     this.renderExternalCalendars(calendarsContainer);
                 }));
+    }
 
-        // ── Calendar Sync Rules ────────────────────────────────────
-        const calSection = createCollapsibleSection(
-            rulesCategory,
-            'Calendar Sync Rules',
+    private renderCalendarSyncSettings(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
+        const section = createTPSCollapsibleSection(
+            parent,
+            'Sync Settings',
             'Global sync behavior for external calendars.',
             false
         );
 
-        new Setting(calSection)
+        new Setting(section)
             .setName('Sync Interval (minutes)')
             .setDesc('How often to sync external calendars.')
             .addSlider(slider => slider
@@ -164,41 +151,41 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(calSection)
-            .setName('No-Loss Sync Mode')
-            .setDesc('Prevents inferred deletes from remote absence. Orphans are quarantined for manual review; explicit cancellations can archive.')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.noLossSyncMode ?? true)
+        new Setting(section)
+            .setName('Archive After Grace Cycles')
+            .setDesc('Number of consecutive syncs an event must be missing or canceled before the note is archived. Set to 0 to disable automatic archival.')
+            .addSlider(slider => slider
+                .setLimits(0, 20, 1)
+                .setValue(this.plugin.settings.orphanArchiveGraceCycles ?? 5)
+                .setDynamicTooltip()
                 .onChange(async (value) => {
-                    this.plugin.settings.noLossSyncMode = value;
+                    this.plugin.settings.orphanArchiveGraceCycles = value;
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(calSection)
-            .setName('On Event Deletion')
-            .setDesc('What to do when an external event is removed from the feed. In No-Loss mode, "Delete note" is treated as archive-safe behavior.')
-            .addDropdown(drop => drop
-                .addOption('nothing', 'Do nothing')
-                .addOption('archive', 'Move to archive folder')
-                .addOption('delete', 'Delete note')
-                .setValue(this.plugin.settings.syncOnEventDelete)
-                .onChange(async (value) => {
-                    this.plugin.settings.syncOnEventDelete = value as any;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(calSection)
+        new Setting(section)
             .setName('Archive Folder')
             .setDesc('Folder to move archived event notes to.')
             .addText(text => text
-                .setPlaceholder('System/Archive')
+                .setPlaceholder('Archive')
                 .setValue(this.plugin.settings.archiveFolder)
                 .onChange((value) => {
                     this.plugin.settings.archiveFolder = value;
                     void debouncedSave();
                 }));
 
-        new Setting(calSection)
+        new Setting(section)
+            .setName('Archive Note')
+            .setDesc('Markdown note used as the archive index for synced event notes. Created automatically if missing.')
+            .addText(text => text
+                .setPlaceholder('Archive/Archive.md')
+                .setValue(this.plugin.settings.archiveNotePath || '')
+                .onChange((value) => {
+                    this.plugin.settings.archiveNotePath = value.trim();
+                    void debouncedSave();
+                }));
+
+        new Setting(section)
             .setName('Calendar Filter')
             .setDesc('Regex or keyword to filter out external events (e.g. "Canceled").')
             .addText(text => text
@@ -209,7 +196,19 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     void debouncedSave();
                 }));
 
-        new Setting(calSection)
+        new Setting(section)
+            .setName('Backfill Days')
+            .setDesc('How many days into the past to look for uncreated events. 0 = current and future only.')
+            .addSlider(slider => slider
+                .setLimits(0, 365, 1)
+                .setValue(this.plugin.settings.syncBackfillDays ?? 0)
+                .setDynamicTooltip()
+                .onChange(async (value) => {
+                    this.plugin.settings.syncBackfillDays = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(section)
             .setName('Canceled Status Value')
             .setDesc('The status value to set when an event is canceled.')
             .addText(text => text
@@ -220,10 +219,76 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     void debouncedSave();
                 }));
 
-        const fmContent = createCollapsibleSection(
-            calSection,
+        new Setting(section)
+            .setName('Sync Now')
+            .addButton(btn => btn
+                .setButtonText('Sync Now')
+                .setCta()
+                .onClick(async () => {
+                    btn.setButtonText('Syncing…');
+                    btn.setDisabled(true);
+                    try {
+                        await this.plugin.calendarAutomation.runSync(true);
+                        new Notice('Calendar sync complete.');
+                    } catch (e) {
+                        new Notice('Sync failed: ' + (e as Error).message);
+                    }
+                    btn.setButtonText('Sync Now');
+                    btn.setDisabled(false);
+                }));
+    }
+
+    private renderEditorDropSection(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
+        const section = createTPSCollapsibleSection(
+            parent,
+            'Editor Drag And Drop',
+            'Configure what happens when task cards are dropped onto markdown notes.',
+            false
+        );
+
+        new Setting(section)
+            .setName('Enable linked section drop')
+            .setDesc('When enabled, dragging a calendar or kanban card into a markdown editor inserts a linked heading instead of plain text/file drop behavior.')
+            .addToggle(toggle => toggle
+                .setValue(!!this.plugin.settings.editorDropLinkEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.editorDropLinkEnabled = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(section)
+            .setName('Heading level')
+            .setDesc('Used for the {{heading}} token in the template.')
+            .addDropdown(drop => drop
+                .addOption('1', 'H1')
+                .addOption('2', 'H2')
+                .addOption('3', 'H3')
+                .addOption('4', 'H4')
+                .addOption('5', 'H5')
+                .addOption('6', 'H6')
+                .setValue(String(this.plugin.settings.editorDropLinkHeadingLevel ?? 2))
+                .onChange((value) => {
+                    this.plugin.settings.editorDropLinkHeadingLevel = Number(value) || 2;
+                    void debouncedSave();
+                }));
+
+        new Setting(section)
+            .setName('Inserted line template')
+            .setDesc('Available tokens: {{heading}}, {{wikilink}}, {{link}}, {{title}}')
+            .addText(text => text
+                .setPlaceholder('{{heading}} {{wikilink}}')
+                .setValue(this.plugin.settings.editorDropLinkTemplate || '{{heading}} {{wikilink}}')
+                .onChange((value) => {
+                    this.plugin.settings.editorDropLinkTemplate = value.trim() || '{{heading}} {{wikilink}}';
+                    void debouncedSave();
+                }));
+    }
+
+    private renderFrontmatterKeysSection(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
+        const section = createTPSCollapsibleSection(
+            parent,
             'Frontmatter Keys',
-            'All shared calendar field names are grouped together here.',
+            'Shared calendar field names. Only change these if you use custom property names.',
             false
         );
 
@@ -233,12 +298,15 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             { key: 'titleKey', label: 'Title Key', placeholder: 'title' },
             { key: 'statusKey', label: 'Status Key', placeholder: 'status' },
             { key: 'previousStatusKey', label: 'Previous Status Key', placeholder: 'tpsCalendarPrevStatus' },
+            { key: 'scheduledDateProperty', label: 'Scheduled Date Key', placeholder: 'scheduledDate' },
+            { key: 'scheduledStartProperty', label: 'Scheduled Start Key', placeholder: 'scheduledStart' },
+            { key: 'scheduledEndProperty', label: 'Scheduled End Key', placeholder: 'scheduledEnd' },
             { key: 'startProperty', label: 'Start Property', placeholder: 'scheduled' },
             { key: 'endProperty', label: 'Duration Property', placeholder: 'timeEstimate' },
         ];
 
         for (const fk of fmKeys) {
-            new Setting(fmContent)
+            new Setting(section)
                 .setName(fk.label)
                 .addText(text => text
                     .setPlaceholder(fk.placeholder)
@@ -248,37 +316,17 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
         }
+    }
 
-        new Setting(calSection)
-            .setName('Force Calendar Sync')
-            .setDesc('Run a calendar sync immediately.')
-            .addButton(btn => btn
-                .setButtonText('Sync Now')
-                .setCta()
-                .onClick(async () => {
-                    btn.setButtonText('Syncing…');
-                    btn.setDisabled(true);
-                    try {
-                        await (this.plugin as any).runCalendarSync(true);
-                        new Notice('Calendar sync complete.');
-                    } catch (e) {
-                        new Notice('Sync failed: ' + (e as Error).message);
-                    }
-                    btn.setButtonText('Sync Now');
-                    btn.setDisabled(false);
-                }));
-
-        // ── Reminder Rules ──────────────────────────────────────────
-        const remSection = createCollapsibleSection(
-            rulesCategory,
-            'Reminder Rules',
-            'Polling, ignore lists, and per-rule reminders.',
+    private renderReminderSection(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
+        const section = createTPSCollapsibleSection(
+            parent,
+            'Reminder Engine',
+            'Polling, rules, and notification delivery.',
             false
         );
 
-        const reminderConfigContent = remSection.createDiv({ cls: 'tps-reminder-config-content' });
-
-        new Setting(remSection)
+        new Setting(section)
             .setName('Enable Reminders')
             .setDesc('Master toggle for reminder evaluation and notifications.')
             .addToggle(toggle => toggle
@@ -290,13 +338,14 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                 }));
 
         if (!(this.plugin.settings.enableReminders ?? true)) {
-            remSection.createEl('p', {
+            section.createEl('p', {
                 text: 'Reminders are disabled. Enable the master toggle to show reminder configuration.',
                 cls: 'setting-item-description'
             });
-        } else {
+            return;
+        }
 
-        new Setting(reminderConfigContent)
+        new Setting(section)
             .setName('Check Interval (minutes)')
             .setDesc('How often to evaluate reminder rules.')
             .addSlider(slider => slider
@@ -308,7 +357,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(reminderConfigContent)
+        new Setting(section)
             .setName('Batch Notifications')
             .setDesc('Send one combined notification for multiple triggers.')
             .addToggle(toggle => toggle
@@ -318,9 +367,21 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(reminderConfigContent)
+        new Setting(section)
+            .setName('Notification Presentation')
+            .setDesc('Choose whether notifications open in the sidebar or as a popup modal.')
+            .addDropdown(drop => drop
+                .addOption('sidebar', 'Sidebar')
+                .addOption('modal', 'Popup modal')
+                .setValue(this.plugin.settings.notificationPresentationMode || 'sidebar')
+                .onChange(async (value) => {
+                    this.plugin.settings.notificationPresentationMode = value as 'sidebar' | 'modal';
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(section)
             .setName('Default All-Day Base Time')
-            .setDesc('Time of day (HH:MM) used as the trigger base for all-day events when a reminder has no per-rule "All-Day Base Time" set. Without this, all-day events default to midnight and notifications fire at the start of the day.')
+            .setDesc('Time of day (HH:MM) used as the trigger base for all-day events when no per-rule override is set.')
             .addText(text => text
                 .setPlaceholder('09:00')
                 .setValue(this.plugin.settings.defaultAllDayBaseTime || '09:00')
@@ -329,142 +390,16 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        const kanbanReminderContent = createCollapsibleSection(
-            reminderConfigContent,
-            'Kanban Task Reminders',
-            'Configure how checkbox cards in Kanban board notes are interpreted for reminders and overdue actions.',
-            false
-        );
-
-        new Setting(kanbanReminderContent)
-            .setName('Enable Kanban Task Targets')
-            .setDesc('When enabled, reminder rules evaluate checkbox card lines inside Kanban board files as independent reminder targets.')
-            .addToggle(toggle => toggle
-                .setValue(!!this.plugin.settings.kanbanTaskReminders.enabled)
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.enabled = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(kanbanReminderContent)
-            .setName('Include Board File Target')
-            .setDesc('Also evaluate the Kanban board note frontmatter itself as a reminder target. Disable for strictly card-level reminders.')
-            .addToggle(toggle => toggle
-                .setValue(!!this.plugin.settings.kanbanTaskReminders.includeBoardFileTarget)
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.includeBoardFileTarget = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(kanbanReminderContent)
-            .setName('Parse Inline Properties')
-            .setDesc('Read card-level inline properties (e.g. [scheduled:: 2026-03-13 09:00]).')
-            .addToggle(toggle => toggle
-                .setValue(!!this.plugin.settings.kanbanTaskReminders.parseInlineProperties)
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.parseInlineProperties = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(kanbanReminderContent)
-            .setName('Parse Kanban Date Tokens')
-            .setDesc('Read Kanban scheduling tokens (@{date} and @@{time}) as reminder trigger dates.')
-            .addToggle(toggle => toggle
-                .setValue(!!this.plugin.settings.kanbanTaskReminders.parseKanbanDateTokens)
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.parseKanbanDateTokens = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(kanbanReminderContent)
-            .setName('Parse Tasks Emoji Dates')
-            .setDesc('Read Tasks-style emoji dates on cards (📅 due, ⏳ scheduled, 🛫 start).')
-            .addToggle(toggle => toggle
-                .setValue(!!this.plugin.settings.kanbanTaskReminders.parseTasksEmojiDates)
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.parseTasksEmojiDates = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(kanbanReminderContent)
-            .setName('Status Property Key')
-            .setDesc('Inline property key used for task status writes and status filtering on Kanban task cards.')
-            .addText(text => text
-                .setPlaceholder('status')
-                .setValue(this.plugin.settings.kanbanTaskReminders.statusProperty || 'status')
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.statusProperty = value.trim() || 'status';
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(kanbanReminderContent)
-            .setName('Complete Status Value')
-            .setDesc('Status value written when marking a Kanban task reminder complete.')
-            .addText(text => text
-                .setPlaceholder('complete')
-                .setValue(this.plugin.settings.kanbanTaskReminders.completeStatusValue || 'complete')
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.completeStatusValue = value.trim() || 'complete';
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(kanbanReminderContent)
-            .setName("Won't-Do Status Value")
-            .setDesc("Status value written when marking a Kanban task reminder won't-do.")
-            .addText(text => text
-                .setPlaceholder('wont-do')
-                .setValue(this.plugin.settings.kanbanTaskReminders.wontDoStatusValue || 'wont-do')
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.wontDoStatusValue = value.trim() || 'wont-do';
-                    await this.plugin.saveSettings();
-                }));
-
-        const parseCsv = (value: string): string[] =>
-            value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-
-        new Setting(kanbanReminderContent)
-            .setName('Scheduled Property Aliases')
-            .setDesc('Comma-separated property names that should map to scheduled time parsing for Kanban cards.')
-            .addText(text => text
-                .setPlaceholder('scheduled, start')
-                .setValue((this.plugin.settings.kanbanTaskReminders.scheduledPropertyAliases || []).join(', '))
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.scheduledPropertyAliases = parseCsv(value);
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(kanbanReminderContent)
-            .setName('Due Property Aliases')
-            .setDesc('Comma-separated property names that should map to due-date parsing for Kanban cards.')
-            .addText(text => text
-                .setPlaceholder('due, duedate')
-                .setValue((this.plugin.settings.kanbanTaskReminders.duePropertyAliases || []).join(', '))
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.duePropertyAliases = parseCsv(value);
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(kanbanReminderContent)
-            .setName('Start Property Aliases')
-            .setDesc('Comma-separated property names that should map to start-date parsing for Kanban cards.')
-            .addText(text => text
-                .setPlaceholder('start, startdate')
-                .setValue((this.plugin.settings.kanbanTaskReminders.startPropertyAliases || []).join(', '))
-                .onChange(async (value) => {
-                    this.plugin.settings.kanbanTaskReminders.startPropertyAliases = parseCsv(value);
-                    await this.plugin.saveSettings();
-                }));
-
-        const ignoreContent = createCollapsibleSection(
-            reminderConfigContent,
+        const ignoreSection = createTPSCollapsibleSection(
+            section,
             'Global Ignore Lists',
             'Shared filters applied before individual reminder rules.',
             false
         );
 
-        new Setting(ignoreContent)
+        new Setting(ignoreSection)
             .setName('Ignore Paths')
-            .setDesc('Comma-separated ignore paths. Supports glob wildcards (*/Templates/*) and regex (re:^System/).')
+            .setDesc('Comma-separated. Supports glob wildcards (*/Templates/*) and regex (re:^System/).')
             .addText(text => text
                 .setPlaceholder('System, Notes')
                 .setValue((this.plugin.settings.globalIgnorePaths || []).join(', '))
@@ -473,7 +408,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(ignoreContent)
+        new Setting(ignoreSection)
             .setName('Ignore Tags')
             .setDesc('Comma-separated tags to ignore.')
             .addText(text => text
@@ -484,7 +419,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(ignoreContent)
+        new Setting(ignoreSection)
             .setName('Ignore Statuses')
             .setDesc('Comma-separated status values to ignore.')
             .addText(text => text
@@ -495,50 +430,25 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        // Individual reminder rules
-        const rulesContainer = reminderConfigContent.createDiv({ cls: 'tps-controller-reminder-rules' });
-        this.renderReminderRules(rulesContainer);
+        const kanbanSection = createTPSCollapsibleSection(
+            section,
+            'Kanban Task Reminders',
+            'How checkbox cards in Kanban board notes are interpreted for reminders.',
+            false
+        );
 
-        new Setting(reminderConfigContent)
-            .addButton(btn => btn
-                .setButtonText('Add Reminder Rule')
-                .setCta()
-                .onClick(async () => {
-                    this.plugin.settings.reminders.push(this.createDefaultReminder());
-                    await this.plugin.saveSettings();
-                    this.renderReminderRules(rulesContainer);
-                }));
+        this.renderKanbanTaskSettings(kanbanSection);
 
-        new Setting(reminderConfigContent)
-            .setName('Run Reminder Check')
-            .setDesc('Evaluate all reminder rules now.')
-            .addButton(btn => btn
-                .setButtonText('Check Now')
-                .onClick(async () => {
-                    btn.setButtonText('Checking…');
-                    btn.setDisabled(true);
-                    try {
-                        await (this.plugin as any).runReminderCheck();
-                        new Notice('Reminder check complete.');
-                    } catch (e) {
-                        new Notice('Reminder check failed.');
-                    }
-                    btn.setButtonText('Check Now');
-                    btn.setDisabled(false);
-                }));
-        }
-
-        // ── Snooze ─────────────────────────────────────────────────
-        const snoozeSection = createCollapsibleSection(
-            rulesCategory,
+        const snoozeSection = createTPSCollapsibleSection(
+            section,
             'Snooze',
-            'Reminder snooze field configuration and presets.',
+            'Snooze property and quick-action presets.',
             false
         );
 
         new Setting(snoozeSection)
             .setName('Snooze Property')
-            .setDesc('Frontmatter property name for snooze time (e.g., reminderSnooze)')
+            .setDesc('Frontmatter property name for snooze time.')
             .addText(text => text
                 .setPlaceholder('reminderSnooze')
                 .setValue(this.plugin.settings.snoozeProperty || 'reminderSnooze')
@@ -547,9 +457,9 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     void debouncedSave();
                 }));
 
-        const snoozePresetsEl = createCollapsibleSection(
+        const snoozePresetsEl = createTPSCollapsibleSection(
             snoozeSection,
-            'Snooze Presets',
+            'Presets',
             'Quick snooze durations shown in the reminder UI.',
             false
         );
@@ -561,12 +471,168 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     this.plugin.settings.snoozeOptions.push({ label: '15 Minutes', minutes: 15 });
                     await this.plugin.saveSettings();
                     this.renderSnoozeOptions(snoozePresetsEl);
-                })
-            );
+                }));
 
-        // ── Companion Scan ──────────────────────────────────────────
-        const compSection = createCollapsibleSection(
-            featuresCategory,
+        const rulesContainer = section.createDiv({ cls: 'tps-controller-reminder-rules' });
+        this.renderReminderRules(rulesContainer);
+
+        new Setting(section)
+            .addButton(btn => btn
+                .setButtonText('Add Reminder Rule')
+                .setCta()
+                .onClick(async () => {
+                    this.plugin.settings.reminders.push(this.createDefaultReminder());
+                    await this.plugin.saveSettings();
+                    this.renderReminderRules(rulesContainer);
+                }))
+            .addButton(btn => btn
+                .setButtonText('Check Now')
+                .onClick(async () => {
+                    btn.setButtonText('Checking…');
+                    btn.setDisabled(true);
+                    try {
+                        await this.plugin.runReminderCheck();
+                        new Notice('Reminder check complete.');
+                    } catch (e) {
+                        new Notice('Reminder check failed.');
+                    }
+                    btn.setButtonText('Check Now');
+                    btn.setDisabled(false);
+                }));
+    }
+
+    private renderKanbanTaskSettings(parent: HTMLElement): void {
+        const kr = this.plugin.settings.kanbanTaskReminders;
+
+        new Setting(parent)
+            .setName('Enable Task Item Targets')
+            .setDesc('Evaluate individual checkbox items inside Kanban boards and task-list files as independent reminder targets.')
+            .addToggle(toggle => toggle
+                .setValue(!!kr.enabled)
+                .onChange(async (value) => {
+                    kr.enabled = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(parent)
+            .setName('Include Board File Target')
+            .setDesc('Also evaluate the Kanban board note frontmatter itself as a reminder target.')
+            .addToggle(toggle => toggle
+                .setValue(!!kr.includeBoardFileTarget)
+                .onChange(async (value) => {
+                    kr.includeBoardFileTarget = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        const parseSection = createTPSCollapsibleSection(parent, 'Parsing', 'Date and property sources for Kanban cards.', false);
+
+        new Setting(parseSection)
+            .setName('Inline Properties')
+            .setDesc('Read card-level inline properties (e.g. [scheduled:: 2026-03-13 09:00]).')
+            .addToggle(toggle => toggle
+                .setValue(!!kr.parseInlineProperties)
+                .onChange(async (value) => {
+                    kr.parseInlineProperties = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(parseSection)
+            .setName('Kanban Date Tokens')
+            .setDesc('Read Kanban scheduling tokens (@{date} and @@{time}) as reminder trigger dates.')
+            .addToggle(toggle => toggle
+                .setValue(!!kr.parseKanbanDateTokens)
+                .onChange(async (value) => {
+                    kr.parseKanbanDateTokens = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(parseSection)
+            .setName('Tasks Emoji Dates')
+            .setDesc('Read Tasks-style emoji dates on cards (📅 due, ⏳ scheduled, 🛫 start).')
+            .addToggle(toggle => toggle
+                .setValue(!!kr.parseTasksEmojiDates)
+                .onChange(async (value) => {
+                    kr.parseTasksEmojiDates = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        const aliasesSection = createTPSCollapsibleSection(parent, 'Property Aliases', 'Custom property name mappings.', false);
+        const parseCsv = (value: string): string[] =>
+            value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+        new Setting(aliasesSection)
+            .setName('Scheduled Aliases')
+            .setDesc('Comma-separated property names for scheduled time.')
+            .addText(text => text
+                .setPlaceholder('scheduled, start')
+                .setValue((kr.scheduledPropertyAliases || []).join(', '))
+                .onChange(async (value) => {
+                    kr.scheduledPropertyAliases = parseCsv(value);
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(aliasesSection)
+            .setName('Due Aliases')
+            .setDesc('Comma-separated property names for due date.')
+            .addText(text => text
+                .setPlaceholder('due, duedate')
+                .setValue((kr.duePropertyAliases || []).join(', '))
+                .onChange(async (value) => {
+                    kr.duePropertyAliases = parseCsv(value);
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(aliasesSection)
+            .setName('Start Aliases')
+            .setDesc('Comma-separated property names for start date.')
+            .addText(text => text
+                .setPlaceholder('start, startdate')
+                .setValue((kr.startPropertyAliases || []).join(', '))
+                .onChange(async (value) => {
+                    kr.startPropertyAliases = parseCsv(value);
+                    await this.plugin.saveSettings();
+                }));
+
+        const statusSection = createTPSCollapsibleSection(parent, 'Status Values', 'Status property and completion mappings.', false);
+
+        new Setting(statusSection)
+            .setName('Status Property')
+            .setDesc('Inline property key used for task status writes.')
+            .addText(text => text
+                .setPlaceholder('status')
+                .setValue(kr.statusProperty || 'status')
+                .onChange(async (value) => {
+                    kr.statusProperty = value.trim() || 'status';
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(statusSection)
+            .setName('Complete Status')
+            .setDesc('Status value written when marking a Kanban task complete.')
+            .addText(text => text
+                .setPlaceholder('complete')
+                .setValue(kr.completeStatusValue || 'complete')
+                .onChange(async (value) => {
+                    kr.completeStatusValue = value.trim() || 'complete';
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(statusSection)
+            .setName("Won't-Do Status")
+            .setDesc("Status value written when marking a Kanban task won't-do.")
+            .addText(text => text
+                .setPlaceholder('wont-do')
+                .setValue(kr.wontDoStatusValue || 'wont-do')
+                .onChange(async (value) => {
+                    kr.wontDoStatusValue = value.trim() || 'wont-do';
+                    await this.plugin.saveSettings();
+                }));
+
+    }
+
+    private renderAdvancedSection(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
+        const compSection = createTPSCollapsibleSection(
+            parent,
             'Companion Automation',
             'Optional integration that lets Controller trigger companion scans.',
             false
@@ -574,12 +640,13 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
         new Setting(compSection)
             .setName('Enable Controller Companion Scans')
-            .setDesc('When enabled, the Controller syncs companion styling (icon/color/sort) across ALL vault files every 5 minutes. User devices only sync files they actively edit. Changes take effect on next automation cycle.')
+            .setDesc('When enabled, the Controller syncs companion styling across ALL vault files every 5 minutes.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.companionStartupScanEnabled)
                 .onChange(async (value) => {
                     this.plugin.settings.companionStartupScanEnabled = value;
                     await this.plugin.saveSettings();
+                    this.display();
                 }));
 
         if (this.plugin.settings.companionStartupScanEnabled) {
@@ -599,7 +666,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(compSection)
                 .setName('Run Companion Scan')
-                .setDesc('Trigger a companion vault scan now.')
                 .addButton(btn => btn
                     .setButtonText('Scan Now')
                     .onClick(async () => {
@@ -616,11 +682,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     }));
         }
 
-        // ── Debug ───────────────────────────────────────────────────
-        const debugSection = createCollapsibleSection(
-            interactionCategory,
-            'Debug',
-            'Low-frequency troubleshooting controls.',
+        const debugSection = createTPSCollapsibleSection(
+            parent,
+            'Debug & Recovery',
+            'Troubleshooting controls and state management.',
             false
         );
 
@@ -645,13 +710,8 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     new Notice('Alert state cleared.');
                 }));
-
-        this.restoreSettingsViewState(containerEl);
     }
 
-    // ========================================================================
-    // Helpers
-    // ========================================================================
     private captureSettingsViewState(containerEl: HTMLElement): void {
         this.settingsScrollTop = containerEl.scrollTop;
         this.settingsViewState.clear();
@@ -669,11 +729,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         if (!this.hasRenderedSettings) {
             detailsEls.forEach((detailsEl) => {
                 const details = detailsEl as HTMLDetailsElement;
-                if (details.classList.contains('tps-settings-main-category')) {
-                    details.setAttr('open', 'true');
-                } else {
-                    details.removeAttribute('open');
-                }
+                details.removeAttribute('open');
             });
             this.hasRenderedSettings = true;
             containerEl.scrollTop = 0;
@@ -689,7 +745,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         });
         containerEl.scrollTop = this.settingsScrollTop;
     }
-
 
     private createDefaultReminder(): PropertyReminder {
         return {
@@ -861,7 +916,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             const ruleContent = ruleEl.createDiv({ cls: 'tps-rule-content' });
 
-            // ── General ──────────────────────────────────────────────────────
             new Setting(ruleContent).setName('General').setHeading();
 
             new Setting(ruleContent)
@@ -885,7 +939,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         labelSpan.textContent = `${value ? '🟢' : '⚫'} ${rem.label || `Rule ${index + 1}`}`;
                     }));
 
-            // ── Trigger ──────────────────────────────────────────────────────
             new Setting(ruleContent).setName('Trigger').setHeading();
 
             new Setting(ruleContent)
@@ -901,7 +954,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('Mode')
-                .setDesc('Task fires once at the trigger time. Timeblock skips firing once the event end time has passed.')
+                .setDesc('Task fires once at trigger time. Timeblock skips firing once end time has passed.')
                 .addDropdown(drop => drop
                     .addOption('task', 'Task')
                     .addOption('timeblock', 'Timeblock')
@@ -913,7 +966,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('Include unmatched external events')
-                .setDesc('Also evaluate enabled external calendar events that do not have a synced local note or task yet.')
+                .setDesc('Also evaluate external calendar events that do not have a synced local note.')
                 .addToggle(toggle => toggle
                     .setValue(!!rem.includeUnmatchedExternalEvents)
                     .onChange(async (value) => {
@@ -924,7 +977,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('Trigger at End')
-                .setDesc('Use the event end time (start + duration) as the trigger base instead of the start time.')
+                .setDesc('Use the event end time as the trigger base instead of the start time.')
                 .addToggle(toggle => toggle
                     .setValue(!!rem.triggerAtEnd)
                     .onChange(async (value) => {
@@ -934,7 +987,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('Fixed Offset (minutes)')
-                .setDesc('Applied after the trigger base. Negative = before, positive = after. Used as fallback when Duration Offset is enabled but the property is missing or unparseable.')
+                .setDesc('Negative = before, positive = after. Fallback when Duration Offset is enabled but property is missing.')
                 .addText(text => text
                     .setValue(String(rem.offsetMinutes))
                     .onChange(async (value) => {
@@ -946,13 +999,12 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         }
                     }));
 
-            // Duration offset — shown/hidden without full re-render
             const durationOffsetWrapper = ruleContent.createDiv();
             durationOffsetWrapper.style.display = rem.useSmartOffset ? '' : 'none';
 
             new Setting(ruleContent)
                 .setName('Use Duration Offset')
-                .setDesc('Replace the fixed offset with a duration read from a frontmatter property (e.g. timeEstimate: "30m"). Falls back to Fixed Offset if the property is missing.')
+                .setDesc('Replace fixed offset with a duration from a frontmatter property.')
                 .addToggle(toggle => toggle
                     .setValue(!!rem.useSmartOffset)
                     .onChange(async (value) => {
@@ -964,7 +1016,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(durationOffsetWrapper)
                 .setName('Duration Property')
-                .setDesc('Frontmatter property containing the duration value (e.g. timeEstimate).')
                 .addText(text => text
                     .setPlaceholder('timeEstimate')
                     .setValue(rem.smartOffsetProperty || '')
@@ -976,7 +1027,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(durationOffsetWrapper)
                 .setName('Direction')
-                .setDesc('"After" fires duration-time after the trigger base. "Before" fires duration-time before.')
                 .addDropdown(drop => drop
                     .addOption('add', 'After (base + duration)')
                     .addOption('subtract', 'Before (base − duration)')
@@ -986,7 +1036,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // ── All-Day Events ───────────────────────────────────────────────
             new Setting(ruleContent).setName('All-Day Events').setHeading();
 
             new Setting(ruleContent)
@@ -1004,7 +1053,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('All-Day Base Time')
-                .setDesc('Time of day (HH:MM) used as the trigger base for all-day events. Leave blank to use the global default.')
+                .setDesc('Time of day (HH:MM) for all-day events. Leave blank to use global default.')
                 .addText(text => text
                     .setPlaceholder('(uses global default)')
                     .setValue(rem.allDayBaseTime || '')
@@ -1013,12 +1062,11 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // ── Filtering ────────────────────────────────────────────────────
             new Setting(ruleContent).setName('Filtering').setHeading();
 
             new Setting(ruleContent)
                 .setName('Required Statuses')
-                .setDesc('Only trigger for files with one of these statuses. Comma-separated (e.g. scheduled, in-progress).')
+                .setDesc('Comma-separated (e.g. scheduled, in-progress).')
                 .addText(text => text
                     .setValue((rem.requiredStatuses || []).join(', '))
                     .onChange(async (value) => {
@@ -1029,7 +1077,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('Required Folders')
-                .setDesc('Only trigger for files inside these folders. Comma-separated prefixes. Empty = all folders.')
+                .setDesc('Comma-separated folder prefixes. Empty = all folders.')
                 .addText(text => text
                     .setPlaceholder('Action Items, Markdown/Projects')
                     .setValue((rem.requiredPaths || []).join(', '))
@@ -1040,7 +1088,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('Ignore Paths')
-                .setDesc('Skip matching files. Comma-separated. Supports wildcards (*/Trash/*) and regex (re:^System/).')
+                .setDesc('Supports wildcards (*/Trash/*) and regex (re:^System/).')
                 .addText(text => text
                     .setValue((rem.ignorePaths || []).join(', '))
                     .onChange(async (value) => {
@@ -1050,7 +1098,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('Ignore Tags')
-                .setDesc('Skip files with these tags. Comma-separated.')
                 .addText(text => text
                     .setValue((rem.ignoreTags || []).join(', '))
                     .onChange(async (value) => {
@@ -1060,7 +1107,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('Ignore Statuses')
-                .setDesc('Skip files with these statuses. Comma-separated.')
                 .addText(text => text
                     .setValue((rem.ignoreStatuses || []).join(', '))
                     .onChange(async (value) => {
@@ -1068,16 +1114,14 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // ── Repeat & Stop ────────────────────────────────────────────────
             new Setting(ruleContent).setName('Repeat & Stop').setHeading();
 
-            // Repeat interval/maxRepeats — shown/hidden without full re-render
             const repeatWrapper = ruleContent.createDiv();
             repeatWrapper.style.display = rem.repeatUntilComplete ? '' : 'none';
 
             new Setting(ruleContent)
                 .setName('Repeat Until Complete')
-                .setDesc('Re-send the notification on an interval until a stop condition is met.')
+                .setDesc('Re-send on an interval until a stop condition is met.')
                 .addToggle(toggle => toggle
                     .setValue(rem.repeatUntilComplete)
                     .onChange(async (value) => {
@@ -1100,7 +1144,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(repeatWrapper)
                 .setName('Max Repeats')
-                .setDesc('Maximum number of repeat notifications. −1 = unlimited.')
+                .setDesc('−1 = unlimited.')
                 .addText(text => text
                     .setValue(String(rem.maxRepeats ?? -1))
                     .onChange(async (value) => {
@@ -1113,7 +1157,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
             new Setting(ruleContent)
                 .setName('Stop Conditions')
-                .setDesc('Stop repeating when any condition matches. Format: "property: value" (e.g. status: complete). Comma-separated.')
+                .setDesc('Format: "property: value". Comma-separated.')
                 .addText(text => text
                     .setValue((rem.stopConditions || []).join(', '))
                     .onChange(async (value) => {
@@ -1121,7 +1165,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // ── Notification ────────────────────────────────────────────────
             new Setting(ruleContent).setName('Notification').setHeading();
 
             new Setting(ruleContent)
@@ -1144,7 +1187,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
 
-            // ── Actions ──────────────────────────────────────────────────────
             new Setting(ruleContent)
                 .addButton(btn => btn
                     .setButtonText('Delete Rule')
@@ -1171,7 +1213,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         if (rem.includeUnmatchedExternalEvents) parts.push('external gaps');
         return parts.join(' • ');
     }
-
 
     private renderExternalCalendars(container: HTMLElement) {
         container.empty();
@@ -1203,7 +1244,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             header.style.gap = "10px";
             header.style.marginBottom = "10px";
 
-            // Title / Toggle
             const toggle = header.createEl("input", { type: "checkbox" });
             toggle.checked = calendar.enabled !== false;
             toggle.addEventListener("change", async () => {
@@ -1216,7 +1256,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             });
             title.style.flex = "1";
 
-            // Move Up/Down?
             const move = (from: number, to: number) => {
                 const temp = calendars[from];
                 calendars[from] = calendars[to];
@@ -1239,7 +1278,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                 await save(true);
             });
 
-            // Delete
             const delBtn = header.createEl("button", { text: "Delete" });
             delBtn.classList.add("mod-warning");
             delBtn.addEventListener("click", async () => {
@@ -1247,7 +1285,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                 await save(true);
             });
 
-            // Fields
             new Setting(card)
                 .setName("iCal URL")
                 .addText(text => text
@@ -1296,20 +1333,48 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     }));
 
             if ((calendar.autoCreateMode || "note") === "task-list") {
+                const initialTaskListPath = calendar.autoCreateTaskListPath || "";
                 new Setting(acContent)
                     .setName("Task List File")
                     .setDesc("Markdown file that should receive one checklist item per imported event.")
                     .addText(t => t
-                        .setValue(calendar.autoCreateTaskListPath || "")
+                        .setValue(initialTaskListPath)
                         .setPlaceholder("Calendar/Work Events.md")
                         .onChange(async (val) => {
-                            calendar.autoCreateTaskListPath = val.trim();
+                            const nextPath = val.trim();
+                            const oldPath = calendar.autoCreateTaskListPath || "";
+                            if (nextPath === oldPath) {
+                                calendar.autoCreateTaskListPath = nextPath;
+                                await save();
+                                return;
+                            }
+
+                            const existingCount = await this.plugin.countTaskListEntriesForCalendar(oldPath, calendar.url);
+                            if (existingCount > 0) {
+                                const shouldMove = confirm(
+                                    'This calendar has existing synced events. Click OK to move them to the new location. Click Cancel to change the location back.'
+                                );
+                                if (!shouldMove) {
+                                    calendar.autoCreateTaskListPath = oldPath;
+                                    t.setValue(oldPath);
+                                    await save();
+                                    return;
+                                }
+
+                                calendar.autoCreateTaskListPath = nextPath;
+                                await save();
+                                const moved = await this.plugin.migrateTaskListCalendarPath(calendar.url, oldPath, nextPath);
+                                new Notice(`Moved ${moved} synced item${moved === 1 ? '' : 's'} to ${nextPath || 'the new location'}.`);
+                                return;
+                            }
+
+                            calendar.autoCreateTaskListPath = nextPath;
                             await save();
                         }));
 
                 new Setting(acContent)
                     .setName("Section Heading")
-                    .setDesc("Optional heading to place imported events under inside the task list file.")
+                    .setDesc("Optional heading to place imported events under.")
                     .addText(t => t
                         .setValue(calendar.autoCreateTaskListHeading || "")
                         .setPlaceholder("Work Calendar")
@@ -1320,7 +1385,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             } else {
                 new Setting(acContent)
                     .setName("Type Folder")
-                    .setDesc("High-level folder categorization (optional).")
+                    .setDesc("Legacy fallback. Used only when Folder is blank.")
                     .addText(t => t
                         .setValue(calendar.autoCreateTypeFolder || "")
                         .setPlaceholder("Meetings/External")
@@ -1331,7 +1396,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
                 new Setting(acContent)
                     .setName("Folder")
-                    .setDesc("Where to create notes (e.g. 01 Action Items/Meetings)")
+                    .setDesc("Authoritative note destination.")
                     .addText(t => t
                         .setValue(calendar.autoCreateFolder || "")
                         .setPlaceholder("Folder/Path")
@@ -1342,7 +1407,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
                 new Setting(acContent)
                     .setName("Tag")
-                    .setDesc("Tag to append (e.g. #meeting)")
                     .addText(t => t
                         .setValue(calendar.autoCreateTag || "")
                         .setPlaceholder("#tag")
@@ -1353,7 +1417,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
                 new Setting(acContent)
                     .setName("Template")
-                    .setDesc("Path to template file")
+                    .setDesc("Path to template file.")
                     .addText(t => t
                         .setValue(calendar.autoCreateTemplate || "")
                         .setPlaceholder("Templates/Meeting.md")

@@ -194,8 +194,6 @@ export class ContextTargetService {
                 logger.log('[Context Target] Ignoring explicit files for non-file Notebook Navigator target');
                 return [];
             }
-            const expanded = this.expandSelection(normalizedExplicitFiles, contextEl);
-            if (expanded.length > 0) return expanded;
             return normalizedExplicitFiles;
         }
 
@@ -296,19 +294,19 @@ export class ContextTargetService {
         if (scope === 'notebook-navigator' || (contextEl && this.isNotebookNavigatorContextTarget(contextEl))) {
             const domSelection = this.getNotebookNavigatorSelectionFromDom(contextEl);
             const primaryPaths = new Set(uniquePrimary.map((f) => f.path));
-
-            // Strip the currently-open editor file from the DOM selection unless it is
-            // also the primary (right-clicked) file. NN marks the open file with styling
-            // that can bleed into the selection even without a deliberate Ctrl+click.
-            const activeFile = this.app.workspace.getActiveFile();
-            const filtered = domSelection.filter(
-                (f) => primaryPaths.has(f.path) || !activeFile || f.path !== activeFile.path
-            );
-
+            const liveSelection = this.mergeFileLists([
+                this.getNotebookNavigatorSelectionFromApi(),
+                domSelection,
+                this.getNotebookNavigatorSelectionFromView(contextEl),
+            ]);
+            const storageSelection = this.getNotebookNavigatorSelectionFromStorage();
+            const liveFiltered = this.stripImplicitActiveFile(liveSelection, domSelection, uniquePrimary);
+            const storageFiltered = this.stripImplicitActiveFile(storageSelection, domSelection, uniquePrimary);
+            const filtered = this.chooseNotebookNavigatorSelection(liveFiltered, storageFiltered, uniquePrimary);
             const filteredPaths = new Set(filtered.map((f) => f.path));
             const allPrimaryInFiltered = uniquePrimary.every((f) => filteredPaths.has(f.path));
 
-            // Only expand if filtered DOM has >1 file AND all primary files are in it.
+            // Only expand if the resolved selection has >1 file AND all primary files are in it.
             if (filtered.length > 1 && allPrimaryInFiltered) {
                 return filtered;
             }
@@ -360,24 +358,16 @@ export class ContextTargetService {
             sourceCounts.nnStorage = nnStorage.length;
             sourceCounts.nnView = nnView.length;
 
-            // The View and API sources deep-scan the NN view object and can
-            // spuriously pick up the currently-open editor file via properties
-            // like `active`, `focused`, or `current` that track the open leaf
-            // independently of the user's deliberate multi-selection. Filter
-            // these out before merging: a file is only trusted from the
-            // View/API sources if it also appears in the DOM selection (which
-            // requires an actual visual selection class like nn-selected) OR if
-            // it is already in primaryFiles (the right-clicked file).
-            const domPaths = new Set(nnDom.map((f) => f.path));
-            const primaryPaths = new Set(primaryFiles.map((f) => f.path));
-            const filterSpuriousActive = (files: TFile[]): TFile[] =>
-                files.filter((f) => domPaths.has(f.path) || primaryPaths.has(f.path));
-
-            const nnApiFiltered = filterSpuriousActive(nnApi);
-            const nnViewFiltered = filterSpuriousActive(nnView);
-
-            const liveResolved = this.mergeFileLists([nnApiFiltered, nnDom, nnViewFiltered]);
-            const storageResolved = this.mergeFileLists([nnStorage]);
+            const liveResolved = this.stripImplicitActiveFile(
+                this.mergeFileLists([nnApi, nnDom, nnView]),
+                nnDom,
+                primaryFiles,
+            );
+            const storageResolved = this.stripImplicitActiveFile(
+                this.mergeFileLists([nnStorage]),
+                nnDom,
+                primaryFiles,
+            );
             resolved = this.chooseNotebookNavigatorSelection(liveResolved, storageResolved, primaryFiles);
         } else if (scope === 'smart-explorer') {
             const smart = this.getSmartExplorerSelectedFiles(contextEl);
@@ -406,12 +396,16 @@ export class ContextTargetService {
                 sourceCounts.nnDom = nnDom.length;
                 sourceCounts.nnStorage = nnStorage.length;
                 sourceCounts.nnView = nnView.length;
-                const nnDomPaths = new Set(nnDom.map((f) => f.path));
-                const nnPrimaryPaths = new Set(primaryFiles.map((f) => f.path));
-                const filterSpurious = (files: TFile[]): TFile[] =>
-                    files.filter((f) => nnDomPaths.has(f.path) || nnPrimaryPaths.has(f.path));
-                const nnLive = this.mergeFileLists([filterSpurious(nnApi), nnDom, filterSpurious(nnView)]);
-                const nnStored = this.mergeFileLists([nnStorage]);
+                const nnLive = this.stripImplicitActiveFile(
+                    this.mergeFileLists([nnApi, nnDom, nnView]),
+                    nnDom,
+                    primaryFiles,
+                );
+                const nnStored = this.stripImplicitActiveFile(
+                    this.mergeFileLists([nnStorage]),
+                    nnDom,
+                    primaryFiles,
+                );
                 nnResolved = this.chooseNotebookNavigatorSelection(nnLive, nnStored, primaryFiles);
             }
 
@@ -679,6 +673,22 @@ export class ContextTargetService {
             return this.mergeFileLists([live, stored]);
         }
         return live;
+    }
+
+    private stripImplicitActiveFile(files: TFile[], domSelection: TFile[], primaryFiles: TFile[]): TFile[] {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!(activeFile instanceof TFile)) {
+            return files;
+        }
+
+        const activePath = activeFile.path;
+        const domPaths = new Set(domSelection.map((file) => file.path));
+        const primaryPaths = new Set(primaryFiles.map((file) => file.path));
+        if (domPaths.has(activePath) || primaryPaths.has(activePath)) {
+            return files;
+        }
+
+        return files.filter((file) => file.path !== activePath);
     }
 
     private selectionOverlapRatio(a: TFile[], b: TFile[]): number {

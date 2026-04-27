@@ -359,16 +359,17 @@ export class RecurrenceService {
         // 3. Skip recurring event templates — they are edited intentionally
         if (fm.isRecurrenceTemplate) return;
 
-        // 4. Ignore completed/wont-do items (next instance will be created by completion handler)
+        // 4. Ignore completed/wont-do items (next instance is handled by the
+        // completion path or overdue maintenance checks)
         const completionStatuses = this.plugin.settings.recurrenceCompletionStatuses?.length
             ? this.plugin.settings.recurrenceCompletionStatuses
             : ['complete', 'wont-do'];
         if (completionStatuses.includes(fm.status)) return;
 
         // 5. Note the edit for session tracking so we don't fire duplicate events.
-        //    The next instance is created from the series template when this note
-        //    is completed — pre-splitting on every body edit is avoided intentionally.
-        logger.log('[RecurrenceService] Body edit on recurring event; next instance will be created on completion:', file.path);
+        //    We do not split on body edit; recurring instances advance either on
+        //    completion or when overdue maintenance detects the scheduled time passed.
+        logger.log('[RecurrenceService] Body edit on recurring event; next instance will be created on completion or overdue check:', file.path);
         this.sessionTracker.markAsEdited(file.path);
     }
 

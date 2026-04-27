@@ -1,4 +1,5 @@
 export * from "./async-utils";
+export * from "./checkbox-patterns";
 export * from "./command-queue-service";
 export * from "./error-utils";
 export * from "./frontmatter-tag-mutator";

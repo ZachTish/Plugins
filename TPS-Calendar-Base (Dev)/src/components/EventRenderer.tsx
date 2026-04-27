@@ -8,6 +8,7 @@ interface UseEventRendererOptions {
   app: any;
   sanitizedProperties: BasesPropertyId[];
   basesEntryMap: Map<string, BasesEntry>;
+  titlePropertyId: BasesPropertyId | null;
 }
 
 /**
@@ -17,6 +18,7 @@ export function useEventRenderer({
   app,
   sanitizedProperties,
   basesEntryMap,
+  titlePropertyId,
 }: UseEventRendererOptions) {
   const hasNonEmptyValue = useCallback((value: Value): boolean => {
     if (value === null || value === undefined) return false;
@@ -33,15 +35,40 @@ export function useEventRenderer({
       const title = eventInfo.event.title || props.calEntryTitle || 'Untitled';
       const entryPath = props.entryPath;
       const entry = entryPath ? basesEntryMap.get(entryPath) : undefined;
+      const titleValue = entry && titlePropertyId ? tryGetValue(entry, titlePropertyId) as Value : undefined;
+      const hasRenderableTitleValue = hasNonEmptyValue(titleValue as Value);
       const isGhost = props.isGhost || false;
       const isTask = props.isTask || false;
+      const taskCheckboxState = typeof props.taskCheckboxState === "string" ? props.taskCheckboxState.trim() : "";
+      const taskInlineProperties = (props.taskInlineProperties || {}) as Record<string, string>;
+      const taskIsDone = !!props.taskIsDone;
       const iconName = typeof props.iconName === "string" ? props.iconName.trim() : "";
       const iconColor = typeof props.iconColor === "string" ? props.iconColor.trim() : "";
+      const eventHasColoredBackground = Boolean(eventInfo.event.backgroundColor || props.backgroundColor);
+      const resolvedIconColor = iconColor || (eventHasColoredBackground ? "var(--text-on-accent)" : "currentColor");
 
       const propertyChips: React.ReactElement[] = [];
-      if (entry && sanitizedProperties && sanitizedProperties.length > 0) {
+      if (isTask && sanitizedProperties && sanitizedProperties.length > 0) {
         for (const prop of sanitizedProperties) {
           try {
+            if (titlePropertyId && prop === titlePropertyId) continue;
+            const parsed = parsePropertyId(prop);
+            const name = String(parsed.name || (parsed as any).property || prop).toLowerCase();
+            const inlineValue = taskInlineProperties[name];
+            if (inlineValue && inlineValue.trim()) {
+              propertyChips.push(
+                <span key={prop} className="bases-calendar-event-property-value">{inlineValue}</span>
+              );
+            }
+          } catch (_err) {
+            // skip
+          }
+        }
+      } else if (entry && sanitizedProperties && sanitizedProperties.length > 0) {
+        for (const prop of sanitizedProperties) {
+          try {
+            // Skip the title property — it's already rendered as the styled title bar
+            if (titlePropertyId && prop === titlePropertyId) continue;
             const value = tryGetValue(entry, prop);
             if (hasNonEmptyValue(value as Value)) {
               propertyChips.push(
@@ -59,6 +86,7 @@ export function useEventRenderer({
       } else if (eventInfo.event.extendedProps?.isExternal && sanitizedProperties?.length) {
         const external = eventInfo.event.extendedProps?.externalEvent as any;
         for (const prop of sanitizedProperties) {
+          if (titlePropertyId && prop === titlePropertyId) continue;
           const parsed = parsePropertyId(prop);
           const name = String(parsed.name || (parsed as any).property || prop).toLowerCase();
           const externalValue =
@@ -87,7 +115,7 @@ export function useEventRenderer({
               alignItems: 'center',
               height: '100%',
               width: '100%',
-              padding: 0,
+              padding: '0 0 2px 0',
               margin: 0,
               lineHeight: '14px',
               fontSize: '0.65rem'
@@ -111,38 +139,65 @@ export function useEventRenderer({
                   <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
                 </svg>
               )}
-              {isTask && (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={{ width: '12px', height: '12px', marginRight: '4px', flexShrink: 0, opacity: 0.9 }}
+              {iconName
+                ? <EventIcon iconName={iconName} color={resolvedIconColor} />
+                : isTask
+                  ? renderTaskCheckboxIcon(taskCheckboxState, 12, "var(--text-on-accent)")
+                  : null}
+              {hasRenderableTitleValue ? (
+                <RenderedValue
+                  value={titleValue as Value}
+                  app={app}
+                  className="bases-calendar-event-title"
+                  style={{
+	                  color: 'inherit',
+	                  fontWeight: 'inherit',
+	                  textDecoration: taskIsDone ? 'line-through' : 'none',
+	                  opacity: taskIsDone ? 0.72 : 1,
+	                  fontSize: 'var(--font-ui-smaller)',
+	                  lineHeight: '1.1',
+	                  letterSpacing: 'normal',
+	                  textShadow: 'none',
+	                  fontFamily: 'inherit',
+	                  display: 'block',
+	                  whiteSpace: 'normal',
+	                  overflow: 'hidden',
+	                  textOverflow: 'clip',
+	                  wordBreak: 'break-word',
+	                  overflowWrap: 'anywhere',
+	                  flex: 1,
+	                  minWidth: 0,
+	                }}
+                  fallbackText={title}
+                  title={title}
+                />
+              ) : (
+                <div
+                  className="bases-calendar-event-title"
+                  style={{
+	                  color: 'inherit',
+	                  fontWeight: 'inherit',
+	                  textDecoration: taskIsDone ? 'line-through' : 'none',
+	                  opacity: taskIsDone ? 0.72 : 1,
+	                  fontSize: 'var(--font-ui-smaller)',
+	                  lineHeight: '1.1',
+	                  letterSpacing: 'normal',
+	                  textShadow: 'none',
+	                  fontFamily: 'inherit',
+	                  display: 'block',
+	                  whiteSpace: 'normal',
+	                  overflow: 'hidden',
+	                  textOverflow: 'clip',
+	                  wordBreak: 'break-word',
+	                  overflowWrap: 'anywhere',
+	                  flex: 1,
+	                  minWidth: 0,
+	                }}
+                  title={title}
                 >
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                </svg>
+                  {title}
+                </div>
               )}
-              {iconName && <EventIcon iconName={iconName} color={iconColor} />}
-              <div
-                className="bases-calendar-event-title"
-                style={{
-                  fontWeight: 'var(--tps-event-title-weight, 600)',
-                  fontSize: 'var(--tps-event-title-font-size, var(--tps-event-font-size, var(--font-ui-small)))',
-                  lineHeight: 'var(--tps-event-title-line-height, 1.2)',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  textShadow: 'var(--tps-event-title-shadow, none)',
-                  flex: 1,
-                  minWidth: 0,
-                }}
-                title={title}
-              >
-                {title}
-              </div>
             </div>
           </div>
         );
@@ -152,9 +207,9 @@ export function useEventRenderer({
         <div
           className="bases-calendar-event-content tps-calendar-entry"
           data-path={entryPath}
-          style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'stretch', justifyContent: propertyChips.length === 0 ? 'center' : 'flex-start' }}
+          style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'stretch', justifyContent: 'flex-start', paddingBottom: '0.5em' }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+	          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, width: '100%', flex: '0 0 auto' }}>
             {isGhost && (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -172,38 +227,65 @@ export function useEventRenderer({
                 <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
               </svg>
             )}
-            {isTask && (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{ width: '14px', height: '14px', marginRight: '4px', flexShrink: 0, opacity: 0.9 }}
+            {iconName
+              ? <EventIcon iconName={iconName} color={resolvedIconColor} />
+              : isTask
+                ? renderTaskCheckboxIcon(taskCheckboxState, 14, "var(--text-on-accent)")
+                : null}
+            {hasRenderableTitleValue ? (
+              <RenderedValue
+                value={titleValue as Value}
+                app={app}
+                className="bases-calendar-event-title"
+                style={{
+	                  color: 'inherit',
+	                  fontWeight: 'inherit',
+	                  textDecoration: taskIsDone ? 'line-through' : 'none',
+	                  opacity: taskIsDone ? 0.72 : 1,
+	                  fontSize: 'var(--font-ui-smaller)',
+	                  lineHeight: '1.1',
+	                  letterSpacing: 'normal',
+	                  textShadow: 'none',
+	                  fontFamily: 'inherit',
+	                  display: 'block',
+	                  flex: 1,
+	                  minWidth: 0,
+	                  whiteSpace: 'normal',
+	                  overflow: 'hidden',
+	                  textOverflow: 'clip',
+	                  wordBreak: 'break-word',
+	                  overflowWrap: 'anywhere',
+	                }}
+                fallbackText={title}
+                title={title}
+              />
+            ) : (
+              <div
+                className="bases-calendar-event-title"
+                style={{
+	                  color: 'inherit',
+	                  fontWeight: 'inherit',
+	                  textDecoration: taskIsDone ? 'line-through' : 'none',
+	                  opacity: taskIsDone ? 0.72 : 1,
+	                  fontSize: 'var(--font-ui-smaller)',
+	                  lineHeight: '1.1',
+	                  letterSpacing: 'normal',
+	                  textShadow: 'none',
+	                  fontFamily: 'inherit',
+	                  display: 'block',
+	                  flex: 1,
+	                  minWidth: 0,
+	                  whiteSpace: 'normal',
+	                  overflow: 'hidden',
+	                  textOverflow: 'clip',
+	                  wordBreak: 'break-word',
+	                  overflowWrap: 'anywhere',
+	                }}
+                title={title}
               >
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-              </svg>
+                {title}
+              </div>
             )}
-            {iconName && <EventIcon iconName={iconName} color={iconColor} />}
-            <div
-              className="bases-calendar-event-title"
-              style={{
-                fontWeight: 'var(--tps-event-title-weight, 600)',
-                fontSize: 'var(--tps-event-title-font-size, var(--tps-event-font-size, var(--font-ui-small)))',
-                lineHeight: 'var(--tps-event-title-line-height, 1.2)',
-                textShadow: 'var(--tps-event-title-shadow, none)',
-                flex: 1,
-                minWidth: 0,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-              title={title}
-            >
-              {title}
-            </div>
           </div>
           {propertyChips.length > 0 && (
             <div className="bases-calendar-event-properties" style={{ flex: '1 1 0', minHeight: 0, overflow: 'hidden' }}>
@@ -213,7 +295,7 @@ export function useEventRenderer({
         </div>
       );
     },
-    [app, sanitizedProperties, hasNonEmptyValue, basesEntryMap],
+    [app, sanitizedProperties, hasNonEmptyValue, basesEntryMap, titlePropertyId],
   );
 
   return { renderEventContent };
@@ -224,11 +306,23 @@ const EventIcon: React.FC<{ iconName: string; color?: string }> = ({ iconName, c
     if (!node) return;
     node.empty();
     try {
-      setIcon(node, iconName);
+      const normalizedIconName = String(iconName || "").replace(/^lucide[:\-]/i, "").trim();
+      if (!normalizedIconName) return;
+      setIcon(node, normalizedIconName);
+      const resolvedColor = color || "var(--text-on-accent)";
+      node.style.color = resolvedColor;
+      node.querySelectorAll("svg, svg *").forEach((el) => {
+        const svgEl = el as SVGElement;
+        svgEl.setAttribute("stroke", resolvedColor);
+        if (svgEl.hasAttribute("fill") && svgEl.getAttribute("fill") !== "none") {
+          svgEl.setAttribute("fill", "none");
+        }
+        svgEl.style.color = resolvedColor;
+      });
     } catch {
       node.textContent = "";
     }
-  }, [iconName]);
+  }, [iconName, color]);
 
   return (
     <span
@@ -241,31 +335,114 @@ const EventIcon: React.FC<{ iconName: string; color?: string }> = ({ iconName, c
         width: "14px",
         height: "14px",
         flexShrink: 0,
-        color: color || "currentColor",
+        color: color || "var(--text-on-accent)",
         opacity: 0.95,
       }}
     />
   );
 };
 
+function renderTaskCheckboxIcon(state: string, size: number, color = "currentColor"): React.ReactElement {
+  const common = {
+    xmlns: "http://www.w3.org/2000/svg",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: color,
+    strokeWidth: "2",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    style: { width: `${size}px`, height: `${size}px`, marginRight: '4px', flexShrink: 0, opacity: 0.9 },
+  };
+
+  if (/^[xX]$/.test(state)) {
+    return (
+      <svg {...common}>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <path d="M8 12l3 3 5-6"></path>
+      </svg>
+    );
+  }
+
+  if (state === "-") {
+    return (
+      <svg {...common}>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <path d="M8 12h8"></path>
+      </svg>
+    );
+  }
+
+  if (state === "\\") {
+    return (
+      <svg {...common}>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <path d="M8 8l8 8"></path>
+      </svg>
+    );
+  }
+
+  if (state === "?") {
+    return (
+      <svg {...common}>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <path d="M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-.9.8-1.7 1.3-1.7 2.7"></path>
+        <path d="M12 17h.01"></path>
+      </svg>
+    );
+  }
+
+  return (
+    <svg {...common}>
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+    </svg>
+  );
+}
+
 const PropertyValue: React.FC<{ value: Value; app: any }> = ({ value, app }) => {
+  return (
+    <RenderedValue
+      value={value}
+      app={app}
+      className="bases-calendar-event-property-value"
+      style={{ display: 'inline-flex', alignItems: 'center' }}
+    />
+  );
+};
+
+const RenderedValue: React.FC<{
+  value: Value;
+  app: any;
+  className?: string;
+  style?: React.CSSProperties;
+  fallbackText?: string;
+  title?: string;
+}> = ({ value, app, className, style, fallbackText, title }) => {
   const elementRef = useCallback(
     (node: HTMLElement | null) => {
       if (!node) return;
       node.textContent = ''; // Clear previous content
 
-      if (value === null || value === undefined) return;
+      if (title) {
+        node.setAttribute("title", title);
+      } else {
+        node.removeAttribute("title");
+      }
+
+      if (value === null || value === undefined) {
+        if (fallbackText) node.textContent = fallbackText;
+        return;
+      }
 
       // Handle objects with renderTo (e.g., complex Obsidian widgets)
       if (typeof (value as any).renderTo === 'function' && app?.renderContext) {
         (value as any).renderTo(node, app.renderContext);
       } else {
         // Fallback for primitives or objects without renderTo
-        node.textContent = String(value);
+        node.textContent = String(value ?? fallbackText ?? "");
       }
     },
-    [app, value],
+    [app, fallbackText, title, value],
   );
 
-  return <span ref={elementRef} className="bases-calendar-event-property-value" style={{ display: 'inline-flex', alignItems: 'center' }} />;
+  return <span ref={elementRef} className={className} style={style} />;
 };

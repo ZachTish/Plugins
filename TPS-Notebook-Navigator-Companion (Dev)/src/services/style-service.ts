@@ -9,12 +9,56 @@ import { NotebookNavigatorCompanionSettings } from "../types";
  */
 export class StyleService {
     private runtimeStyleEl: HTMLStyleElement | null = null;
+    private hoverStyleEl: HTMLStyleElement | null = null;
     private static readonly RUNTIME_STYLE_ID = "tps-nn-companion-runtime-style";
+    private static readonly HOVER_STYLE_ID = "tps-nn-companion-hover-style";
 
     constructor(
         private app: App,
         private getSettings: () => NotebookNavigatorCompanionSettings,
     ) {}
+
+    /** Inject the always-on hover affordance for clickable Notebook Navigator status icons. */
+    applyNavigatorStatusIconHoverGlow(): void {
+        if (!this.hoverStyleEl) {
+            this.hoverStyleEl = document.createElement("style");
+            this.hoverStyleEl.id = StyleService.HOVER_STYLE_ID;
+            document.head.appendChild(this.hoverStyleEl);
+        }
+
+        this.hoverStyleEl.textContent = `
+      .view-content.notebook-navigator .nn-file[data-path] :is(.nn-file-icon, .nn-file-leading),
+      .notebook-navigator .nn-file[data-path] :is(.nn-file-icon, .nn-file-leading),
+      .view-content.notebook-navigator .nn-navitem[data-path][data-nav-item-type='note'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon),
+      .notebook-navigator .nn-navitem[data-path][data-nav-item-type='note'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon),
+      .view-content.notebook-navigator .nn-navitem[data-path][data-nav-item-type='file'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon),
+      .notebook-navigator .nn-navitem[data-path][data-nav-item-type='file'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon) {
+        cursor: pointer;
+        transition: filter 120ms ease, box-shadow 120ms ease, transform 120ms ease, background-color 120ms ease;
+      }
+
+      .view-content.notebook-navigator .nn-file[data-path] :is(.nn-file-icon, .nn-file-leading):hover,
+      .notebook-navigator .nn-file[data-path] :is(.nn-file-icon, .nn-file-leading):hover,
+      .view-content.notebook-navigator .nn-navitem[data-path][data-nav-item-type='note'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon):hover,
+      .notebook-navigator .nn-navitem[data-path][data-nav-item-type='note'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon):hover,
+      .view-content.notebook-navigator .nn-navitem[data-path][data-nav-item-type='file'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon):hover,
+      .notebook-navigator .nn-navitem[data-path][data-nav-item-type='file'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon):hover,
+      .view-content.notebook-navigator .nn-file[data-path] :is(.nn-file-icon, .nn-file-leading):focus-visible,
+      .notebook-navigator .nn-file[data-path] :is(.nn-file-icon, .nn-file-leading):focus-visible,
+      .view-content.notebook-navigator .nn-navitem[data-path][data-nav-item-type='note'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon):focus-visible,
+      .notebook-navigator .nn-navitem[data-path][data-nav-item-type='note'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon):focus-visible,
+      .view-content.notebook-navigator .nn-navitem[data-path][data-nav-item-type='file'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon):focus-visible,
+      .notebook-navigator .nn-navitem[data-path][data-nav-item-type='file'] :is(.nn-navitem-icon, .nn-navitem-leading, .nn-item-icon):focus-visible {
+        background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+        border-radius: 6px;
+        box-shadow:
+          0 0 0 1px color-mix(in srgb, var(--interactive-accent) 30%, transparent),
+          0 0 10px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+        filter: drop-shadow(0 0 6px color-mix(in srgb, var(--interactive-accent) 60%, transparent));
+        transform: translateY(-0.5px);
+      }
+    `;
+    }
 
     /** Inject / update the global CSS variable for task-checkbox icon color. */
     applyNavigatorSystemIconColorOverride(): void {
@@ -36,6 +80,42 @@ export class StyleService {
         this.runtimeStyleEl.textContent = `
       body {
         --nn-theme-file-task-icon-color: ${color};
+      }
+      .notebook-navigator [data-tps-tag-page='false'] .nn-file-tag,
+      .view-content.notebook-navigator [data-tps-tag-page='false'] .nn-file-tag,
+      .notebook-navigator [data-tps-tag-page='false'] .nn-navitem-name,
+      .view-content.notebook-navigator [data-tps-tag-page='false'] .nn-navitem-name,
+      .notebook-navigator .nn-file-tag[data-tps-tag-page='false'],
+      .view-content.notebook-navigator .nn-file-tag[data-tps-tag-page='false'] {
+        cursor: default !important;
+        text-decoration: none !important;
+        filter: none !important;
+      }
+      .notebook-navigator [data-tps-tag-page='open'] .nn-file-tag,
+      .view-content.notebook-navigator [data-tps-tag-page='open'] .nn-file-tag,
+      .notebook-navigator [data-tps-tag-page='open'] .nn-navitem-name,
+      .view-content.notebook-navigator [data-tps-tag-page='open'] .nn-navitem-name,
+      .notebook-navigator .nn-file-tag[data-tps-tag-page='open'],
+      .view-content.notebook-navigator .nn-file-tag[data-tps-tag-page='open'] {
+        cursor: pointer !important;
+        text-decoration: underline;
+        text-underline-offset: 0.12em;
+        text-decoration-thickness: 1px;
+      }
+      .notebook-navigator [data-tps-property-page='false'] .nn-navitem-name,
+      .view-content.notebook-navigator [data-tps-property-page='false'] .nn-navitem-name,
+      .notebook-navigator .nn-navitem-name[data-tps-property-page='false'] {
+        cursor: default !important;
+        text-decoration: none !important;
+        filter: none !important;
+      }
+      .notebook-navigator [data-tps-property-page='open'] .nn-navitem-name,
+      .view-content.notebook-navigator [data-tps-property-page='open'] .nn-navitem-name,
+      .notebook-navigator .nn-navitem-name[data-tps-property-page='open'] {
+        cursor: pointer !important;
+        text-decoration: underline;
+        text-underline-offset: 0.12em;
+        text-decoration-thickness: 1px;
       }
       /* Apply the dynamic color to various icon containers in the inline title area */
       .inline-title-icon,
@@ -82,6 +162,10 @@ export class StyleService {
         if (this.runtimeStyleEl) {
             this.runtimeStyleEl.remove();
             this.runtimeStyleEl = null;
+        }
+        if (this.hoverStyleEl) {
+            this.hoverStyleEl.remove();
+            this.hoverStyleEl = null;
         }
     }
 

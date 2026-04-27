@@ -249,6 +249,10 @@
   opacity: 0.6;
 }
 
+.tps-gcm-time-tracker-status {
+  font-variant-numeric: tabular-nums;
+}
+
 /* Replaced marker - indicates the item has had content replaced */
 .tps-gcm-linked-subitem-replaced {
   /* Visual indicator that content has been replaced */

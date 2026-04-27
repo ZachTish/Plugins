@@ -1,14 +1,73 @@
-import { Component, TFile, WorkspaceLeaf, setIcon, normalizePath, Notice } from "obsidian";
+import { Component, MarkdownView, Platform, TFile, WorkspaceLeaf, setIcon, normalizePath, Notice } from "obsidian";
 import TPSGlobalContextMenuPlugin from "../main";
 import * as logger from "../logger";
+import { mergeNormalizedTags } from "../utils/tag-utils";
+import { setValueCaseInsensitive } from "../core/record-utils";
+import { getDailyNoteResolver } from "../../../TPS-Controller (Dev)/src/utils/daily-note-resolver";
+import { ensureDailyNoteFile } from "../../../TPS-Controller (Dev)/src/utils/daily-note-create";
 
 export class DailyNoteNavManager extends Component {
     plugin: TPSGlobalContextMenuPlugin;
     currentNav: HTMLElement | null = null;
     private currentHost: HTMLElement | null = null;
+    private currentReplacedHeaderEl: HTMLElement | null = null;
+    private currentHiddenHeaderEls: HTMLElement[] = [];
+    private currentHeaderWrapper: HTMLElement | null = null;
     private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
     private _navAbortController: AbortController | null = null;
     private _currentLeaf: WorkspaceLeaf | null = null;
+    private _displayedIsoDate: string | null = null;
+    private _queuedTargetIsoDate: string | null = null;
+    private _navInFlight = false;
+    private _queuedSourceLeaf: WorkspaceLeaf | null = null;
+    private _mobileScrollHideState: { targets: HTMLElement[]; listener: (evt: Event) => void; lastTop: number; accum: number } | null = null;
+    private clearCurrentNavState() {
+        this._navAbortController?.abort();
+        this._navAbortController = null;
+        this.detachMobileScrollHideTracking();
+        if (this.currentNav) {
+            this.currentNav.remove();
+            this.currentNav = null;
+        }
+        if (this.currentHeaderWrapper) {
+            this.currentHeaderWrapper.remove();
+            this.currentHeaderWrapper = null;
+        }
+        if (this.currentHost) {
+            this.currentHost.removeClass("tps-daily-note-nav-host");
+            this.currentHost.removeClass("tps-daily-note-nav-anchor");
+            this.currentHost.style.removeProperty("--tps-daily-nav-reserved-width");
+        }
+        if (this.currentReplacedHeaderEl) {
+            this.currentReplacedHeaderEl.style.removeProperty("display");
+            this.currentReplacedHeaderEl = null;
+        }
+        for (const el of this.currentHiddenHeaderEls) {
+            el.style.removeProperty("display");
+        }
+        this.currentHiddenHeaderEls = [];
+        this.currentHost = null;
+    }
+
+    private isCurrentNavStillValid(leaf: WorkspaceLeaf, isoDateStr: string): boolean {
+        if (!this.currentNav?.isConnected) return false;
+        if (this._currentLeaf !== leaf) return false;
+        if (this._displayedIsoDate !== isoDateStr) return false;
+
+        const modeClass = this.currentNav.classList;
+        if (modeClass.contains("tps-daily-note-nav--header-dates")) {
+            return !!this.currentHeaderWrapper?.isConnected;
+        }
+        if (modeClass.contains("tps-daily-note-nav--under-title")) {
+            const titleAnchor = this.resolveTitleAnchor(leaf);
+            return !!titleAnchor?.isConnected && this.currentNav.previousElementSibling === titleAnchor;
+        }
+        if (modeClass.contains("tps-daily-note-nav--floating")) {
+            const container = (leaf.view as any)?.contentEl as HTMLElement | undefined;
+            return !!container?.contains(this.currentNav);
+        }
+        return false;
+    }
 
     constructor(plugin: TPSGlobalContextMenuPlugin) {
         super();
@@ -25,17 +84,23 @@ export class DailyNoteNavManager extends Component {
         this.registerEvent(
             this.plugin.app.workspace.on("layout-change", () => this._scheduleRefresh())
         );
-        // Initial refresh
-        this.refresh();
+        this.plugin.app.workspace.onLayoutReady(() => {
+            this._scheduleRefresh();
+            setTimeout(() => this._scheduleRefresh(), 500);
+        });
     }
 
     /** Debounce rapid back-to-back events (active-leaf-change + file-open fire together). */
     private _scheduleRefresh() {
         if (this._refreshTimer !== null) clearTimeout(this._refreshTimer);
+        const delay = this._navInFlight ? 120 : 30;
         this._refreshTimer = setTimeout(() => {
             this._refreshTimer = null;
+            if (this._navInFlight && this._queuedTargetIsoDate) {
+                return;
+            }
             this.refresh();
-        }, 30);
+        }, delay);
     }
 
     onunload() {
@@ -48,169 +113,345 @@ export class DailyNoteNavManager extends Component {
     }
 
     getDailyNoteSettings() {
-        try {
-            // 1. Try Periodic Notes plugin (community plugin)
-            // @ts-ignore
-            const periodicNotes = this.plugin.app.plugins.getPlugin("periodic-notes");
-            if (periodicNotes && periodicNotes.settings?.daily) {
-                return {
-                    format: periodicNotes.settings.daily.format || "YYYY-MM-DD",
-                    folder: periodicNotes.settings.daily.folder || "",
-                    template: periodicNotes.settings.daily.template || ""
-                };
-            }
-
-            // 2. Try Core Daily Notes plugin (internal plugin)
-            // @ts-ignore - internal API
-            const internalPlugins = (this.plugin.app as any).internalPlugins;
-            const dailyNotes = internalPlugins.getPluginById("daily-notes");
-            if (dailyNotes && dailyNotes.instance && dailyNotes.instance.options) {
-                return {
-                    format: dailyNotes.instance.options.format || "YYYY-MM-DD",
-                    folder: dailyNotes.instance.options.folder || "",
-                    template: dailyNotes.instance.options.template || ""
-                };
-            }
-        } catch (e) {
-            logger.error("Failed to load daily note settings", e);
-        }
-        return { format: "YYYY-MM-DD", folder: "", template: "" };
+        const resolver = getDailyNoteResolver(this.plugin.app, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        });
+        return {
+            format: resolver.displayFormat,
+            folder: resolver.folder,
+            template: resolver.template,
+        };
     }
 
     refresh() {
-        // Abort listeners on the previous nav and remove it
-        this._navAbortController?.abort();
-        this._navAbortController = null;
-        if (this.currentNav) {
-            this.currentNav.remove();
-            this.currentNav = null;
-        }
-        if (this.currentHost) {
-            this.currentHost.removeClass("tps-daily-note-nav-host");
-            this.currentHost.removeClass("tps-daily-note-nav-anchor");
-            this.currentHost.style.removeProperty("--tps-daily-nav-reserved-width");
-        }
-        this.currentHost = null;
-        this._currentLeaf = null;
-
         if (!this.plugin.settings.enableDailyNoteNav) return;
 
         const leaf = this.getTargetLeaf();
-        if (!leaf || !leaf.view) return;
+        if (!leaf || !leaf.view) {
+            this.clearCurrentNavState();
+            this._currentLeaf = null;
+            return;
+        }
 
         // Check if it's a markdown view
-        if (leaf.getViewState().type !== "markdown") return;
+        if (leaf.getViewState().type !== "markdown") {
+            this.clearCurrentNavState();
+            this._currentLeaf = null;
+            return;
+        }
 
         const file = (leaf.view as any).file;
-        if (!(file instanceof TFile)) return;
+        if (!(file instanceof TFile)) {
+            this.clearCurrentNavState();
+            this._currentLeaf = null;
+            return;
+        }
 
-        const { format } = this.getDailyNoteSettings();
-        const m = (window as any).moment;
+        const resolver = getDailyNoteResolver(this.plugin.app, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        });
+        const dateKey = resolver.parseFilenameToDateKey(file.basename);
+        if (!dateKey) {
+            this.clearCurrentNavState();
+            this._currentLeaf = null;
+            return;
+        }
 
-        // Strict folder check was causing issues if user moved files or had mixed settings.
-        // Let's rely primarily on the date format matching the filename.
-        // We still fetch 'folder' for goToDate, but for *detection*, matching the format is usually enough context
-        // combined with the fact that it's a valid date.
+        if (this.isCurrentNavStillValid(leaf, dateKey)) {
+            return;
+        }
 
-        // Check format
-        const date = m(file.basename, format, true);
-        if (!date.isValid()) return;
+        this.clearCurrentNavState();
 
         // It's a daily note! Inject the UI.
         this._currentLeaf = leaf;
-        this.injectNav(leaf, date.format("YYYY-MM-DD"));
+        this._queuedSourceLeaf = null;
+        this._displayedIsoDate = dateKey;
+        this.injectNav(leaf, dateKey);
     }
 
     private getTargetLeaf(): WorkspaceLeaf | null {
         const activeLeaf = this.plugin.app.workspace.activeLeaf;
-        if (activeLeaf?.getViewState().type === "markdown") {
+        if (activeLeaf?.getViewState().type === "markdown" && !this.isSidebarLeaf(activeLeaf)) {
             return activeLeaf;
         }
 
         const activeMarkdownLeaf = this.plugin.app.workspace.getLeavesOfType("markdown")
-            .find((candidate) => candidate === this.plugin.app.workspace.activeLeaf);
+            .find((candidate) => candidate === this.plugin.app.workspace.activeLeaf && !this.isSidebarLeaf(candidate));
         if (activeMarkdownLeaf) return activeMarkdownLeaf;
 
+        const contentMarkdownLeaf = this.plugin.app.workspace.getLeavesOfType("markdown")
+            .find((candidate) => !this.isSidebarLeaf(candidate));
+        if (contentMarkdownLeaf) return contentMarkdownLeaf;
+
         return null;
+    }
+
+    private isSidebarLeaf(leaf: WorkspaceLeaf | null | undefined): boolean {
+        const container = (leaf as any)?.containerEl as HTMLElement | undefined;
+        if (!container) return false;
+        return !!container.closest('.workspace-sidedock, .workspace-split.mod-left-split, .workspace-split.mod-right-split');
     }
 
     injectNav(leaf: WorkspaceLeaf, isoDateStr: string) {
         const view = leaf.view as any;
         const container = view?.contentEl as HTMLElement | undefined;
         if (!container) return;
+        const m = (window as any).moment;
+        const viewedDate = m(isoDateStr, "YYYY-MM-DD").startOf("day");
+        const anchorDate = viewedDate.clone();
+        if (!anchorDate?.isValid?.()) return;
+
+        this.clearCurrentNavState();
 
         // Fresh AbortController for this nav's event listeners
         this._navAbortController = new AbortController();
 
-        // Prefer placing the controls beside the actual note title row (inline title or first H1).
+        // On mobile we avoid the header/title area entirely. The title row is too
+        // cramped and often clipped, so we render a floating bottom bar instead.
+        const isMobile = Platform.isMobile;
+
+        // Prefer placing the controls beside the actual note title row (inline title or first H1)
+        // on desktop. Mobile always uses the floating layout.
+        const headerAnchor = this.resolveHeaderBreadcrumbAnchor(leaf);
         const titleAnchor = this.resolveTitleAnchor(leaf);
         const host = container;
         this.currentHost = host;
 
-        // Create the nav element
-        const nav = document.createElement("div");
-        nav.className = "tps-daily-note-nav";
-        this.hardenNavControl(nav);
-        if (titleAnchor) {
-            nav.addClass("tps-daily-note-nav--under-title");
-            host.addClass("tps-daily-note-nav-anchor");
-            titleAnchor.insertAdjacentElement("afterend", nav);
-        } else {
-            nav.addClass("tps-daily-note-nav--floating");
-            host.appendChild(nav);
-        }
-        this.currentNav = nav;
-
         // Mark as always-interactive when rest opacity > 0
-        if ((this.plugin.settings.dailyNavRestOpacity ?? 0) > 0) {
-            nav.dataset.restVisible = "true";
-        }
+        const restVisible = (this.plugin.settings.dailyNavRestOpacity ?? 0) > 0;
 
-        // Left Arrow (Prev)
-        const prevBtn = nav.createEl("button", { cls: "tps-daily-nav-btn" });
-        prevBtn.type = "button";
-        setIcon(prevBtn, "chevron-left");
-        this.hardenNavControl(prevBtn);
-        prevBtn.onclick = (e) => {
-            this.suppressNavEvent(e);
-            this.goToDate(isoDateStr, -1, leaf);
+        // Build the dates row and controls row as shared helpers so both
+        // header-mode and fallback-mode can reuse them.
+        const buildDatesGroup = (parent: HTMLElement) => {
+            const datesGroup = parent.createDiv({ cls: "tps-daily-note-nav__dates-group" });
+            for (let offset = -3; offset <= 3; offset += 1) {
+                const day = anchorDate.clone().add(offset, "days");
+                const dayIso = day.format("YYYY-MM-DD");
+                const dayBtn = datesGroup.createEl("a", { cls: "daily-note-navbar__date tps-daily-note-nav__link", href: "#" });
+                dayBtn.addClass(`tps-daily-note-nav__offset-${offset}`.replace(/--/g, "-neg-"));
+                this.hardenNavControl(dayBtn);
+                if (offset === 0) {
+                    dayBtn.addClass("daily-note-navbar__active");
+                }
+                if (dayIso === m().startOf("day").format("YYYY-MM-DD")) {
+                    dayBtn.addClass("daily-note-navbar__current");
+                }
+                dayBtn.setText(`${day.format("ddd")} ${day.format("D")}`);
+                dayBtn.onclick = (e) => {
+                    this.suppressNavEvent(e);
+                    if (offset === 0) return;
+                    this.goToDate(dayIso, 0, leaf);
+                };
+                dayBtn.addEventListener("touchend", (e) => {
+                    this.suppressNavEvent(e);
+                    if (offset === 0) return;
+                    this.goToDate(dayIso, 0, leaf);
+                }, { passive: false });
+            }
         };
-        prevBtn.addEventListener("touchend", (e) => {
-            this.suppressNavEvent(e);
-            this.goToDate(isoDateStr, -1, leaf);
-        }, { passive: false });
 
-        // Today Button (optional)
-        if (this.plugin.settings.dailyNavShowToday !== false) {
-            const todayBtn = nav.createEl("button", {
-                cls: "tps-daily-nav-today",
-                text: "Today"
-            });
-            todayBtn.type = "button";
-            this.hardenNavControl(todayBtn);
-            todayBtn.onclick = (e) => {
+        const buildControlsRow = (parent: HTMLElement) => {
+            const todayIso = m().startOf("day").format("YYYY-MM-DD");
+            const isViewingToday = viewedDate.format("YYYY-MM-DD") === todayIso;
+
+            const prevBtn = parent.createEl("a", { cls: "tps-daily-nav-btn daily-note-navbar__change-week", href: "#" });
+            setIcon(prevBtn, "left-arrow");
+            this.hardenNavControl(prevBtn);
+            prevBtn.onclick = (e) => {
                 this.suppressNavEvent(e);
-                this.goToDate(null, 0, leaf); // Go to actual today
+                this.goToDate(viewedDate.format("YYYY-MM-DD"), -1, leaf);
             };
-            todayBtn.addEventListener("touchend", (e) => {
+            prevBtn.addEventListener("touchend", (e) => {
                 this.suppressNavEvent(e);
-                this.goToDate(null, 0, leaf);
+                this.goToDate(viewedDate.format("YYYY-MM-DD"), -1, leaf);
             }, { passive: false });
-        }
 
-        // Right Arrow (Next)
-        const nextBtn = nav.createEl("button", { cls: "tps-daily-nav-btn" });
-        nextBtn.type = "button";
-        setIcon(nextBtn, "chevron-right");
-        this.hardenNavControl(nextBtn);
-        nextBtn.onclick = (e) => {
-            this.suppressNavEvent(e);
-            this.goToDate(isoDateStr, 1, leaf);
+            if (this.plugin.settings.dailyNavShowToday !== false) {
+                const todayBtn = parent.createEl("a", {
+                    cls: `tps-daily-nav-today daily-note-navbar__date${isViewingToday ? " tps-daily-nav-today--current" : " tps-daily-nav-today--inactive"}`,
+                    text: "Today",
+                    href: "#",
+                });
+                this.hardenNavControl(todayBtn);
+                todayBtn.onclick = (e) => {
+                    this.suppressNavEvent(e);
+                    this.goToDate(null, 0, leaf);
+                };
+                todayBtn.addEventListener("touchend", (e) => {
+                    this.suppressNavEvent(e);
+                    this.goToDate(null, 0, leaf);
+                }, { passive: false });
+            }
+
+            const nextBtn = parent.createEl("a", { cls: "tps-daily-nav-btn daily-note-navbar__change-week", href: "#" });
+            setIcon(nextBtn, "right-arrow");
+            this.hardenNavControl(nextBtn);
+            nextBtn.onclick = (e) => {
+                this.suppressNavEvent(e);
+                this.goToDate(viewedDate.format("YYYY-MM-DD"), 1, leaf);
+            };
+            nextBtn.addEventListener("touchend", (e) => {
+                this.suppressNavEvent(e);
+                this.goToDate(viewedDate.format("YYYY-MM-DD"), 1, leaf);
+            }, { passive: false });
         };
-        nextBtn.addEventListener("touchend", (e) => {
-            this.suppressNavEvent(e);
-            this.goToDate(isoDateStr, 1, leaf);
-        }, { passive: false });
+
+        // ── Mobile mode: always use the floating bottom bar above the GCM chrome ──
+        if (isMobile) {
+            const nav = document.createElement("div");
+            nav.className = "tps-daily-note-nav daily-note-navbar";
+            nav.addClass("tps-daily-note-nav--floating");
+            nav.addClass("tps-daily-note-nav--mobile");
+            this.hardenNavControl(nav);
+            if (restVisible) nav.dataset.restVisible = "true";
+            host.appendChild(nav);
+            this.currentNav = nav;
+
+            const bottomRow = nav.createDiv({ cls: "tps-daily-note-nav__bottom-row" });
+            buildControlsRow(bottomRow);
+
+            this.applyMobileNavScrollVisibility(leaf);
+        }
+        // ── Header-bar mode: dates inline with header, controls below ──
+        else if (headerAnchor?.parentElement) {
+            const headerParent = headerAnchor.parentElement;
+            this.currentHost = headerParent;
+            this.currentHost.addClass("tps-daily-note-nav-anchor");
+            this.currentReplacedHeaderEl = headerAnchor;
+            const hiddenEls = this.collectHeaderPathElements(headerAnchor);
+            hiddenEls.forEach((el) => {
+                el.style.display = "none";
+            });
+            this.currentHiddenHeaderEls = hiddenEls;
+
+            // Dates row — goes inline inside the header title container
+            const datesRow = document.createElement("div");
+            datesRow.className = "tps-daily-note-nav tps-daily-note-nav--header-dates";
+            this.hardenNavControl(datesRow);
+            if (restVisible) datesRow.dataset.restVisible = "true";
+            buildDatesGroup(datesRow);
+
+            const firstHidden = hiddenEls[0] ?? headerParent.firstElementChild;
+            if (firstHidden && firstHidden.parentElement === headerParent) {
+                headerParent.insertBefore(datesRow, firstHidden);
+            } else {
+                headerParent.insertBefore(datesRow, headerParent.firstChild);
+            }
+            this.currentNav = datesRow;
+
+            // Controls row — goes below the entire view-header
+            const viewHeader = headerParent.closest<HTMLElement>(".view-header");
+            if (viewHeader) {
+                const controlsRow = document.createElement("div");
+                controlsRow.className = "tps-daily-note-nav tps-daily-note-nav--header-controls";
+                this.hardenNavControl(controlsRow);
+                if (restVisible) controlsRow.dataset.restVisible = "true";
+                const innerRow = controlsRow.createDiv({ cls: "tps-daily-note-nav__bottom-row" });
+                buildControlsRow(innerRow);
+                viewHeader.insertAdjacentElement("afterend", controlsRow);
+                this.currentHeaderWrapper = controlsRow;
+            }
+
+        } else {
+            // ── Fallback: single container (under-title or floating) ──
+            const nav = document.createElement("div");
+            nav.className = "tps-daily-note-nav daily-note-navbar";
+            this.hardenNavControl(nav);
+            if (restVisible) nav.dataset.restVisible = "true";
+
+            if (titleAnchor) {
+                nav.addClass("tps-daily-note-nav--under-title");
+                const titleParent = titleAnchor.parentElement ?? host;
+                titleParent.addClass("tps-daily-note-nav-anchor");
+                titleAnchor.insertAdjacentElement("afterend", nav);
+            } else {
+                nav.addClass("tps-daily-note-nav--floating");
+                host.appendChild(nav);
+            }
+            this.currentNav = nav;
+
+            const topRow = nav.createDiv({ cls: "tps-daily-note-nav__top-row" });
+            buildDatesGroup(topRow);
+
+            const bottomRow = nav.createDiv({ cls: "tps-daily-note-nav__bottom-row" });
+            buildControlsRow(bottomRow);
+        }
+    }
+
+    private resolveScrollContainer(view: MarkdownView): HTMLElement | null {
+        return view.contentEl?.querySelector<HTMLElement>(".cm-scroller") ??
+            view.contentEl?.querySelector<HTMLElement>(".markdown-preview-view") ??
+            view.contentEl?.querySelector<HTMLElement>(".markdown-source-view") ??
+            view.contentEl?.querySelector<HTMLElement>(".view-content") ??
+            null;
+    }
+
+    private applyMobileNavScrollVisibility(leaf: WorkspaceLeaf): void {
+        if (!Platform.isMobile) return;
+        const nav = this.currentNav;
+        if (!nav?.isConnected) return;
+        const view = leaf.view as MarkdownView | undefined;
+        if (!view) return;
+
+        const scroller = this.resolveScrollContainer(view);
+        const targets = Array.from(new Set([
+            scroller,
+            view.contentEl ?? null,
+            view.containerEl ?? null,
+        ].filter((el): el is HTMLElement => !!el)));
+        if (targets.length === 0) return;
+
+        if (this._mobileScrollHideState?.targets.length === targets.length &&
+            this._mobileScrollHideState.targets.every((target, index) => target === targets[index])) {
+            return;
+        }
+        this.detachMobileScrollHideTracking();
+
+        const state = { targets, lastTop: scroller?.scrollTop ?? 0, accum: 0, listener: (_evt: Event) => { } };
+        const HIDE_THRESHOLD = 52;
+        const SHOW_THRESHOLD = 24;
+
+        const setHidden = (hidden: boolean) => {
+            if (!this.currentNav?.isConnected) return;
+            this.currentNav.style.opacity = hidden ? "0" : "1";
+            this.currentNav.style.visibility = hidden ? "hidden" : "visible";
+            this.currentNav.style.pointerEvents = hidden ? "none" : "auto";
+        };
+
+        state.listener = (evt: Event) => {
+            const currentNav = this.currentNav;
+            if (!currentNav?.isConnected) return;
+            const target = evt.target as HTMLElement | null;
+            const top = Number.isFinite(target?.scrollTop) ? target!.scrollTop : (scroller?.scrollTop ?? state.lastTop);
+            const delta = top - state.lastTop;
+            state.lastTop = top;
+            if ((delta > 0 && state.accum < 0) || (delta < 0 && state.accum > 0)) {
+                state.accum = 0;
+            }
+            state.accum += delta;
+            if (state.accum > HIDE_THRESHOLD) {
+                setHidden(true);
+                state.accum = 0;
+            } else if (state.accum < -SHOW_THRESHOLD) {
+                setHidden(false);
+                state.accum = 0;
+            }
+        };
+
+        for (const target of targets) {
+            target.addEventListener("scroll", state.listener, { passive: true, capture: true });
+        }
+        this._mobileScrollHideState = state;
+    }
+
+    private detachMobileScrollHideTracking(): void {
+        const state = this._mobileScrollHideState;
+        if (!state) return;
+        for (const target of state.targets) {
+            target.removeEventListener("scroll", state.listener, { capture: true } as any);
+        }
+        this._mobileScrollHideState = null;
     }
 
     private resolveTitleAnchor(leaf: WorkspaceLeaf): HTMLElement | null {
@@ -269,6 +510,35 @@ export class DailyNoteNavManager extends Component {
         }
 
         return null;
+    }
+
+    private resolveHeaderBreadcrumbAnchor(leaf: WorkspaceLeaf): HTMLElement | null {
+        const view = leaf.view as any;
+        const root = view?.containerEl as HTMLElement | undefined;
+        if (!root) return null;
+
+        return root.querySelector<HTMLElement>([
+            '.view-header-breadcrumb',
+            '.view-header-breadcrumbs',
+            '.view-header-title-parent',
+            '.workspace-tab-header-container .view-header-breadcrumb',
+            '.workspace-tab-header-container .view-header-title-parent'
+        ].join(', '));
+    }
+
+    private collectHeaderPathElements(anchor: HTMLElement): HTMLElement[] {
+        const container = anchor.parentElement;
+        if (!container) return [anchor];
+
+        const candidates = Array.from(container.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
+        const pathLike = candidates.filter((el) => {
+            if (el === this.currentNav) return false;
+            if (el.matches('.view-header-breadcrumb, .view-header-breadcrumbs, .view-header-title-parent, .view-header-title, .view-header-title-container, .view-header-title-text')) return true;
+            const text = (el.textContent || '').trim();
+            return !!text && text.includes(' / ');
+        });
+
+        return pathLike.length > 0 ? pathLike : [anchor];
     }
 
     private suppressNavEvent(event: Event): void {
@@ -339,6 +609,19 @@ export class DailyNoteNavManager extends Component {
             return existing;
         }
 
+        const targetJsDate = targetDate?.toDate?.() instanceof Date ? targetDate.toDate() : null;
+        if (targetJsDate instanceof Date && !Number.isNaN(targetJsDate.getTime())) {
+            const createdViaShared = await ensureDailyNoteFile(this.plugin.app as any, targetJsDate, {
+                formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+            });
+            if (createdViaShared instanceof TFile) {
+                const slash = normalizedPath.lastIndexOf("/");
+                const folder = slash >= 0 ? normalizedPath.substring(0, slash) : "";
+                await this.normalizeCreatedDailyNote(createdViaShared, titleValue, folder);
+                return createdViaShared;
+            }
+        }
+
         // Prefer delegating to the core/periodic plugin so folder, template, and
         // Templater/Dataview hooks are all respected correctly.
         const coreFile = await this.createViaCorePlugin(targetDate);
@@ -396,7 +679,7 @@ export class DailyNoteNavManager extends Component {
 
             if (shouldWriteTitleViaFrontmatterApi) {
                 try {
-                    await this.plugin.app.fileManager.processFrontMatter(created, (fm) => {
+                    await this.plugin.frontmatterMutationService.process(created, (fm) => {
                         fm.title = titleValue;
                     });
                 } catch (error) {
@@ -432,15 +715,37 @@ export class DailyNoteNavManager extends Component {
 
     private async normalizeCreatedDailyNote(file: TFile, titleValue: string, folder: string): Promise<void> {
         const targetFolder = String(folder || file.parent?.path || '/').trim() || '/';
+        const resolver = getDailyNoteResolver(this.plugin.app, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        });
+        const scheduledDateKey = resolver.parseFilenameToDateKey(file.basename)
+            || resolver.parseFilenameToDateKey(titleValue)
+            || '';
 
         await this.normalizeLeadingWhitespaceBeforeFrontmatter(file);
 
         try {
-            await this.plugin.app.fileManager.processFrontMatter(file, (fm: any) => {
+            await this.plugin.frontmatterMutationService.process(file, (fm: any) => {
                 fm.title = titleValue;
-                const scheduled = String(fm?.scheduled ?? '').trim();
-                if (!scheduled || /<%[\s\S]*%>/.test(scheduled) || /\{\{[\s\S]*\}\}/.test(scheduled)) {
-                    fm.scheduled = titleValue;
+                const mergedTags = mergeNormalizedTags(fm.tags, "dailynote");
+                setValueCaseInsensitive(fm, 'tags', mergedTags);
+                if (this.plugin.settings.enableDailyNoteScheduledNormalization !== false) {
+                    const existingScheduled = String((fm?.scheduled ?? fm?.Scheduled ?? '')).trim();
+                    const existingScheduledMoment = existingScheduled ? window.moment(existingScheduled) : null;
+                    const existingScheduledKey = existingScheduledMoment?.isValid()
+                        ? existingScheduledMoment.format('YYYY-MM-DD')
+                        : '';
+                    const shouldNormalizeScheduled =
+                        !!scheduledDateKey && (
+                            !existingScheduled
+                            || /<%[\s\S]*%>/.test(existingScheduled)
+                            || /\{\{[\s\S]*\}\}/.test(existingScheduled)
+                            || !existingScheduledMoment?.isValid?.()
+                            || existingScheduledKey !== scheduledDateKey
+                        );
+                    if (shouldNormalizeScheduled) {
+                        setValueCaseInsensitive(fm, 'scheduled', scheduledDateKey);
+                    }
                 }
                 fm.folderPath = targetFolder;
             });
@@ -460,6 +765,84 @@ export class DailyNoteNavManager extends Component {
         } catch (error) {
             logger.warn('Failed applying NN rules to daily note', { file: file.path, error });
         }
+    }
+
+    private async getDailyNoteScheduledFrontmatterValue(file: TFile): Promise<string> {
+        return await this.getDailyNoteFrontmatterValue(file, 'scheduled');
+    }
+
+    private async getDailyNoteFrontmatterValue(file: TFile, key: string): Promise<string> {
+        const cache = this.plugin.app.metadataCache.getFileCache(file);
+        const frontmatter = (cache?.frontmatter || {}) as Record<string, unknown>;
+        const requestedKey = String(key || '').trim().toLowerCase();
+        const matchedCacheKey = Object.keys(frontmatter).find((candidate) => candidate.toLowerCase() === requestedKey);
+        const cachedValue = String((matchedCacheKey ? frontmatter[matchedCacheKey] : '') || '').trim();
+        if (cachedValue) return cachedValue;
+
+        let content = '';
+        try {
+            content = await this.plugin.app.vault.cachedRead(file);
+        } catch {
+            return '';
+        }
+
+        const frontmatterMatch = content.match(/^\uFEFF?---\n([\s\S]*?)\n---(?:\n|$)/);
+        if (!frontmatterMatch) return '';
+
+        const escapedKey = requestedKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const valueMatch = frontmatterMatch[1].match(new RegExp(`^(${escapedKey})\\s*:\\s*(.+)$`, 'im'));
+        if (!valueMatch) return '';
+
+        return valueMatch[2].trim().replace(/^['"]|['"]$/g, '');
+    }
+
+    private async writeScheduledFrontmatterValue(file: TFile, scheduledDateKey: string): Promise<boolean> {
+        return await this.writeDailyNoteFrontmatterValues(file, { scheduled: scheduledDateKey });
+    }
+
+    private async writeDailyNoteFrontmatterValues(file: TFile, updates: Record<string, string>): Promise<boolean> {
+        let content = '';
+        try {
+            content = await this.plugin.app.vault.cachedRead(file);
+        } catch (error) {
+            logger.warn('[DailyNoteNavManager] Failed reading daily note before frontmatter write', {
+                file: file.path,
+                error,
+            });
+            return false;
+        }
+
+        const normalized = content.replace(/\r\n/g, '\n');
+        const bom = normalized.startsWith('\uFEFF') ? '\uFEFF' : '';
+        const body = bom ? normalized.slice(1) : normalized;
+        const normalizedUpdates = Object.entries(updates)
+            .map(([key, value]) => [String(key || '').trim(), String(value || '').trim()] as const)
+            .filter(([key, value]) => !!key && !!value);
+        if (normalizedUpdates.length === 0) return false;
+
+        let nextBody: string;
+        const frontmatterMatch = body.match(/^---\n([\s\S]*?)\n---(\n|$)/);
+        if (frontmatterMatch) {
+            let updatedBlock = frontmatterMatch[1];
+            for (const [key, value] of normalizedUpdates) {
+                const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const nextLine = `${key}: ${value}`;
+                const keyPattern = new RegExp(`(^${escapedKey}\\s*:.*$)`, 'im');
+                updatedBlock = keyPattern.test(updatedBlock)
+                    ? updatedBlock.replace(keyPattern, nextLine)
+                    : `${updatedBlock}\n${nextLine}`;
+            }
+            nextBody = body.replace(/^---\n[\s\S]*?\n---(\n|$)/, `---\n${updatedBlock}\n---$1`);
+        } else {
+            const trimmedBody = body.replace(/^\s*/, '');
+            const block = normalizedUpdates.map(([key, value]) => `${key}: ${value}`).join('\n');
+            nextBody = `---\n${block}\n---\n${trimmedBody}`;
+        }
+
+        const nextContent = `${bom}${nextBody}`;
+        if (nextContent === normalized) return true;
+
+        return await this.plugin.frontmatterMutationService.writeContentSafely(file, nextContent, { userInitiated: true });
     }
 
     private async normalizeLeadingWhitespaceBeforeFrontmatter(file: TFile): Promise<void> {
@@ -491,56 +874,73 @@ export class DailyNoteNavManager extends Component {
     }
 
     async goToDate(baseIsoDateStr: string | null, offset: number, sourceLeaf?: WorkspaceLeaf | null) {
+        const m = (window as any).moment;
+        const baseIso = baseIsoDateStr === null ? null : (baseIsoDateStr ?? this._displayedIsoDate);
+        const targetDate = baseIso === null
+            ? m().startOf("day")
+            : m(baseIso, "YYYY-MM-DD").add(offset, "days");
+        const targetIso = targetDate.format("YYYY-MM-DD");
+        const leafForNav = sourceLeaf ?? this.getTargetLeaf() ?? this._currentLeaf;
+
+        this._queuedTargetIsoDate = targetIso;
+        this._queuedSourceLeaf = leafForNav ?? null;
+        if (this._refreshTimer !== null) {
+            clearTimeout(this._refreshTimer);
+            this._refreshTimer = null;
+        }
+
+        if (this._navInFlight) return;
+        this._navInFlight = true;
         try {
-            const m = (window as any).moment;
-            const targetDate = baseIsoDateStr === null
-                ? m().startOf("day")
-                : m(baseIsoDateStr, "YYYY-MM-DD").add(offset, "days");
+            while (this._queuedTargetIsoDate) {
+                const currentTargetIso = this._queuedTargetIsoDate;
+                const currentSourceLeaf = this._queuedSourceLeaf;
+                this._queuedTargetIsoDate = null;
+                this._queuedSourceLeaf = null;
+                const currentTargetDate = m(currentTargetIso, "YYYY-MM-DD");
 
-            const { format, folder } = this.getDailyNoteSettings();
-            const targetFilename = targetDate.format(format);
+                const resolver = getDailyNoteResolver(this.plugin.app, {
+                    formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+                });
+                const targetFilename = resolver.formatFilename(currentTargetDate.toDate());
+                const targetPath = resolver.buildPath(currentTargetDate.toDate(), "md");
+                const folder = resolver.folder;
 
-            // 1. Construct the canonical path
-            let targetPath = folder ? `${folder}/${targetFilename}` : targetFilename;
-            if (!targetPath.endsWith(".md")) targetPath += ".md";
-            targetPath = normalizePath(targetPath);
+                let file: TFile | null =
+                    (this.plugin.app.vault.getAbstractFileByPath(targetPath) as TFile | null) ?? null;
 
-            // 2. Exact vault path lookup (correct API — avoids cross-folder collisions)
-            let file: TFile | null =
-                (this.plugin.app.vault.getAbstractFileByPath(targetPath) as TFile | null) ?? null;
+                if (!(file instanceof TFile)) {
+                    const justName = targetFilename + ".md";
+                    const found = this.plugin.app.metadataCache.getFirstLinkpathDest(justName, folder || "");
+                    file = found instanceof TFile ? found : null;
+                }
 
-            // 3. Fallback: search by filename only (handles files moved out of configured folder)
-            if (!(file instanceof TFile)) {
-                const justName = targetFilename + ".md";
-                const found = this.plugin.app.metadataCache.getFirstLinkpathDest(justName, folder || "");
-                file = found instanceof TFile ? found : null;
-            }
+                if (!(file instanceof TFile)) {
+                    file = await this.ensureDailyNoteExists(targetPath, targetFilename, currentTargetDate);
+                }
 
-            if (!(file instanceof TFile)) {
-                file = await this.ensureDailyNoteExists(targetPath, targetFilename, targetDate);
-            }
-
-            if (file instanceof TFile) {
-                const targetLeaf = sourceLeaf ?? this.getTargetLeaf() ?? this._currentLeaf;
-                if (targetLeaf) {
-                    try {
-                        await targetLeaf.openFile(file, { active: true } as any);
-                        return;
-                    } catch (error) {
-                        logger.warn("[DailyNoteNavManager] Failed to open daily note in source leaf, falling back", error);
+                if (file instanceof TFile) {
+                    const targetLeaf = currentSourceLeaf ?? this.getTargetLeaf() ?? this._currentLeaf;
+                    if (targetLeaf) {
+                        try {
+                            await targetLeaf.openFile(file, { active: true } as any);
+                            continue;
+                        } catch (error) {
+                            logger.warn("[DailyNoteNavManager] Failed to open daily note in source leaf, falling back", error);
+                        }
                     }
-                }
-                {
-                    const leaf = this.plugin.app.workspace.getLeaf(false);
-                    if (!leaf) return;
+                    const leaf = this.getTargetLeaf() ?? this.plugin.app.workspace.getLeaf('tab');
+                    if (!leaf) continue;
                     await leaf.openFile(file, { active: true } as any);
+                } else {
+                    new Notice(`Failed to open daily note: ${targetPath}`);
                 }
-            } else {
-                new Notice(`Failed to open daily note: ${targetPath}`);
             }
         } catch (err) {
             logger.error("goToDate failed", err);
             new Notice("Failed to navigate to daily note.");
+        } finally {
+            this._navInFlight = false;
         }
     }
 }

@@ -205,7 +205,11 @@ export class MetadataManager {
   private async runFrontmatterMutation(task: PendingMutation): Promise<boolean> {
     let changed = false;
     await this.normalizeLeadingWhitespaceBeforeFrontmatter(task.file);
-    await this.app.fileManager.processFrontMatter(task.file, (mutableFrontmatter) => {
+    const fileManager = this.app.fileManager as any;
+    const nativeProcessFrontMatter = typeof fileManager?.__tpsGcmOriginalProcessFrontMatter === "function"
+      ? fileManager.__tpsGcmOriginalProcessFrontMatter.bind(fileManager)
+      : this.app.fileManager.processFrontMatter.bind(this.app.fileManager);
+    await nativeProcessFrontMatter(task.file, (mutableFrontmatter: Record<string, unknown>) => {
       const frontmatter = (mutableFrontmatter ?? {}) as Record<string, unknown>;
       changed = task.mutate(frontmatter);
     });

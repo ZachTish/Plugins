@@ -18,6 +18,11 @@ function getGlobalContextMenuSettings(app: App): Record<string, any> {
     return (plugin as any)?.settings || {};
 }
 
+function getGlobalContextMenuApi(app: App): any {
+    const plugin = getPluginById(app, 'tps-global-context-menu') || getPluginById(app, 'TPS-Global-Context-Menu (Dev)');
+    return (plugin as any)?.api || null;
+}
+
 function getParentLinkFormat(app: App): ParentLinkFormat {
     const format = getGlobalContextMenuSettings(app)?.parentLinkFormat;
     return format === "markdown-title" ? "markdown-title" : "wikilink";
@@ -246,37 +251,23 @@ export async function createBidirectionalLink(
         const tagsToAdd = getParentTagOnChildLink(app);
 
         await withFileLock(childFile.path, async () => {
-            await app.fileManager.processFrontMatter(childFile, (fm) => {
-                const parentLink = buildLink(app, childFile.path, parentFile);
-                setFrontmatterValueCaseInsensitive(fm, parentKey, parentLink);
-                setFrontmatterValueCaseInsensitive(fm, "folderPath", childFile.parent?.path || "/");
-                logger.log(`[ParentChildLink] Added parent link to ${childFile.path}: ${parentKey} = ${parentLink}`);
-            });
+            const gcmApi = getGlobalContextMenuApi(app);
+            if (!gcmApi?.addParentLink) {
+                throw new Error('TPS Global Context Menu API unavailable for parent link mutation');
+            }
+            const parentLink = buildLink(app, childFile.path, parentFile);
+            await gcmApi.addParentLink({ childFile, parentKey, parentLink });
+            logger.log(`[ParentChildLink] Added parent link to ${childFile.path}: ${parentKey} = ${parentLink}`);
         });
 
         await withFileLock(parentFile.path, async () => {
-            await app.fileManager.processFrontMatter(parentFile, (fm) => {
-                const childLink = buildLink(app, parentFile.path, childFile);
-                const existingRaw = getFrontmatterValueCaseInsensitive(fm, childKey);
-                let children: string[] = [];
-                if (Array.isArray(existingRaw)) {
-                    children = existingRaw.map(String);
-                } else if (typeof existingRaw === "string" && existingRaw.trim()) {
-                    children = [existingRaw];
-                }
-
-                if (!children.some((existing) => linkReferencesFile(app, existing, parentFile.path, childFile))) {
-                    children.push(childLink);
-                    setFrontmatterValueCaseInsensitive(fm, childKey, children);
-                    logger.log(`[ParentChildLink] Added child link to ${parentFile.path}: ${childKey} now has ${children.length} items`);
-                } else {
-                    logger.log(`[ParentChildLink] Child link already exists in ${parentFile.path}`);
-                }
-
-                if (applyParentTagsToFrontmatter(fm, tagsToAdd)) {
-                    logger.log(`[ParentChildLink] Tagged parent note with ${tagsToAdd.map((tag) => `#${tag}`).join(", ")}`);
-                }
-            });
+            const gcmApi = getGlobalContextMenuApi(app);
+            if (!gcmApi?.addChildLink) {
+                throw new Error('TPS Global Context Menu API unavailable for child link mutation');
+            }
+            const childLink = buildLink(app, parentFile.path, childFile);
+            await gcmApi.addChildLink({ parentFile, childKey, childLink, childFile, tagsToAdd });
+            logger.log(`[ParentChildLink] Added child link to ${parentFile.path}: ${childKey}`);
         });
 
         logger.log(`[ParentChildLink] ✓ Bidirectional link created: ${childFile.basename} ↔ ${parentFile.basename}`);
@@ -303,34 +294,14 @@ export async function removeBidirectionalLink(
 ): Promise<void> {
     try {
         await withFileLock(childFile.path, async () => {
-            await app.fileManager.processFrontMatter(childFile, (fm) => {
-                const parentValue = getFrontmatterValueCaseInsensitive(fm, parentLinkKey);
-                if (parentValue === undefined) return;
-                deleteFrontmatterValueCaseInsensitive(fm, parentLinkKey);
-                logger.log(`[ParentChildLink] Removed parent link from ${childFile.path}`);
-            });
+            const gcmApi = getGlobalContextMenuApi(app);
+            if (!gcmApi?.removeBidirectionalLink) {
+                throw new Error('TPS Global Context Menu API unavailable for removing bidirectional link');
+            }
+            await gcmApi.removeBidirectionalLink({ childFile, parentFile, parentKey: parentLinkKey, childKey: childLinkKey });
+            logger.log(`[ParentChildLink] Removed parent link from ${childFile.path}`);
         });
-
-        await withFileLock(parentFile.path, async () => {
-            await app.fileManager.processFrontMatter(parentFile, (fm) => {
-                const existingRaw = getFrontmatterValueCaseInsensitive(fm, childLinkKey);
-                if (Array.isArray(existingRaw)) {
-                    const filtered = existingRaw.filter((link: any) => !linkReferencesFile(app, link, parentFile.path, childFile));
-                    if (filtered.length > 0) {
-                        setFrontmatterValueCaseInsensitive(fm, childLinkKey, filtered);
-                    } else {
-                        deleteFrontmatterValueCaseInsensitive(fm, childLinkKey);
-                    }
-                    logger.log(`[ParentChildLink] Removed child link from ${parentFile.path}`);
-                    return;
-                }
-
-                if (linkReferencesFile(app, existingRaw, parentFile.path, childFile)) {
-                    deleteFrontmatterValueCaseInsensitive(fm, childLinkKey);
-                    logger.log(`[ParentChildLink] Removed child link from ${parentFile.path}`);
-                }
-            });
-        });
+        logger.log(`[ParentChildLink] Removed child link from ${parentFile.path}`);
 
         logger.log(`[ParentChildLink] ✓ Bidirectional link removed: ${childFile.basename} ↔ ${parentFile.basename}`);
     } catch (error) {
@@ -354,29 +325,14 @@ export async function removeChildLinkFromParent(
 ): Promise<void> {
     try {
         await withFileLock(parentFile.path, async () => {
-            await app.fileManager.processFrontMatter(parentFile, (fm) => {
-                const existingRaw = getFrontmatterValueCaseInsensitive(fm, childLinkKey);
-                if (Array.isArray(existingRaw)) {
-                    const filtered = existingRaw.filter((link: any) => {
-                        const linkBasename = extractLinkTargetBasename(link);
-                        return !linkBasename || linkBasename.toLowerCase() !== childBasename.toLowerCase();
-                    });
-                    if (filtered.length !== existingRaw.length) {
-                        if (filtered.length > 0) {
-                            setFrontmatterValueCaseInsensitive(fm, childLinkKey, filtered);
-                        } else {
-                            deleteFrontmatterValueCaseInsensitive(fm, childLinkKey);
-                        }
-                        logger.log(`[ParentChildLink] Removed detached child link '${childBasename}' from ${parentFile.path}`);
-                    }
-                    return;
-                }
-
-                const linkBasename = extractLinkTargetBasename(existingRaw);
-                if (!linkBasename || linkBasename.toLowerCase() !== childBasename.toLowerCase()) return;
-                deleteFrontmatterValueCaseInsensitive(fm, childLinkKey);
+            const gcmApi = getGlobalContextMenuApi(app);
+            if (!gcmApi?.removeDetachedChildLink) {
+                throw new Error('TPS Global Context Menu API unavailable for removing detached child link');
+            }
+            const changed = await gcmApi.removeDetachedChildLink({ parentFile, childKey: childLinkKey, childBasename });
+            if (changed) {
                 logger.log(`[ParentChildLink] Removed detached child link '${childBasename}' from ${parentFile.path}`);
-            });
+            }
         });
     } catch (error) {
         logger.error(`[ParentChildLink] Failed to remove child link from parent:`, error);

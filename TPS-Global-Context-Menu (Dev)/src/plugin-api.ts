@@ -3,6 +3,17 @@ import type TPSGlobalContextMenuPlugin from './main';
 import type { VaultQueryService } from './services/vault-query-service';
 import type { TaskIdentityService } from './services/task-identity-service';
 import type { BodySubitemLink, ResolvedParentLink } from './services/subitem-types';
+import {
+    DEFAULT_CHECKBOX_STATE_TO_STATUS,
+    DEFAULT_STATUS_TO_CHECKBOX_STATE,
+    CHECKBOX_STATE_CHARS,
+    CheckboxPatterns,
+    statusForCheckboxState,
+    checkboxStateForStatus,
+    isCompletedCheckboxState,
+    hasOpenCheckboxes,
+    hasNoOpenCheckboxes,
+} from './core';
 
 /**
  * Attaches the inter-plugin API object to the plugin instance as `plugin.api`.
@@ -13,7 +24,8 @@ export function setupPluginApi(plugin: TPSGlobalContextMenuPlugin): void {
         process: (
             file: TFile,
             mutator: (frontmatter: Record<string, unknown>) => void | Promise<void>,
-        ) => plugin.frontmatterMutationService.process(file, mutator),
+            options?: { userInitiated?: boolean },
+        ) => plugin.frontmatterMutationService.process(file, mutator, options),
         setValues: (
             files: TFile[],
             updates: Record<string, unknown>,
@@ -42,6 +54,11 @@ export function setupPluginApi(plugin: TPSGlobalContextMenuPlugin): void {
             files: TFile[],
             keys: string[],
         ) => plugin.frontmatterMutationService.deleteKeys(files, keys),
+        writeContentSafely: (
+            file: TFile,
+            content: string,
+            options?: { userInitiated?: boolean },
+        ) => plugin.frontmatterMutationService.writeContentSafely(file, content, options),
     };
 
     (plugin as any).api = {
@@ -77,6 +94,14 @@ export function setupPluginApi(plugin: TPSGlobalContextMenuPlugin): void {
         /** True if a value represents an all-day (date-only) event. */
         isAllDayValue: (value: unknown, fm?: Record<string, unknown>) =>
             plugin.taskIdentityService.isAllDayValue(value, fm),
+        parseInlineProperties: (text: string) => plugin.itemSemanticsService.parseInlineProperties(text),
+        extractInlineProperty: (text: string, ...keys: string[]) => plugin.itemSemanticsService.extractInlineProperty(text, ...keys),
+        extractInlineNumberProperty: (text: string, ...keys: string[]) => plugin.itemSemanticsService.extractInlineNumberProperty(text, ...keys),
+        stripInlineProperties: (text: string) => plugin.itemSemanticsService.stripInlineProperties(text),
+        cleanTaskText: (text: string) => plugin.itemSemanticsService.cleanTaskText(text),
+        parseMarkdownLine: (line: string) => plugin.itemSemanticsService.parseMarkdownLine(line),
+        parseTaskLine: (line: string) => plugin.itemSemanticsService.parseTaskLine(line),
+        mapStatusToCheckboxState: (status: string) => plugin.itemSemanticsService.mapStatusToCheckboxState(status),
 
         // ── Frontmatter mutations ─────────────────────────────────────────────
         /** Bulk-update frontmatter on one or more files. */
@@ -86,6 +111,12 @@ export function setupPluginApi(plugin: TPSGlobalContextMenuPlugin): void {
         ) => plugin.bulkEditService.updateFrontmatter(files, updates),
         /** Canonical frontmatter mutation entrypoint with sorting/repair. */
         processFrontmatter: frontmatterApi.process,
+        /** True when the file was written by this plugin very recently. */
+        wasRecentlyWritten: (path: string) => plugin.frontmatterMutationService.wasRecentlyWritten(path),
+        /** True while this plugin is actively serializing a frontmatter write for the file. */
+        isWriteInProgress: (path: string) => plugin.frontmatterMutationService.isWriteInProgress(path),
+        /** Safe content write with vault stability check. */
+        writeContentSafely: frontmatterApi.writeContentSafely,
         /** Replace one or more scalar/list values by key. */
         setFrontmatterValues: frontmatterApi.setValues,
         /** Replace an entire list field. */
@@ -100,6 +131,20 @@ export function setupPluginApi(plugin: TPSGlobalContextMenuPlugin): void {
         deleteFrontmatterKeys: frontmatterApi.deleteKeys,
         /** Structured frontmatter API for other TPS plugins. */
         frontmatter: frontmatterApi,
+        applyCalendarEventMutation: (input: Parameters<TPSGlobalContextMenuPlugin['calendarNoteMutationService']['applyEventMutation']>[0]) =>
+            plugin.calendarNoteMutationService.applyEventMutation(input),
+        createCalendarNote: (input: Parameters<TPSGlobalContextMenuPlugin['calendarNoteMutationService']['createCalendarNote']>[0]) =>
+            plugin.calendarNoteMutationService.createCalendarNote(input),
+        applyCalendarFrontmatterMutation: (input: Parameters<TPSGlobalContextMenuPlugin['calendarNoteMutationService']['applyFrontmatterMutation']>[0]) =>
+            plugin.calendarNoteMutationService.applyFrontmatterMutation(input),
+        addParentLink: (input: Parameters<TPSGlobalContextMenuPlugin['parentChildMutationService']['addParentLink']>[0]) =>
+            plugin.parentChildMutationService.addParentLink(input),
+        addChildLink: (input: Parameters<TPSGlobalContextMenuPlugin['parentChildMutationService']['addChildLink']>[0]) =>
+            plugin.parentChildMutationService.addChildLink(input),
+        removeBidirectionalLink: (input: Parameters<TPSGlobalContextMenuPlugin['parentChildMutationService']['removeBidirectionalLink']>[0]) =>
+            plugin.parentChildMutationService.removeBidirectionalLink(input),
+        removeDetachedChildLink: (input: Parameters<TPSGlobalContextMenuPlugin['parentChildMutationService']['removeDetachedChildLink']>[0]) =>
+            plugin.parentChildMutationService.removeDetachedChildLink(input),
         scanBodySubitemLinks: (file: TFile): Promise<BodySubitemLink[]> =>
             plugin.bodySubitemLinkService.scanFile(file),
         reconcileMarkdownParentSubitems: (file: TFile) =>
@@ -114,5 +159,16 @@ export function setupPluginApi(plugin: TPSGlobalContextMenuPlugin): void {
             plugin.bodySubitemLinkService.isBodyLinkedSubitem(parent, child),
         refreshLinkedSubitemReferences: (child: TFile) =>
             plugin.linkedSubitemCheckboxService.refreshReferencesForChild(child),
+
+        // ── Checkbox state mapping ───────────────────────────────────────────
+        checkboxStateToStatus: DEFAULT_CHECKBOX_STATE_TO_STATUS,
+        statusToCheckboxState: DEFAULT_STATUS_TO_CHECKBOX_STATE,
+        checkboxStateChars: CHECKBOX_STATE_CHARS,
+        checkboxPatterns: CheckboxPatterns,
+        statusForCheckboxState: (state: string) => statusForCheckboxState(state, plugin.app),
+        checkboxStateForStatus: (status: string) => checkboxStateForStatus(status, plugin.app),
+        isCompletedCheckboxState: (state: string) => isCompletedCheckboxState(state, plugin.app),
+        hasOpenCheckboxes,
+        hasNoOpenCheckboxes,
     };
 }

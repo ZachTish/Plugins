@@ -65,6 +65,23 @@ export function registerGcmCommands(plugin: TPSGlobalContextMenuPlugin): void {
     });
 
     plugin.addCommand({
+        id: 'reformat-date-suffixes',
+        name: 'Reformat all date suffixes to current format',
+        callback: async () => {
+            new Notice('TPS GCM: Reformatting date suffixes across vault...');
+            try {
+                const result = await plugin.fileNamingService.reformatDateSuffixesAcrossVault();
+                new Notice(
+                    `TPS GCM: Reformat complete. Renamed ${result.renamed} of ${result.scanned} notes${result.failed > 0 ? ` (${result.failed} failed)` : ''}.`,
+                );
+            } catch (error) {
+                logger.error('[TPS GCM] Failed to reformat date suffixes', error);
+                new Notice('TPS GCM: Date suffix reformat failed. Check console logs.');
+            }
+        },
+    });
+
+    plugin.addCommand({
         id: 'toggle-inline-ui',
         name: 'Toggle inline context menu UI',
         callback: async () => {
@@ -95,6 +112,21 @@ export function registerGcmCommands(plugin: TPSGlobalContextMenuPlugin): void {
                         new Notice(`${file.basename} has no parent links to remove.`);
                     }
                 })();
+            }
+            return true;
+        },
+    });
+
+    plugin.addCommand({
+        id: 'migrate-linked-children-to-another-note',
+        name: 'Migrate linked children to another note',
+        checkCallback: (checking: boolean) => {
+            const file = plugin.app.workspace.getActiveFile();
+            if (!file || file.extension?.toLowerCase() !== 'md') {
+                return false;
+            }
+            if (!checking) {
+                void plugin.linkedSubitemMigrationService.promptAndMigrateLinkedChildren(file);
             }
             return true;
         },

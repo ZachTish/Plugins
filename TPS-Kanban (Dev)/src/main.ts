@@ -9,10 +9,17 @@ export default class TPSKanbanPlugin extends Plugin {
   private static readonly MAX_SCALE = 1.4;
 
   async onload() {
-    console.log('Loading TPS Kanban (Dev)');
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<KanbanSettings> || {});
     if (this.settings.kanbanTaskCardPosition !== 'top' && this.settings.kanbanTaskCardPosition !== 'bottom') {
       this.settings.kanbanTaskCardPosition = 'bottom';
+    }
+    if (this.settings.defaultCreateMode !== 'task' && this.settings.defaultCreateMode !== 'note') {
+      this.settings.defaultCreateMode = 'note';
+    }
+    if (typeof this.settings.defaultCreateDestination !== 'string') {
+      this.settings.defaultCreateDestination = '';
+    } else {
+      this.settings.defaultCreateDestination = this.settings.defaultCreateDestination.trim();
     }
     this.settings.scale = this.normalizeScale(this.settings.scale);
     if (!this.settings.layoutModeByView || typeof this.settings.layoutModeByView !== 'object') {
@@ -33,6 +40,7 @@ export default class TPSKanbanPlugin extends Plugin {
       icon: 'columns',
       factory: (controller: QueryController, containerEl: HTMLElement): BasesView =>
         new KanbanView(controller, containerEl, this),
+      options: () => KanbanView.getOptions(),
     });
 
     this.addSettingTab(new KanbanSettingTab(this.app, this));
@@ -44,7 +52,6 @@ export default class TPSKanbanPlugin extends Plugin {
   }
 
   onunload() {
-    console.log('Unloading TPS Kanban (Dev)');
   }
 
   private normalizeScale(value: unknown): number {
@@ -70,6 +77,7 @@ export default class TPSKanbanPlugin extends Plugin {
       const viewId = el.dataset.kanbanViewId || '';
       const mode = viewMap[viewId] || 'board';
       el.classList.toggle('tps-kanban-container--list', mode === 'list');
+      el.parentElement?.classList.toggle('tps-kanban-scroll--list', mode === 'list');
     });
   }
 }

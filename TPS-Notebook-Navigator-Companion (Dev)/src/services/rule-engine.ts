@@ -1,5 +1,6 @@
 import { App, TFile } from "obsidian";
-import { parseDateFromFilename } from '../../../tps/src/utils/daily-file-date';
+import { parseDateFromFilename } from '../../../TPS-Calendar-Base (Dev)/src/utils/daily-file-date';
+import { getPluginById } from '../core/type-guards';
 import {
   HideRule,
   IconColorRule,
@@ -15,6 +16,7 @@ import {
   ConditionGroup,
   RelationshipLineageNode,
 } from "../types";
+import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
 
 export interface RuleFieldResult {
   matched: boolean;
@@ -53,17 +55,7 @@ export class RuleEngine {
   ]);
 
   private getDailyNoteDateFormat(): string | undefined {
-    const tpsFormat = (this.app as any)?.plugins?.plugins?.tps?.settings?.dailyNoteDateFormat;
-    if (typeof tpsFormat === "string" && tpsFormat.trim()) {
-      return tpsFormat.trim();
-    }
-
-    const dailyNotesFormat = (this.app as any)?.internalPlugins?.plugins?.["daily-notes"]?.instance?.options?.format;
-    if (typeof dailyNotesFormat === "string" && dailyNotesFormat.trim()) {
-      return dailyNotesFormat.trim();
-    }
-
-    return undefined;
+    return getDailyNoteResolver(this.app).displayFormat;
   }
 
   private parseComparableDate(value: string): any | null {
@@ -90,7 +82,10 @@ export class RuleEngine {
       ...(userFormat ? [userFormat] : []),
       "YYYY-MM-DD",
       "YYYY-MM-DD HH:mm",
+      "YYYY-MM-DD HH:mm:ss",
       "YYYY-MM-DDTHH:mm:ss",
+      "YYYY/MM/DD HH:mm:ss",
+      "YYYY/MM/DD HH:mm",
       "YYYY/MM/DD"
     ], true);
 
@@ -586,7 +581,19 @@ export class RuleEngine {
       if (key.toLowerCase() === "folderpath") {
         return this.getValuesForConditionSource("parent-path", context, "");
       }
-      return this.toComparableValues(this.getFrontmatterValue(context.parent?.frontmatter ?? null, key));
+      const directParentValues = this.toComparableValues(this.getFrontmatterValue(context.parent?.frontmatter ?? null, key));
+      if (directParentValues.length > 0) {
+        return directParentValues;
+      }
+      const parentFile = context.parent?.file;
+      if (parentFile instanceof TFile) {
+        const normalizedField = String(key || "").trim().toLowerCase();
+        if (["scheduled", "date", "day"].includes(normalizedField)) {
+          const derived = this.getDailyNoteDateKeyFromFile(parentFile);
+          return derived ? [derived] : [];
+        }
+      }
+      return [];
     }
 
     const key = String(field || "").trim();
@@ -598,7 +605,12 @@ export class RuleEngine {
       return this.getValuesForConditionSource("path", context, "");
     }
 
-    return this.toComparableValues(this.getFrontmatterValue(context.frontmatter, key));
+    const directValues = this.toComparableValues(this.getFrontmatterValue(context.frontmatter, key));
+    if (directValues.length > 0) {
+      return directValues;
+    }
+
+    return this.getDerivedDateFieldValues(context, key);
   }
 
   private matchesConditionGroup(conditions: RuleCondition[], matchMode: "all" | "any", context: RuleEvaluationContext): boolean {
@@ -759,6 +771,24 @@ export class RuleEngine {
     return undefined;
   }
 
+  private getDailyNoteDateKeyFromFile(file: { basename: string }): string | null {
+    try {
+      return getDailyNoteResolver(this.app).parseFilenameToDateKey(file.basename);
+    } catch {
+      return null;
+    }
+  }
+
+  private getDerivedDateFieldValues(context: RuleEvaluationContext, field: string): string[] {
+    const normalizedField = String(field || "").trim().toLowerCase();
+    if (!["scheduled", "date", "day"].includes(normalizedField)) {
+      return [];
+    }
+
+    const derived = this.getDailyNoteDateKeyFromFile(context.file);
+    return derived ? [derived] : [];
+  }
+
   private toComparableValues(value: unknown): string[] {
     if (value === null || value === undefined) {
       return [];
@@ -775,6 +805,11 @@ export class RuleEngine {
 
     if (typeof value === "number" || typeof value === "boolean") {
       return [String(value)];
+    }
+
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      const localDay = new Date(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+      return [window.moment(localDay).format("YYYY-MM-DD")];
     }
 
     try {
@@ -796,13 +831,21 @@ export class RuleEngine {
     }
 
     if (operator === "has-open-checkboxes" || operator === "!has-open-checkboxes") {
-      // Check if any value (body content) contains uncompleted checkboxes
-      const hasOpenCheckboxes = trimmedValues.some((value) => {
-        // Match markdown checkboxes that are NOT checked: - [ ]
-        const openCheckboxPattern = /^[\s]*[-*]\s+\[\s\]/m;
-        return openCheckboxPattern.test(value);
-      });
-      return operator === "has-open-checkboxes" ? hasOpenCheckboxes : !hasOpenCheckboxes;
+      const gcm = getPluginById(this.app, 'tps-global-context-menu') as any;
+      const gcmHasOpen = gcm?.api?.hasOpenCheckboxes;
+      let hasOpen: boolean;
+      if (gcmHasOpen) {
+        hasOpen = gcmHasOpen(trimmedValues.join("\n"));
+      } else {
+        const controller = getPluginById(this.app, 'tps-controller') as any;
+        const service = controller?.api?.checkboxPatternService;
+        if (service) {
+          hasOpen = service.hasOpenCheckboxes(trimmedValues.join("\n"));
+        } else {
+          hasOpen = trimmedValues.some((value) => /^\s*(?:[-*+]|\d+\.)\s*\[ \]/.test(value));
+        }
+      }
+      return operator === "has-open-checkboxes" ? hasOpen : !hasOpen;
     }
 
     if (operator === "is-today" || operator === "!is-today") {

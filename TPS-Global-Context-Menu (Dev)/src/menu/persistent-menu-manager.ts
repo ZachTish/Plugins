@@ -36,6 +36,9 @@ export class PersistentMenuManager {
   private liveHeights: Map<MarkdownView, number> = new Map();
   private attachRetryTimers: Map<MarkdownView, number> = new Map();
   private scrollListeners: Map<MarkdownView, { container: HTMLElement; listener: (evt: Event) => void; timer?: number }> = new Map();
+  private menuGeometryFrameIds: Map<MarkdownView, number> = new Map();
+  private inlinePanelGeometryFrameIds: Map<MarkdownView, number> = new Map();
+  private panelScrollFrameIds: Map<MarkdownView, number> = new Map();
   public collapsedStateByPath: Map<string, boolean> = new Map();
 
   private handleResize: (() => void) | null = null;
@@ -64,6 +67,11 @@ export class PersistentMenuManager {
     this.plugin = plugin;
     this.setupKeyboardDetection();
     this.updateMobileBottomOffsets();
+  }
+
+  private isLivePreviewView(view: MarkdownView): boolean {
+    if (getViewMode(view) !== 'source') return false;
+    return !!view.contentEl?.querySelector('.markdown-source-view.is-live-preview');
   }
 
   /**
@@ -353,7 +361,7 @@ export class PersistentMenuManager {
         logger.error('[TPS GCM] Failed to ensure inline title icon:', error);
       }
       try {
-        this.plugin.inlineTaskSubtaskService?.ensureForView(targetView);
+        this.plugin.inlineTaskSubtaskService?.ensureForAllMarkdownViews();
       } catch (error) {
         logger.error('[TPS GCM] Failed to ensure inline task subtask controls:', error);
       }
@@ -398,13 +406,6 @@ export class PersistentMenuManager {
         this.removeInlineTitleIcon(view);
       }
     }
-    for (const leaf of this.plugin.app.workspace.getLeavesOfType('markdown')) {
-      const view = leaf.view;
-      if (view instanceof MarkdownView && !activeViews.has(view)) {
-        this.plugin.inlineTaskSubtaskService?.removeForView(view);
-      }
-    }
-
     for (const view of Array.from(this.topParentNavs.keys())) {
       if (!activeViews.has(view)) {
         this.removeTopParentNav(view);
@@ -532,8 +533,7 @@ export class PersistentMenuManager {
     }
 
     const mode = getViewMode(view);
-    // Strict mode check: Only show in Source mode (Live Preview is a type of Source mode)
-    if (mode !== 'source') {
+    if (mode !== 'source' || !this.isLivePreviewView(view)) {
       this.removeLiveMenu(view);
       return;
     }
@@ -593,6 +593,20 @@ export class PersistentMenuManager {
     if (!contentEl && !containerEl) return;
 
     const applyGeometry = () => {
+      this.scheduleMenuGeometryUpdate(view);
+    };
+
+    const observer = new ResizeObserver(() => applyGeometry());
+    if (contentEl) observer.observe(contentEl);
+    if (containerEl && containerEl !== contentEl) observer.observe(containerEl);
+    this.geometryResizeObservers.set(view, observer);
+    applyGeometry();
+  }
+
+  private scheduleMenuGeometryUpdate(view: MarkdownView): void {
+    if (this.menuGeometryFrameIds.has(view)) return;
+    const frameId = window.requestAnimationFrame(() => {
+      this.menuGeometryFrameIds.delete(view);
       const instances = this.menus.get(view);
       if (!instances) return;
       if (instances.reading?.isConnected) {
@@ -601,13 +615,18 @@ export class PersistentMenuManager {
       if (instances.live?.isConnected) {
         this.applyPersistentMenuGeometry(view, instances.live);
       }
-    };
+    });
+    this.menuGeometryFrameIds.set(view, frameId);
+  }
 
-    const observer = new ResizeObserver(() => applyGeometry());
-    if (contentEl) observer.observe(contentEl);
-    if (containerEl && containerEl !== contentEl) observer.observe(containerEl);
-    this.geometryResizeObservers.set(view, observer);
-    applyGeometry();
+  private scheduleInlinePanelGeometryUpdate(view: MarkdownView, panel: HTMLElement): void {
+    if (this.inlinePanelGeometryFrameIds.has(view)) return;
+    const frameId = window.requestAnimationFrame(() => {
+      this.inlinePanelGeometryFrameIds.delete(view);
+      if (!panel.isConnected) return;
+      this.applyInlinePanelGeometry(view, panel);
+    });
+    this.inlinePanelGeometryFrameIds.set(view, frameId);
   }
 
   private detachGeometryObserver(view: MarkdownView): void {
@@ -1064,7 +1083,7 @@ export class PersistentMenuManager {
     // Then, check Notebook Navigator configured icon field and rules
     const pluginsApi: any = (this.plugin.app as any)?.plugins;
     const companion: any = pluginsApi?.plugins?.['tps-notebook-navigator-companion'];
-    const configuredIconField = pickString(companion?.settings?.frontmatterIconField);
+    const configuredIconField = pickString(this.plugin.settings.notebookNavigatorIconField);
     if (configuredIconField) {
       const configuredValue = pickString(this.getFrontmatterValueCaseInsensitive(frontmatter, configuredIconField));
       if (configuredValue) return configuredValue;
@@ -1082,7 +1101,7 @@ export class PersistentMenuManager {
       try {
         const cache = this.plugin.app.metadataCache.getFileCache(file) as any;
         const cacheTags = parseTagInput([...(getAllTags(cache) || []), frontmatter?.tags, frontmatter?.tag]);
-        const visual = ruleEngine.resolveVisualOutputs(companion.settings.rules || [], {
+        const visual = ruleEngine.resolveVisualOutputs(this.plugin.settings.notebookNavigatorRules || [], {
           file: {
             path: file.path,
             name: file.name,
@@ -1130,6 +1149,12 @@ export class PersistentMenuManager {
   }
 
   private ensureInlineTitleIcon(view: MarkdownView): void {
+    const mode = getViewMode(view);
+    if (mode === 'source' && !this.isLivePreviewView(view)) {
+      this.removeInlineTitleIcon(view);
+      return;
+    }
+
     const file = view.file;
     if (!(file instanceof TFile) || file.extension?.toLowerCase() !== 'md') {
       this.removeInlineTitleIcon(view);
@@ -1822,6 +1847,12 @@ export class PersistentMenuManager {
   }
 
   public ensureTopParentNav(view: MarkdownView): void {
+    const mode = getViewMode(view);
+    if (mode === 'source' && !this.isLivePreviewView(view)) {
+      this.removeTopParentNav(view);
+      return;
+    }
+
     if (!this.plugin.settings.enableTopParentNav) {
       this.removeTopParentNav(view);
       return;
@@ -2622,22 +2653,6 @@ export class PersistentMenuManager {
   private attachPanelScrollListener(view: MarkdownView, panel: HTMLElement, container: HTMLElement): void {
     this.detachPanelScrollListener(view);
 
-    const hidePanel = () => {
-      panel.classList.add('tps-gcm-subitems-panel--hidden');
-      // Re-apply geometry to the main menu if needed (so it doesn't jump).
-      // If the panel affects the menu geometry (e.g. by padding), we might need to recalc.
-      // But typically for fixed overlay, we just hide the overlay.
-    };
-
-    const showPanel = () => {
-      if (!panel.isConnected) return;
-      if (this.swipeCollapsed) return;
-      panel.classList.remove('tps-gcm-subitems-panel--hidden');
-      window.requestAnimationFrame(() => {
-        if (panel.isConnected) this.applyInlinePanelGeometry(view, panel);
-      });
-    };
-
     const listener = (evt: Event) => {
       // Check if scroll target is within the menu or panel
       const target = evt.target instanceof Node ? evt.target as HTMLElement : null;
@@ -2653,14 +2668,13 @@ export class PersistentMenuManager {
       const existing = this.scrollListeners.get(view);
       if (existing?.timer) window.clearTimeout(existing.timer);
 
-      hidePanel();
-
-      const timer = window.setTimeout(() => {
-        if (this.scrollListeners.get(view)) showPanel();
-      }, 400);
-
-      const data = this.scrollListeners.get(view);
-      if (data) data.timer = timer;
+      if (this.panelScrollFrameIds.has(view)) return;
+      const frameId = window.requestAnimationFrame(() => {
+        this.panelScrollFrameIds.delete(view);
+        if (!panel.isConnected || this.swipeCollapsed || this.shouldHideForKeyboard()) return;
+        this.scheduleInlinePanelGeometryUpdate(view, panel);
+      });
+      this.panelScrollFrameIds.set(view, frameId);
     };
 
     // Use capture phase to ensure we catch scroll events from children (like preview view)
@@ -2681,6 +2695,11 @@ export class PersistentMenuManager {
       window.clearTimeout(data.timer);
     }
     this.scrollListeners.delete(view);
+    const pendingFrame = this.panelScrollFrameIds.get(view);
+    if (pendingFrame !== undefined) {
+      window.cancelAnimationFrame(pendingFrame);
+      this.panelScrollFrameIds.delete(view);
+    }
   }
 
   private updateLiveHeightVar(): void {
@@ -2839,6 +2858,21 @@ export class PersistentMenuManager {
     }
     this.menus.delete(view);
     this.releaseSwipeGestureTracking(view);
+    const menuFrame = this.menuGeometryFrameIds.get(view);
+    if (menuFrame !== undefined) {
+      window.cancelAnimationFrame(menuFrame);
+      this.menuGeometryFrameIds.delete(view);
+    }
+    const inlineFrame = this.inlinePanelGeometryFrameIds.get(view);
+    if (inlineFrame !== undefined) {
+      window.cancelAnimationFrame(inlineFrame);
+      this.inlinePanelGeometryFrameIds.delete(view);
+    }
+    const panelFrame = this.panelScrollFrameIds.get(view);
+    if (panelFrame !== undefined) {
+      window.cancelAnimationFrame(panelFrame);
+      this.panelScrollFrameIds.delete(view);
+    }
   }
 
   /**
@@ -2868,33 +2902,22 @@ export class PersistentMenuManager {
 
     for (const [view, instances] of this.menus.entries()) {
       if (view.file?.path === file.path) {
-        // Update header badges in-place instead of recreating the entire menu
-        // This prevents visual jitter/movement
+        // Rebuild the inline panel so context-strip chips re-read current frontmatter.
+        // Header badges alone are not enough because the scheduled/status/tag chips live
+        // in the persistent panel body.
 
         if (instances.live) {
           this.applyPersistentMenuGeometry(view, instances.live);
           this.applyMenuVisibility(instances.live);
           this.ensureSwipeGestureTracking(view);
-          const headerRight = instances.live.querySelector('.tps-gcm-header-right');
-          if (headerRight) {
-            // Get updated badges from the controller
-            const newBadges = this.plugin.menuController.createHeaderBadges(file, view.leaf);
-            headerRight.innerHTML = '';
-            headerRight.appendChild(newBadges);
-          }
+          this.replacePersistentPanelContent(view, instances.live);
         }
 
         if (instances.reading) {
           this.applyPersistentMenuGeometry(view, instances.reading);
           this.applyMenuVisibility(instances.reading);
           this.ensureSwipeGestureTracking(view);
-          const headerRight = instances.reading.querySelector('.tps-gcm-header-right');
-          if (headerRight) {
-            // Get updated badges from the controller
-            const newBadges = this.plugin.menuController.createHeaderBadges(file, view.leaf);
-            headerRight.innerHTML = '';
-            headerRight.appendChild(newBadges);
-          }
+          this.replacePersistentPanelContent(view, instances.reading);
         }
 
         if (shouldRebuildInlineSubitems) {
@@ -2904,9 +2927,33 @@ export class PersistentMenuManager {
         this.removeNoteReferencesPanel(view);
         this.removeNoteGraphPanel(view);
         this.ensureInlineTitleIcon(view);
-        this.plugin.inlineTaskSubtaskService?.ensureForView(view);
+        this.plugin.inlineTaskSubtaskService?.ensureForAllMarkdownViews();
         this.ensureTopParentNav(view);
       }
+    }
+  }
+
+  private replacePersistentPanelContent(view: MarkdownView, menuEl: HTMLElement): void {
+    const file = view.file;
+    if (!(file instanceof TFile)) return;
+
+    const existingPanel = menuEl.querySelector(':scope > .tps-gcm-panel');
+    let nextPanel: HTMLElement | null = null;
+    try {
+      nextPanel = this.plugin.buildSpecialPanel(file, {
+        recurrenceRoot: menuEl,
+        closeAfterRecurrence: false,
+      });
+    } catch (error) {
+      logger.error('[TPS GCM] Failed rebuilding persistent panel during refresh:', error);
+      return;
+    }
+
+    if (!nextPanel) return;
+    if (existingPanel?.parentElement === menuEl) {
+      existingPanel.replaceWith(nextPanel);
+    } else {
+      menuEl.appendChild(nextPanel);
     }
   }
 
@@ -2950,5 +2997,17 @@ export class PersistentMenuManager {
       state.scroller.removeEventListener('scroll', state.listener);
       this.scrollHideListeners.delete(view);
     }
+    for (const frameId of this.menuGeometryFrameIds.values()) {
+      window.cancelAnimationFrame(frameId);
+    }
+    for (const frameId of this.inlinePanelGeometryFrameIds.values()) {
+      window.cancelAnimationFrame(frameId);
+    }
+    for (const frameId of this.panelScrollFrameIds.values()) {
+      window.cancelAnimationFrame(frameId);
+    }
+    this.menuGeometryFrameIds.clear();
+    this.inlinePanelGeometryFrameIds.clear();
+    this.panelScrollFrameIds.clear();
   }
 }

@@ -6,7 +6,7 @@ import { normalizeTagValue, normalizeTagList, parseTagInput, mergeNormalizedTags
 import { stripDateSuffix } from '../utils/date-suffix-utils';
 import { ChecklistHandler } from '../handlers/checklist-handler';
 import { ParentLinkHandler } from '../handlers/parent-link-handler';
-import { buildParentLinkValue, linkValueMatchesFile, extractLinkTarget, resolveLinkValueToFile } from '../handlers/parent-link-format';
+import { buildBaseCompatibleParentLinkValue, buildParentLinkValue, linkValueMatchesFile, extractLinkTarget, resolveLinkValueToFile } from '../handlers/parent-link-format';
 import {
     casefold,
     deleteValueCaseInsensitive,
@@ -36,6 +36,62 @@ export class BulkEditService {
         this.plugin = plugin;
         this.checklistHandler = new ChecklistHandler(plugin.app);
         this.parentLinkHandler = new ParentLinkHandler(plugin.app, () => plugin.settings);
+    }
+
+    private isRecurringCompletionStatus(status: unknown): boolean {
+        const recurrenceStatuses = (this.plugin.settings.recurrenceCompletionStatuses?.length
+            ? this.plugin.settings.recurrenceCompletionStatuses
+            : ['complete', 'wont-do']
+        ).map((s: string) => String(s || '').trim().toLowerCase()).filter(Boolean);
+
+        return recurrenceStatuses.includes(String(status ?? '').trim().toLowerCase());
+    }
+
+    private isScheduledPastDue(rawScheduled: unknown): boolean {
+        const text = String(rawScheduled ?? '').trim();
+        if (!text) return false;
+
+        const scheduled = window.moment(text);
+        if (!scheduled?.isValid?.()) return false;
+
+        const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(text);
+        const cutoff = isDateOnly ? scheduled.clone().endOf('day') : scheduled;
+        return window.moment().isAfter(cutoff);
+    }
+
+    async advanceRecurringInstanceIfPastDue(file: TFile): Promise<boolean> {
+        if (!this.plugin.settings.enableRecurrence) return false;
+        if (!(file instanceof TFile) || file.extension !== 'md') return false;
+        if (!this.plugin.isInitialSyncSettled()) return false;
+
+        const cache = this.plugin.app.metadataCache.getFileCache(file);
+        const fm = cache?.frontmatter;
+        if (!fm) return false;
+
+        const recurrenceRule = fm.recurrenceRule || fm.recurrence;
+        if (!recurrenceRule) return false;
+        if (this.isTemplateFrontmatter(fm)) return false;
+        if (this.isRecurringCompletionStatus(fm.status)) return false;
+        if (!this.isScheduledPastDue(fm.scheduled)) return false;
+
+        logger.log('[TPS GCM] Advancing overdue recurring instance:', {
+            file: file.path,
+            scheduled: fm.scheduled,
+            recurrenceRule,
+            status: fm.status ?? '',
+        });
+
+        return await this.createNextRecurrenceInstance(file, fm);
+    }
+
+    private async syncClearedLinkedSubitemStatuses(files: TFile[]): Promise<void> {
+        for (const file of files) {
+            try {
+                await this.plugin.linkedSubitemCheckboxService?.syncClearedStatusAcrossParents(file);
+            } catch (error) {
+                logger.warn(`[TPS GCM] Failed syncing cleared linked-subitem status for ${file.path}:`, error);
+            }
+        }
     }
 
     private getRecurrenceStatePath(): string {
@@ -99,8 +155,13 @@ export class BulkEditService {
         const explicit = explicitKey ? String(frontmatter?.[explicitKey] ?? '').trim() : '';
         if (explicit) return explicit;
 
+        const templateFile = this.resolveCanonicalTemplateFile(file, frontmatter);
+        if (templateFile instanceof TFile) {
+            return normalizePath(templateFile.path).toLowerCase();
+        }
+
         const baseName = stripDateSuffix(file.basename || '').trim().toLowerCase();
-        return baseName;
+        return `${baseName}|${String(recurrenceRule || '').trim().toLowerCase()}`;
     }
 
     private buildRecurrenceOpKey(chainId: string, scheduled: string): string {
@@ -194,8 +255,66 @@ export class BulkEditService {
         return String(value ?? '').trim().toLowerCase();
     }
 
+    private parseRecurrenceSeedDate(value: unknown): Date | null {
+        const text = String(value ?? '').trim();
+        if (!text) return null;
+
+        const parsed = window.moment(text, [
+            'YYYY-MM-DD HH:mm:ss',
+            'YYYY-MM-DD HH:mm',
+            'YYYY-MM-DD',
+            'YYYY-MM-DDTHH:mm:ss',
+            'YYYY-MM-DDTHH:mm',
+            window.moment.ISO_8601,
+        ], true);
+        if (parsed?.isValid?.()) {
+            return parsed.toDate();
+        }
+
+        const fallback = window.moment(text);
+        return fallback?.isValid?.() ? fallback.toDate() : null;
+    }
+
+    private getRecurrenceAnchorValue(frontmatter: any): string {
+        return String(
+            frontmatter?.recurrenceStarted
+            ?? frontmatter?.scheduled
+            ?? frontmatter?.start
+            ?? frontmatter?.date
+            ?? frontmatter?.day
+            ?? ''
+        ).trim();
+    }
+
+    private getChecklistCompletionStatuses(): Set<string> {
+        const normalized = new Set<string>();
+        const addStatuses = (values: unknown) => {
+            if (!Array.isArray(values)) return;
+            for (const value of values) {
+                const status = this.normalizeStatusValue(value);
+                if (status) normalized.add(status);
+            }
+        };
+
+        addStatuses(this.plugin.settings.recurrenceCompletionStatuses);
+        addStatuses(this.plugin.settings.parentCompletionStatuses);
+
+        if (normalized.size === 0) {
+            normalized.add('complete');
+            normalized.add('wont-do');
+        }
+
+        return normalized;
+    }
+
+    private shouldPromptChecklistOnStatus(status: unknown): boolean {
+        const normalizedStatus = this.normalizeStatusValue(status);
+        if (!normalizedStatus) return false;
+        return this.getChecklistCompletionStatuses().has(normalizedStatus);
+    }
+
     private getProtectedIdentityKeys(): Set<string> {
-        const keys = new Set<string>(['externaleventid', 'tpscalendaruid']);
+        const keys = new Set<string>(['externaleventid', 'tpscalendaruid', 'subitemid']);
         const pluginsApi: any = (this.plugin.app as any)?.plugins;
         const controller: any = pluginsApi?.getPlugin?.('tps-controller');
         const calendarBase: any = pluginsApi?.getPlugin?.('tps-calendar-base');
@@ -231,35 +350,151 @@ export class BulkEditService {
         deleteValueCaseInsensitive(target, key);
     }
 
-    private buildRecurrenceTemplateLink(templateFile: TFile, instanceFile: TFile, seriesBaseName: string): string {
-        try {
-            const linktext = this.plugin.app.metadataCache.fileToLinktext(templateFile, instanceFile.path, true);
-            if (linktext && linktext.trim()) {
-                return `[[${linktext}]]`;
-            }
-        } catch {
-            // Fall back below
+    private buildCanonicalRecurrenceTemplateValue(templateFile: TFile): string {
+        return normalizePath(templateFile.path);
+    }
+
+    private getRawRecurrenceTemplateValue(frontmatter: any): string {
+        if (!frontmatter) return '';
+        return String(frontmatter.recurrenceTemplate ?? frontmatter.recurrencetemplate ?? '').trim();
+    }
+
+    private isTemplateFrontmatter(frontmatter: any): boolean {
+        return String(frontmatter?.isRecurrenceTemplate ?? '').trim().toLowerCase() === 'true';
+    }
+
+    private getSeriesBaseName(file: TFile): string {
+        return stripDateSuffix(file.basename || '').trim();
+    }
+
+    private getSeriesBaseNameLower(file: TFile): string {
+        return this.getSeriesBaseName(file).toLowerCase();
+    }
+
+    private findTemplateCandidatesBySeriesName(seriesName: string, excludePath?: string): TFile[] {
+        const normalizedSeries = String(seriesName || '').trim().toLowerCase();
+        if (!normalizedSeries) return [];
+
+        return this.plugin.app.vault.getMarkdownFiles().filter((candidate) => {
+            if (excludePath && normalizePath(candidate.path) === normalizePath(excludePath)) return false;
+            const cache = this.plugin.app.metadataCache.getFileCache(candidate);
+            const fm = cache?.frontmatter;
+            if (!this.isTemplateFrontmatter(fm)) return false;
+            return this.getSeriesBaseNameLower(candidate) === normalizedSeries;
+        });
+    }
+
+    private resolveTemplateReferenceFromRaw(rawValue: string, sourceFile?: TFile | null): TFile | null {
+        const trimmed = String(rawValue || '').trim();
+        if (!trimmed || trimmed === 'true' || trimmed === 'false') {
+            return null;
         }
-        return `[[${seriesBaseName}]]`;
+
+        const exactPath = normalizePath(trimmed);
+        const exactMatch = this.plugin.app.vault.getAbstractFileByPath(exactPath);
+        if (exactMatch instanceof TFile) {
+            const cache = this.plugin.app.metadataCache.getFileCache(exactMatch);
+            if (this.isTemplateFrontmatter(cache?.frontmatter)) {
+                return exactMatch;
+            }
+        }
+
+        const linkTarget = extractLinkTarget(trimmed);
+        if (linkTarget) {
+            const resolved = sourceFile
+                ? this.plugin.app.metadataCache.getFirstLinkpathDest(linkTarget, sourceFile.path)
+                : this.plugin.app.vault.getAbstractFileByPath(normalizePath(linkTarget));
+            if (resolved instanceof TFile) {
+                const cache = this.plugin.app.metadataCache.getFileCache(resolved);
+                if (this.isTemplateFrontmatter(cache?.frontmatter)) {
+                    return resolved;
+                }
+            }
+
+            const basename = linkTarget.split('/').pop()?.replace(/\.md$/i, '') || '';
+            const candidates = this.findTemplateCandidatesBySeriesName(stripDateSuffix(basename).trim(), sourceFile?.path);
+            if (candidates.length === 1) {
+                return candidates[0];
+            }
+        }
+
+        return null;
+    }
+
+    private resolveCanonicalTemplateFile(file: TFile, frontmatter: any): TFile | null {
+        const rawValue = this.getRawRecurrenceTemplateValue(frontmatter);
+        const fromReference = this.resolveTemplateReferenceFromRaw(rawValue, file);
+        if (fromReference && normalizePath(fromReference.path) !== normalizePath(file.path)) {
+            return fromReference;
+        }
+
+        const seriesName = this.getSeriesBaseName(file);
+        const candidates = this.findTemplateCandidatesBySeriesName(seriesName, file.path);
+        if (candidates.length === 1) {
+            return candidates[0];
+        }
+
+        return null;
+    }
+
+    private async normalizeRecurrenceMetadata(file: TFile, frontmatter: any): Promise<{ templateFile: TFile | null; isTemplate: boolean; changed: boolean }> {
+        const isTemplate = this.isTemplateFrontmatter(frontmatter);
+        const resolvedTemplate = !isTemplate ? this.resolveCanonicalTemplateFile(file, frontmatter) : null;
+        const currentTemplateValue = this.getRawRecurrenceTemplateValue(frontmatter);
+        const nextTemplateValue = resolvedTemplate ? this.buildCanonicalRecurrenceTemplateValue(resolvedTemplate) : '';
+        const hasScheduled = Boolean(String(frontmatter?.scheduled ?? '').trim());
+        const hasCompletedDate = Boolean(String(frontmatter?.completedDate ?? frontmatter?.completeddate ?? '').trim());
+
+        const shouldRewriteTemplateValue = !isTemplate && resolvedTemplate && currentTemplateValue !== nextTemplateValue;
+        const shouldStripTemplateFields = isTemplate && (hasScheduled || hasCompletedDate || currentTemplateValue);
+        const shouldStripTemplateFlag = !isTemplate && String(frontmatter?.isRecurrenceTemplate ?? '').trim().length > 0;
+
+        if (!shouldRewriteTemplateValue && !shouldStripTemplateFields && !shouldStripTemplateFlag) {
+            return { templateFile: resolvedTemplate, isTemplate, changed: false };
+        }
+
+        if (!(await this.canMutateFrontmatterSafely(file))) {
+            return { templateFile: resolvedTemplate, isTemplate, changed: false };
+        }
+
+        await this.runSerializedFrontmatterWrite(file, async () => {
+            await this.plugin.frontmatterMutationService.process(file, (fmw) => {
+                if (isTemplate) {
+                    this.setFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate', true);
+                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'scheduled');
+                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'completedDate');
+                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate');
+                    return;
+                }
+
+                this.deleteFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate');
+                if (nextTemplateValue) {
+                    this.setFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate', nextTemplateValue);
+                } else if (currentTemplateValue && !resolvedTemplate) {
+                    // Keep unresolved legacy values intact so the user can repair them manually.
+                    this.setFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate', currentTemplateValue);
+                }
+            });
+        });
+
+        return { templateFile: resolvedTemplate, isTemplate, changed: true };
     }
 
     private frontmatterReferencesSeriesTemplate(frontmatter: any, seriesName: string, templateFile?: TFile | null): boolean {
         if (!frontmatter) return false;
-        const rawLink = String(frontmatter.recurrenceTemplate ?? frontmatter.recurrencetemplate ?? '').trim();
+        const rawLink = this.getRawRecurrenceTemplateValue(frontmatter);
         if (!rawLink) return false;
+
+        const resolved = this.resolveTemplateReferenceFromRaw(rawLink);
+        if (resolved && templateFile) {
+            return normalizePath(resolved.path) === normalizePath(templateFile.path);
+        }
+        if (resolved && !templateFile) {
+            return this.getSeriesBaseNameLower(resolved) === String(seriesName || '').trim().toLowerCase();
+        }
 
         const normalizedSeries = String(seriesName || '').trim().toLowerCase();
         const target = extractLinkTarget(rawLink).toLowerCase();
-        const templatePath = templateFile?.path ? normalizePath(templateFile.path).toLowerCase() : '';
-
-        if (templatePath && (target === templatePath || target.endsWith(`/${templatePath.split('/').pop()}`))) {
-            return true;
-        }
-
-        if (!target) {
-            return rawLink.toLowerCase().includes(`[[${normalizedSeries}]]`);
-        }
-
         const targetBase = target.split('/').pop()?.replace(/\.md$/i, '') || '';
         return targetBase === normalizedSeries;
     }
@@ -301,6 +536,16 @@ export class BulkEditService {
         }
     }
 
+    private async syncFolderPathForFiles(files: TFile[]): Promise<void> {
+        for (const file of files) {
+            try {
+                await this.plugin.fileNamingService?.syncFolderPath(file);
+            } catch (error) {
+                logger.warn(`[TPS GCM] Failed syncing folderPath for ${file.path}:`, error);
+            }
+        }
+    }
+
     async runSerializedFrontmatterWrite(file: TFile, action: () => Promise<void>): Promise<void> {
         const key = file.path;
         const previous = this.frontmatterWriteChains.get(key) ?? Promise.resolve();
@@ -327,9 +572,13 @@ export class BulkEditService {
         }
     }
 
-    async canMutateFrontmatterSafely(file: TFile): Promise<boolean> {
+    async canMutateFrontmatterSafely(file: TFile, options?: { userInitiated?: boolean }): Promise<boolean> {
         if (!(file instanceof TFile)) return false;
         if (file.extension?.toLowerCase() !== 'md') return false;
+        if (!this.plugin.isInitialSyncSettled() && !this.isUserInitiatedAction(options)) {
+            this.plugin.notifySyncBlockedAction('frontmatter write');
+            return false;
+        }
 
         await this.normalizeLeadingWhitespaceBeforeFrontmatter(file);
         const issue = await this.getUnsafeFrontmatterIssue(file);
@@ -451,17 +700,21 @@ export class BulkEditService {
             .some((line) => /^[A-Za-z0-9_"'.-]+\s*:/.test(line));
     }
 
-    async applyToFiles(files: TFile[], callback: (fm: any, file: TFile) => void): Promise<number> {
+    private isUserInitiatedAction(options?: { userInitiated?: boolean }): boolean {
+        return options?.userInitiated === true;
+    }
+
+    async applyToFiles(files: TFile[], callback: (fm: any, file: TFile) => void, options?: { userInitiated?: boolean }): Promise<number> {
         let count = 0;
         const updatedFiles: TFile[] = [];
 
         await runInBatches(files, async (file) => {
             try {
                 if (file.extension?.toLowerCase() !== 'md') return;
-                if (!(await this.canMutateFrontmatterSafely(file))) return;
+                if (!(await this.canMutateFrontmatterSafely(file, options))) return;
                 await this.runSerializedFrontmatterWrite(file, async () => {
                     this.plugin.recurrenceService?.markFileAsModified(file.path);
-                    await this.plugin.app.fileManager.processFrontMatter(file, (fm) => {
+                    await this.plugin.frontmatterMutationService.process(file, (fm) => {
                         callback(fm, file);
                     });
                 });
@@ -470,7 +723,9 @@ export class BulkEditService {
             } catch (e) {
                 logger.error(`[TPS GCM] Failed to update ${file.path}:`, e);
             }
-        }, 40);
+        }, 1);
+
+        await this.syncFolderPathForFiles(updatedFiles);
 
         setTimeout(() => {
             for (const file of updatedFiles) {
@@ -485,7 +740,7 @@ export class BulkEditService {
         return count;
     }
 
-    async updateFrontmatter(files: TFile[], updates: Record<string, any>): Promise<number> {
+    async updateFrontmatter(files: TFile[], updates: Record<string, any>, options?: { userInitiated?: boolean }): Promise<number> {
         const blockedKeys = Object.keys(updates).filter((key) => this.isProtectedIdentityKey(key));
         if (blockedKeys.length > 0) {
             blockedKeys.forEach((key) => delete updates[key]);
@@ -509,8 +764,8 @@ export class BulkEditService {
         // Checklist Prompt Logic (Single file only to avoid spam)
         if (
             this.plugin.settings.checkOpenChecklistItems &&
-            updates.status === 'complete' &&
-            files.length === 1
+            files.length === 1 &&
+            this.shouldPromptChecklistOnStatus(updates.status)
         ) {
             const canProceed = await this.checklistHandler.handleChecklistCompletion(files[0]);
             if (!canProceed) {
@@ -519,6 +774,7 @@ export class BulkEditService {
         }
 
         // Check if any files have recurrence rules (if prompting is enabled)
+        const recurrenceFolderMoveCandidates: Array<{ file: TFile; folderPath: string }> = [];
         if (this.plugin.settings.enableRecurrence && this.plugin.settings.promptOnRecurrenceEdit) {
             for (const file of files) {
                 const cache = this.plugin.app.metadataCache.getFileCache(file);
@@ -532,6 +788,7 @@ export class BulkEditService {
 
                     let changeDesc = 'updating';
                     if (changeKeys.includes('scheduled')) changeDesc = 'changing the scheduled time of';
+                    else if (changeKeys.includes('folderPath')) changeDesc = 'changing the folder of';
                     else if (changeKeys.includes('priority')) changeDesc = 'changing the priority of';
                     else if (changeKeys.some(k => k.includes('tag'))) changeDesc = 'modifying tags on';
 
@@ -539,6 +796,9 @@ export class BulkEditService {
 
                     if (result === 'cancel') {
                         return 0;
+                    }
+                    if (result === 'update-all' && typeof updates.folderPath === 'string' && updates.folderPath.trim()) {
+                        recurrenceFolderMoveCandidates.push({ file, folderPath: updates.folderPath });
                     }
                 }
             }
@@ -552,6 +812,7 @@ export class BulkEditService {
         );
         const hasStatusUpdate = Object.prototype.hasOwnProperty.call(updates, 'status');
         const targetStatus = hasStatusUpdate ? this.normalizeStatusValue(updates.status) : '';
+        const shouldSyncClearedLinkedSubitemStatus = hasStatusUpdate && !targetStatus;
 
         if (hasStatusUpdate) {
             if (targetStatus === 'complete') {
@@ -603,7 +864,7 @@ export class BulkEditService {
 
                 this.setFrontmatterValueCaseInsensitive(fm, key, value);
             }
-        });
+        }, options);
 
         if (count > 0 && recurrenceCandidates.length > 0) {
             for (const candidate of recurrenceCandidates) {
@@ -618,6 +879,16 @@ export class BulkEditService {
             }
         }
 
+        if (shouldSyncClearedLinkedSubitemStatus) {
+            await this.syncClearedLinkedSubitemStatuses(files);
+        }
+
+        if (count > 0 && recurrenceFolderMoveCandidates.length > 0) {
+            for (const candidate of recurrenceFolderMoveCandidates) {
+                await this.propagateRecurringFolderMove(candidate.file, candidate.folderPath);
+            }
+        }
+
         const keys = Object.keys(updates);
         if (count > 0 && keys.length > 0) {
             void this.plugin.viewModeManager?.handlePotentialFrontmatterChange(files, keys);
@@ -625,7 +896,7 @@ export class BulkEditService {
         return count;
     }
 
-    async setStatus(files: TFile[], status: string): Promise<number> {
+    async setStatus(files: TFile[], status: string, options?: { userInitiated?: boolean }): Promise<number> {
         // Parent link prompt (single file to avoid spam)
         if (
             this.plugin.settings.checkParentLinkStatuses &&
@@ -644,8 +915,8 @@ export class BulkEditService {
         // Checklist Prompt Logic (Single file only to avoid spam)
         if (
             this.plugin.settings.checkOpenChecklistItems &&
-            status === 'complete' &&
-            files.length === 1
+            files.length === 1 &&
+            this.shouldPromptChecklistOnStatus(status)
         ) {
             const canProceed = await this.checklistHandler.handleChecklistCompletion(files[0]);
             if (!canProceed) {
@@ -653,11 +924,11 @@ export class BulkEditService {
             }
         }
 
-        return this.updateFrontmatter(files, { status });
+        return this.updateFrontmatter(files, { status }, options);
     }
 
-    async setPriority(files: TFile[], priority: string): Promise<number> {
-        return this.updateFrontmatter(files, { priority });
+    async setPriority(files: TFile[], priority: string, options?: { userInitiated?: boolean }): Promise<number> {
+        return this.updateFrontmatter(files, { priority }, options);
     }
 
     async addTag(files: TFile[], tag: string, key: string = 'tags'): Promise<number> {
@@ -736,7 +1007,7 @@ export class BulkEditService {
                 await this.runSerializedFrontmatterWrite(file, async () => {
                     this.plugin.recurrenceService?.markFileAsModified(file.path);
 
-                    await this.plugin.app.fileManager.processFrontMatter(file, (fm) => {
+                    await this.plugin.frontmatterMutationService.process(file, (fm) => {
                         if (!fm || typeof fm !== 'object') return;
 
                         if (this.isTagFrontmatterKey(normalizedField) || this.isAliasFrontmatterKey(normalizedField)) {
@@ -785,7 +1056,7 @@ export class BulkEditService {
             } catch (e) {
                 logger.error(`[TPS GCM] Failed to remove tag from ${file.path}:`, e);
             }
-        }, 40);
+        }, 1);
 
         setTimeout(() => {
             for (const file of updatedFiles) {
@@ -804,11 +1075,18 @@ export class BulkEditService {
         const count = await this.applyToFiles(files, (fm) => {
             if (rule) {
                 this.setFrontmatterValueCaseInsensitive(fm, 'recurrenceRule', rule);
+                const anchor = this.getRecurrenceAnchorValue(fm);
+                if (anchor) {
+                    this.setFrontmatterValueCaseInsensitive(fm, 'recurrenceStarted', anchor);
+                }
                 this.deleteFrontmatterValueCaseInsensitive(fm, 'recurrence');
             } else {
                 this.deleteFrontmatterValueCaseInsensitive(fm, 'recurrenceRule');
                 this.deleteFrontmatterValueCaseInsensitive(fm, 'recurrence');
+                this.deleteFrontmatterValueCaseInsensitive(fm, 'recurrenceStarted');
             }
+            if (rule && endsOn) this.setFrontmatterValueCaseInsensitive(fm, 'recurrenceEnds', endsOn);
+            else if (!rule || !endsOn) this.deleteFrontmatterValueCaseInsensitive(fm, 'recurrenceEnds');
         });
 
         if (rule && this.plugin.settings.enableRecurrence) {
@@ -847,12 +1125,13 @@ export class BulkEditService {
             try {
                 const cache = this.plugin.app.metadataCache.getFileCache(file);
                 const fm = cache?.frontmatter;
+                await this.normalizeRecurrenceMetadata(file, fm);
                 // Skip if this is already a template
-                if (fm?.isRecurrenceTemplate) continue;
+                if (this.isTemplateFrontmatter(fm)) continue;
 
                 // Build destination path — template is named after the series (date suffix stripped)
                 // so all instances of the same recurring event share one template.
-                const seriesBaseName = stripDateSuffix(file.basename).trim();
+                const seriesBaseName = this.getSeriesBaseName(file);
                 const destFolderPath = normalizePath(templateFolder);
                 const destFilePath = normalizePath(`${destFolderPath}/${seriesBaseName}.md`);
 
@@ -870,12 +1149,13 @@ export class BulkEditService {
                     if (fm && existingTemplate instanceof TFile && !this.frontmatterReferencesSeriesTemplate(fm, seriesBaseName, existingTemplate)) {
                         if (await this.canMutateFrontmatterSafely(file)) {
                             await this.runSerializedFrontmatterWrite(file, async () => {
-                                await this.plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+                                await this.plugin.frontmatterMutationService.process(file, (fmw) => {
                                     this.setFrontmatterValueCaseInsensitive(
                                         fmw,
                                         'recurrenceTemplate',
-                                        this.buildRecurrenceTemplateLink(existingTemplate, file, seriesBaseName),
+                                        this.buildCanonicalRecurrenceTemplateValue(existingTemplate),
                                     );
+                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate');
                                 });
                             });
                         }
@@ -892,7 +1172,7 @@ export class BulkEditService {
 
                 // Mark the template copy — strip all instance-specific fields so it
                 // represents a clean "blueprint" for every future instance in this series.
-                await this.plugin.app.fileManager.processFrontMatter(templateFile, (fmw) => {
+                await this.plugin.frontmatterMutationService.process(templateFile, (fmw) => {
                     this.setFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate', true);
                     // Remove fields that belong to a specific instance, not the series
                     this.deleteFrontmatterValueCaseInsensitive(fmw, 'scheduled');
@@ -917,12 +1197,13 @@ export class BulkEditService {
                 // Add back-link from instance to the series template
                 if (await this.canMutateFrontmatterSafely(file)) {
                     await this.runSerializedFrontmatterWrite(file, async () => {
-                        await this.plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+                        await this.plugin.frontmatterMutationService.process(file, (fmw) => {
                             this.setFrontmatterValueCaseInsensitive(
                                 fmw,
                                 'recurrenceTemplate',
-                                this.buildRecurrenceTemplateLink(templateFile, file, seriesBaseName),
+                                this.buildCanonicalRecurrenceTemplateValue(templateFile),
                             );
+                            this.deleteFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate');
                         });
                     });
                 }
@@ -976,13 +1257,7 @@ export class BulkEditService {
 
     getNextOccurrence(recurrenceRule: string, currentDate?: string): Date | null {
         try {
-            // Use moment to parse so date-only strings (e.g. "2026-03-02") are
-            // interpreted as local midnight rather than UTC midnight. Without this,
-            // in timezones behind UTC the "next" occurrence can fall on the same
-            // local calendar day as the seed date.
-            const startDate = currentDate
-                ? window.moment(currentDate).toDate()
-                : new Date();
+            const startDate = this.parseRecurrenceSeedDate(currentDate) ?? new Date();
 
             const options = RRule.parseString(recurrenceRule);
             options.dtstart = startDate;
@@ -997,18 +1272,11 @@ export class BulkEditService {
         }
     }
 
-    private isFileInRecurrenceTemplateFolder(file: TFile): boolean {
-        const templateFolder = normalizePath((this.plugin.settings.recurringTemplateFolder || '').trim());
-        if (!templateFolder) return false;
-        const filePath = normalizePath(file.path);
-        return filePath === templateFolder || filePath.startsWith(`${templateFolder}/`);
-    }
-
-    private getFirstOccurrenceFromToday(recurrenceRule: string): Date | null {
+    private getFirstOccurrenceFromToday(recurrenceRule: string, seedDate?: string): Date | null {
         try {
             const todayStart = window.moment().startOf('day').toDate();
             const options = RRule.parseString(recurrenceRule);
-            options.dtstart = todayStart;
+            options.dtstart = this.parseRecurrenceSeedDate(seedDate) ?? todayStart;
             const rule = new RRule(options);
             return rule.after(todayStart, true);
         } catch (error) {
@@ -1017,18 +1285,36 @@ export class BulkEditService {
         }
     }
 
+    private async ensureFolderExists(folderPath: string): Promise<void> {
+        const normalized = normalizePath(folderPath || '').trim();
+        if (!normalized || normalized === '/') return;
+        const exists = await this.plugin.app.vault.adapter.exists(normalized);
+        if (!exists) {
+            await this.plugin.app.vault.createFolder(normalized);
+        }
+    }
+
+    private resolveRecurrenceInstanceFolder(sourceFile: TFile, frontmatter: any): string {
+        const folderPath = String(frontmatter?.folderPath ?? '').trim();
+        if (folderPath && folderPath !== '/' && !folderPath.endsWith('.md')) {
+            return normalizePath(folderPath);
+        }
+        return normalizePath(sourceFile.parent?.path || '');
+    }
+
     private async bootstrapTemplateInstanceFromToday(templateFile: TFile, frontmatter: any): Promise<boolean> {
         const recurrenceRule = frontmatter?.recurrenceRule || frontmatter?.recurrence;
         if (!recurrenceRule) return false;
+        if (!this.isTemplateFrontmatter(frontmatter)) return false;
 
-        const seriesBaseName = stripDateSuffix(templateFile.basename).trim();
+        const seriesBaseName = this.getSeriesBaseName(templateFile);
         if (!seriesBaseName) return false;
 
         const existingInstances = this.plugin.app.vault.getMarkdownFiles().filter((candidate) => {
             if (candidate.path === templateFile.path) return false;
             const cache = this.plugin.app.metadataCache.getFileCache(candidate);
             const fm = cache?.frontmatter;
-            if (!fm || fm.isRecurrenceTemplate) return false;
+            if (!fm || this.isTemplateFrontmatter(fm)) return false;
             return this.frontmatterReferencesSeriesTemplate(fm, seriesBaseName, templateFile);
         });
 
@@ -1036,13 +1322,17 @@ export class BulkEditService {
             return false;
         }
 
-        const firstOccurrence = this.getFirstOccurrenceFromToday(recurrenceRule);
+        const firstOccurrence = this.getFirstOccurrenceFromToday(
+            recurrenceRule,
+            this.getRecurrenceAnchorValue(frontmatter),
+        );
         if (!firstOccurrence) return false;
 
         const dateStr = window.moment(firstOccurrence).format(this.getDailyNoteDateFormat());
         const newFileName = `${seriesBaseName} ${dateStr}.md`;
-        const parentPath = templateFile.parent?.path || '';
-        const newFilePath = normalizePath(parentPath ? `${parentPath}/${newFileName}` : newFileName);
+        const instanceFolder = this.resolveRecurrenceInstanceFolder(templateFile, frontmatter);
+        await this.ensureFolderExists(instanceFolder);
+        const newFilePath = normalizePath(instanceFolder ? `${instanceFolder}/${newFileName}` : newFileName);
 
         const exists = this.plugin.app.vault.getAbstractFileByPath(newFilePath);
         if (exists instanceof TFile) {
@@ -1054,12 +1344,12 @@ export class BulkEditService {
         if (!(created instanceof TFile)) return false;
 
         const scheduled = window.moment(firstOccurrence).format('YYYY-MM-DD HH:mm:ss');
-        await this.plugin.app.fileManager.processFrontMatter(created, (fmw) => {
+        await this.plugin.frontmatterMutationService.process(created, (fmw) => {
             this.setFrontmatterValueCaseInsensitive(fmw, 'scheduled', scheduled);
             this.setFrontmatterValueCaseInsensitive(
                 fmw,
                 'recurrenceTemplate',
-                this.buildRecurrenceTemplateLink(templateFile, created, seriesBaseName),
+                this.buildCanonicalRecurrenceTemplateValue(templateFile),
             );
             this.deleteFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate');
             this.deleteFrontmatterValueCaseInsensitive(fmw, 'completedDate');
@@ -1080,7 +1370,10 @@ export class BulkEditService {
         // creating historical "open" notes that can retrigger reminders.
         let guard = 0;
         while (nextDate && nextDate <= now && guard < 500) {
-            nextDate = this.getNextOccurrence(recurrenceRule, nextDate.toISOString());
+            nextDate = this.getNextOccurrence(
+                recurrenceRule,
+                window.moment(nextDate).format('YYYY-MM-DD HH:mm:ss'),
+            );
             guard += 1;
         }
 
@@ -1100,6 +1393,12 @@ export class BulkEditService {
         this.recurrenceCreationInProgress.add(file.path);
 
         try {
+            const normalized = await this.normalizeRecurrenceMetadata(file, frontmatter);
+            if (normalized.isTemplate) {
+                logger.warn('[TPS GCM] Refusing to create next recurrence from template note:', file.path);
+                return false;
+            }
+
             const recurrenceRule = frontmatter.recurrenceRule || frontmatter.recurrence;
             if (!recurrenceRule) return false;
 
@@ -1113,36 +1412,30 @@ export class BulkEditService {
                 return true;
             }
 
-            const baseName = stripDateSuffix(file.basename);
+            const baseName = this.getSeriesBaseName(file);
 
             // Prefer the series template as the content source so each new instance
             // starts from a clean blueprint rather than cloning the completing file.
-            const recurrenceTemplateFolderSetting = (this.plugin.settings.recurringTemplateFolder || '').trim();
             let contentSource: TFile = file;
-            let seriesTemplateFile: TFile | null = null;
-            if (recurrenceTemplateFolderSetting) {
-                const templatePath = normalizePath(`${recurrenceTemplateFolderSetting}/${baseName}.md`);
-                const existingTemplate = this.plugin.app.vault.getAbstractFileByPath(templatePath);
-                if (existingTemplate instanceof TFile) {
-                    seriesTemplateFile = existingTemplate;
-                    contentSource = seriesTemplateFile;
-                    logger.log('[TPS GCM] Using series template for next recurrence instance:', templatePath);
-                } else {
-                    logger.log('[TPS GCM] No series template found at', templatePath, '— creating/relinking template now');
-                    await this.ensureRecurrenceTemplate([file]);
-                    const createdTemplate = this.plugin.app.vault.getAbstractFileByPath(templatePath);
-                    if (createdTemplate instanceof TFile) {
-                        seriesTemplateFile = createdTemplate;
-                        contentSource = seriesTemplateFile;
-                    } else {
-                        logger.log('[TPS GCM] Template still missing after ensureRecurrenceTemplate, cloning completing instance instead');
-                    }
-                }
+            let seriesTemplateFile: TFile | null = normalized.templateFile;
+            if (seriesTemplateFile instanceof TFile) {
+                contentSource = seriesTemplateFile;
+                logger.log('[TPS GCM] Using series template for next recurrence instance:', seriesTemplateFile.path);
+            } else {
+                logger.warn('[TPS GCM] Recurrence template not found; refusing to create next instance', {
+                    file: file.path,
+                    recurrenceTemplate: this.getRawRecurrenceTemplateValue(frontmatter),
+                });
+                new Notice(`Recurring template missing for "${file.basename}". The series template was deleted.`);
+                await this.clearRecurrenceRule(file);
+                return false;
             }
 
             const dateStr = window.moment(nextDate).format(this.getDailyNoteDateFormat());
             const newFileName = `${baseName} ${dateStr}.md`;
-            const newFilePath = file.parent ? `${file.parent.path}/${newFileName}` : newFileName;
+            const targetFolder = this.resolveRecurrenceInstanceFolder(contentSource, frontmatter);
+            await this.ensureFolderExists(targetFolder);
+            const newFilePath = normalizePath(targetFolder ? `${targetFolder}/${newFileName}` : newFileName);
             const chainId = this.resolveRecurrenceChainId(file, frontmatter, recurrenceRule);
             const newScheduled = window.moment(nextDate).format('YYYY-MM-DD HH:mm:ss');
             const recurrenceOpKey = this.buildRecurrenceOpKey(chainId, newScheduled);
@@ -1195,7 +1488,7 @@ export class BulkEditService {
                 throw new Error(`Invalid title value: ${baseName}`);
             }
 
-            await this.plugin.app.fileManager.processFrontMatter(newFile, (fm) => {
+            await this.plugin.frontmatterMutationService.process(newFile, (fm) => {
                 this.setFrontmatterValueCaseInsensitive(fm, 'scheduled', newScheduled);
                 // Only write status if a default was explicitly configured
                 if (newStatus) {
@@ -1207,11 +1500,11 @@ export class BulkEditService {
 
                 // Restore the recurrenceTemplate back-link (may be absent if content
                 // was read from the series template which intentionally omits it).
-                if (recurrenceTemplateFolderSetting && seriesTemplateFile instanceof TFile) {
+                if (seriesTemplateFile instanceof TFile) {
                     this.setFrontmatterValueCaseInsensitive(
                         fm,
                         'recurrenceTemplate',
-                        this.buildRecurrenceTemplateLink(seriesTemplateFile, newFile, baseName),
+                        this.buildCanonicalRecurrenceTemplateValue(seriesTemplateFile),
                     );
                 }
 
@@ -1250,6 +1543,82 @@ export class BulkEditService {
         }
     }
 
+    async propagateRecurringFolderMove(file: TFile, targetFolder: string): Promise<number> {
+        const normalizedTargetFolder = normalizePath(targetFolder || '').trim() || '/';
+        const cache = this.plugin.app.metadataCache.getFileCache(file);
+        const fm = cache?.frontmatter;
+        if (!fm) return 0;
+
+        const normalized = await this.normalizeRecurrenceMetadata(file, fm);
+        const templateFile = normalized.isTemplate ? file : normalized.templateFile;
+        if (!(templateFile instanceof TFile)) return 0;
+
+        const completionSet = new Set(
+            (this.plugin.settings.recurrenceCompletionStatuses?.length
+                ? this.plugin.settings.recurrenceCompletionStatuses
+                : ['complete', 'wont-do']
+            ).map((s: string) => this.normalizeStatusValue(s)).filter(Boolean)
+        );
+
+        const movedFiles: TFile[] = [];
+        for (const candidate of this.plugin.app.vault.getMarkdownFiles()) {
+            if (normalizePath(candidate.path) === normalizePath(templateFile.path)) continue;
+            if (normalizePath(candidate.path) === normalizePath(file.path)) continue;
+
+            const candidateFm = this.plugin.app.metadataCache.getFileCache(candidate)?.frontmatter;
+            if (!candidateFm) continue;
+            if (!this.frontmatterReferencesSeriesTemplate(candidateFm, this.getSeriesBaseName(templateFile), templateFile)) continue;
+
+            const status = this.normalizeStatusValue(candidateFm.status);
+            if (completionSet.has(status)) continue;
+
+            const desiredFolder = normalizedTargetFolder === '/' ? '' : normalizedTargetFolder;
+            const desiredPath = normalizePath(desiredFolder ? `${desiredFolder}/${candidate.name}` : candidate.name);
+            if (normalizePath(candidate.path) === desiredPath) {
+                movedFiles.push(candidate);
+                continue;
+            }
+
+            const existing = this.plugin.app.vault.getAbstractFileByPath(desiredPath);
+            if (existing instanceof TFile && existing.path !== candidate.path) {
+                logger.warn(`[TPS GCM] Skipping recurring instance move; target already exists: ${desiredPath}`);
+                continue;
+            }
+
+            try {
+                await this.ensureFolderExists(desiredFolder);
+                await this.plugin.app.fileManager.renameFile(candidate, desiredPath);
+                const moved = this.plugin.app.vault.getAbstractFileByPath(desiredPath);
+                if (moved instanceof TFile) {
+                    movedFiles.push(moved);
+                }
+            } catch (error) {
+                logger.warn(`[TPS GCM] Failed moving recurring instance to ${desiredPath}`, error);
+            }
+        }
+
+        const filesNeedingFolderSync = [file, ...movedFiles].filter((candidate, index, items) =>
+            items.findIndex((other) => normalizePath(other.path) === normalizePath(candidate.path)) === index,
+        );
+
+        if (filesNeedingFolderSync.length > 0) {
+            await this.applyToFiles(filesNeedingFolderSync, (targetFm) => {
+                this.setFrontmatterValueCaseInsensitive(targetFm, 'folderPath', normalizedTargetFolder);
+            });
+        }
+
+        await this.applyToFiles([templateFile], (templateFm) => {
+            this.setFrontmatterValueCaseInsensitive(templateFm, 'folderPath', normalizedTargetFolder);
+        });
+
+        const touched = filesNeedingFolderSync.length + 1;
+        const filesToRefresh = [...filesNeedingFolderSync, templateFile].filter((candidate, index, items) =>
+            items.findIndex((other) => normalizePath(other.path) === normalizePath(candidate.path)) === index,
+        );
+        filesToRefresh.forEach((candidate) => this.plugin.persistentMenuManager?.refreshMenusForFile(candidate, true));
+        return touched;
+    }
+
     /**
      * Propagate changes from an edited series template to all open (non-completed)
      * instances that reference it via `recurrenceTemplate: [[SeriesName]]`.
@@ -1259,6 +1628,9 @@ export class BulkEditService {
      * color, dateCreated, dateModified, and the template meta-fields are never touched.
      */
     async applyTemplateToOpenInstances(templateFile: TFile): Promise<number> {
+        const normalizedTemplate = await this.normalizeRecurrenceMetadata(templateFile, this.plugin.app.metadataCache.getFileCache(templateFile)?.frontmatter);
+        if (!normalizedTemplate.isTemplate) return 0;
+
         const templateCache = this.plugin.app.metadataCache.getFileCache(templateFile);
         const templateFm = templateCache?.frontmatter;
         if (!templateFm) return 0;
@@ -1324,6 +1696,7 @@ export class BulkEditService {
     async checkMissingRecurrences(): Promise<void> {
         if (this.checkMissingRecurrencesRunning) return;
         if (!this.plugin.settings.enableRecurrence) return;
+        if (!this.plugin.isInitialSyncSettled()) return;
 
         this.checkMissingRecurrencesRunning = true;
         try {
@@ -1337,31 +1710,19 @@ export class BulkEditService {
 
             // Collect active recurring notes that are missing a series template
             const needsTemplate: TFile[] = [];
-            const needsRelink: Array<{ file: TFile; templateFile: TFile; seriesBaseName: string }> = [];
+            const needsRelink: Array<{ file: TFile; templateFile: TFile }> = [];
 
             for (const file of files) {
                 const cache = this.plugin.app.metadataCache.getFileCache(file);
                 const fm = cache?.frontmatter;
 
                 if (!fm) continue;
+                const normalized = await this.normalizeRecurrenceMetadata(file, fm);
 
                 const hasRule = fm.recurrenceRule || fm.recurrence;
                 if (!hasRule) continue;
 
-                if (this.isFileInRecurrenceTemplateFolder(file)) {
-                    if (!fm.isRecurrenceTemplate) {
-                        if (await this.canMutateFrontmatterSafely(file)) {
-                            await this.runSerializedFrontmatterWrite(file, async () => {
-                                await this.plugin.app.fileManager.processFrontMatter(file, (fmw) => {
-                                    this.setFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate', true);
-                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'scheduled');
-                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'status');
-                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'completedDate');
-                                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate');
-                                });
-                            });
-                        }
-                    }
+                if (normalized.isTemplate) {
                     const bootstrapped = await this.bootstrapTemplateInstanceFromToday(file, fm);
                     if (bootstrapped) {
                         createdCount++;
@@ -1369,30 +1730,23 @@ export class BulkEditService {
                     continue;
                 }
 
-                // Skip template files themselves
-                if (fm.isRecurrenceTemplate) continue;
-
                 const isCompleted = recurrenceStatuses.includes(
                     String(fm.status ?? '').trim().toLowerCase()
                 );
 
-                if (isCompleted) {
+                const isPastDue = this.isScheduledPastDue(fm.scheduled);
+
+                if (isCompleted || isPastDue) {
                     const handled = await this.createNextRecurrenceInstance(file, fm);
                     if (handled) {
                         createdCount++;
                     }
                 } else {
-                    // Active instance — check if its series template is missing
-                    const templateFolderSetting = (this.plugin.settings.recurringTemplateFolder || '').trim();
-                    if (templateFolderSetting) {
-                        const seriesBaseName = stripDateSuffix(file.basename).trim();
-                        const templatePath = normalizePath(`${templateFolderSetting}/${seriesBaseName}.md`);
-                        const templateEntry = this.plugin.app.vault.getAbstractFileByPath(templatePath);
-                        if (!(templateEntry instanceof TFile)) {
-                            needsTemplate.push(file);
-                        } else if (!this.frontmatterReferencesSeriesTemplate(fm, seriesBaseName, templateEntry)) {
-                            needsRelink.push({ file, templateFile: templateEntry, seriesBaseName });
-                        }
+                    // Active instance — check if its series template is missing or non-canonical.
+                    if (!(normalized.templateFile instanceof TFile)) {
+                        needsTemplate.push(file);
+                    } else if (this.getRawRecurrenceTemplateValue(fm) !== this.buildCanonicalRecurrenceTemplateValue(normalized.templateFile)) {
+                        needsRelink.push({ file, templateFile: normalized.templateFile });
                     }
                 }
             }
@@ -1401,30 +1755,42 @@ export class BulkEditService {
                 logger.log(`[TPS GCM] Healed ${createdCount} recurring event chains.`);
             }
 
-            // Create any missing series templates (deduped by series name)
+            // Orphaned instances (template missing) — strip recurrence fields so
+            // they become standalone notes instead of endlessly recreating the template.
             if (needsTemplate.length > 0) {
-                const seen = new Set<string>();
-                const deduped = needsTemplate.filter(f => {
-                    const key = stripDateSuffix(f.basename).trim().toLowerCase();
-                    if (seen.has(key)) return false;
-                    seen.add(key);
-                    return true;
-                });
-                await this.ensureRecurrenceTemplate(deduped);
-                logger.log(`[TPS GCM] Created ${deduped.length} missing series template(s).`);
+                let strippedCount = 0;
+                for (const file of needsTemplate) {
+                    try {
+                        if (!(await this.canMutateFrontmatterSafely(file))) continue;
+                        await this.runSerializedFrontmatterWrite(file, async () => {
+                            await this.plugin.frontmatterMutationService.process(file, (fmw) => {
+                                this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrenceRule');
+                                this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrence');
+                                this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate');
+                            });
+                        });
+                        strippedCount++;
+                    } catch (err) {
+                        logger.warn(`[TPS GCM] Failed to strip orphaned recurrence for ${file.path}:`, err);
+                    }
+                }
+                if (strippedCount > 0) {
+                    logger.log(`[TPS GCM] Stripped recurrence from ${strippedCount} orphaned instance(s) (template deleted).`);
+                }
             }
 
             if (needsRelink.length > 0) {
                 for (const row of needsRelink) {
-                    const { file, templateFile, seriesBaseName } = row;
+                    const { file, templateFile } = row;
                     if (!(await this.canMutateFrontmatterSafely(file))) continue;
                     await this.runSerializedFrontmatterWrite(file, async () => {
-                        await this.plugin.app.fileManager.processFrontMatter(file, (fmw) => {
+                        await this.plugin.frontmatterMutationService.process(file, (fmw) => {
                             this.setFrontmatterValueCaseInsensitive(
                                 fmw,
                                 'recurrenceTemplate',
-                                this.buildRecurrenceTemplateLink(templateFile, file, seriesBaseName),
+                                this.buildCanonicalRecurrenceTemplateValue(templateFile),
                             );
+                            this.deleteFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate');
                         });
                     });
                 }
@@ -1438,7 +1804,7 @@ export class BulkEditService {
     async clearRecurrenceRule(file: TFile): Promise<void> {
         if (!(await this.canMutateFrontmatterSafely(file))) return;
         await this.runSerializedFrontmatterWrite(file, async () => {
-            await this.plugin.app.fileManager.processFrontMatter(file, (fm) => {
+            await this.plugin.frontmatterMutationService.process(file, (fm) => {
                 this.deleteFrontmatterValueCaseInsensitive(fm, 'recurrenceRule');
                 this.deleteFrontmatterValueCaseInsensitive(fm, 'recurrence');
             });
@@ -1470,7 +1836,7 @@ export class BulkEditService {
 
                 let didChange = false;
                 await this.runSerializedFrontmatterWrite(parentFile, async () => {
-                    await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
+                    await this.plugin.frontmatterMutationService.process(parentFile, (fm) => {
                         if (!fm || typeof fm !== 'object') return;
 
                         const existingTagKey = this.findFrontmatterKeyCaseInsensitive(fm, 'tags');
@@ -1494,7 +1860,7 @@ export class BulkEditService {
             } catch (error) {
                 logger.error(`[TPS GCM] Failed tagging parent ${parentFile.path} after child link:`, error);
             }
-        }, 20);
+        }, 1);
 
         if (!updatedFiles.length) return;
 
@@ -1520,7 +1886,7 @@ export class BulkEditService {
                 changedFiles.set(file.path, file);
             }
             if (this.plugin.settings.autoSaveFolderPath) {
-                await this.plugin.app.fileManager.processFrontMatter(file, (fm) => {
+                await this.plugin.frontmatterMutationService.process(file, (fm) => {
                     this.setFrontmatterValueCaseInsensitive(fm as Record<string, any>, 'folderPath', file.parent?.path || '/');
                 });
             }
@@ -1560,8 +1926,7 @@ export class BulkEditService {
             return false;
         }
         const parentKey = this.parentLinkHandler.normalizeParentKey();
-        const format = this.parentLinkHandler.normalizeParentLinkFormat();
-        const changed = await this.ensureParentSelfLink(parentFile, parentKey, format);
+        const changed = await this.ensureParentSelfLink(parentFile, parentKey);
         if (!changed) {
             return false;
         }
@@ -1574,7 +1939,6 @@ export class BulkEditService {
     private async ensureParentSelfLink(
         parentFile: TFile,
         parentKey: string,
-        format: 'wikilink' | 'markdown-title',
     ): Promise<boolean> {
         if (!this.plugin.settings.autoSelfLinkParentInParentKey) {
             return false;
@@ -1584,7 +1948,7 @@ export class BulkEditService {
         }
         let changed = false;
         await this.runSerializedFrontmatterWrite(parentFile, async () => {
-            await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
+            await this.plugin.frontmatterMutationService.process(parentFile, (fm) => {
                 const existingKey = this.findFrontmatterKeyCaseInsensitive(fm, parentKey);
                 const existingRaw = existingKey ? fm[existingKey] : undefined;
                 const currentValues: string[] = [];
@@ -1594,11 +1958,20 @@ export class BulkEditService {
                     currentValues.push(String(existingRaw).trim());
                 }
 
-                const selfLink = buildParentLinkValue(this.plugin.app, parentFile, parentFile.path, format);
-                const hasSelf = currentValues.some((value) =>
+                const selfLink = buildBaseCompatibleParentLinkValue(this.plugin.app, parentFile, parentFile.path);
+                const selfIndex = currentValues.findIndex((value) =>
                     linkValueMatchesFile(this.plugin.app, value, parentFile.path, parentFile),
                 );
-                if (hasSelf) {
+                if (selfIndex >= 0) {
+                    if (currentValues[selfIndex] !== selfLink) {
+                        currentValues[selfIndex] = selfLink;
+                        this.setFrontmatterValueCaseInsensitive(
+                            fm,
+                            parentKey,
+                            currentValues.length === 1 ? currentValues[0] : currentValues,
+                        );
+                        changed = true;
+                    }
                     return;
                 }
                 currentValues.push(selfLink);
@@ -1631,7 +2004,7 @@ export class BulkEditService {
         if (!(await this.canMutateFrontmatterSafely(parentFile))) return false;
         let changed = false;
         await this.runSerializedFrontmatterWrite(parentFile, async () => {
-            await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
+            await this.plugin.frontmatterMutationService.process(parentFile, (fm) => {
                 const key = Object.keys(fm).find((k) => k.toLowerCase() === childKey.toLowerCase());
                 if (!key) return;
                 const raw = fm[key];
@@ -1658,7 +2031,7 @@ export class BulkEditService {
 
         await this.runSerializedFrontmatterWrite(currentFile, async () => {
             this.plugin.recurrenceService?.markFileAsModified(currentFile.path);
-            await this.plugin.app.fileManager.processFrontMatter(currentFile, (fm: any) => {
+            await this.plugin.frontmatterMutationService.process(currentFile, (fm: any) => {
                 const existingKey = this.findFrontmatterKeyCaseInsensitive(fm, ATTACHMENTS_KEY);
                 const existingRaw = existingKey ? fm[existingKey] : undefined;
                 const values: string[] = [];
@@ -1707,11 +2080,12 @@ export class BulkEditService {
      * Removes a frontmatter key+value from each of the given files.
      * The key match is case-insensitive so it works regardless of casing variation.
      */
-    async removeFrontmatterKey(files: TFile[], key: string): Promise<number> {
+    async removeFrontmatterKey(files: TFile[], key: string, options?: { userInitiated?: boolean }): Promise<number> {
         let count = 0;
         for (const file of files) {
             try {
-                await this.plugin.app.fileManager.processFrontMatter(file, (fm) => {
+                if (!(await this.canMutateFrontmatterSafely(file, options))) continue;
+                await this.plugin.frontmatterMutationService.process(file, (fm) => {
                     const actualKey = Object.keys(fm).find(k => k.toLowerCase() === key.toLowerCase()) ?? key;
                     if (actualKey in fm) {
                         delete fm[actualKey];
@@ -1721,6 +2095,10 @@ export class BulkEditService {
             } catch (err) {
                 logger.warn(`[TPS GCM] removeFrontmatterKey failed for ${file.path}:`, err);
             }
+        }
+        await this.syncFolderPathForFiles(files);
+        if (key.toLowerCase() === 'status') {
+            await this.syncClearedLinkedSubitemStatuses(files);
         }
         return count;
     }
@@ -1759,7 +2137,7 @@ export class BulkEditService {
      */
     async unlinkAttachment(parentFile: TFile, attachmentFile: TFile): Promise<void> {
         const attachmentsKey = 'attachments';
-        await this.plugin.app.fileManager.processFrontMatter(parentFile, (fm) => {
+        await this.plugin.frontmatterMutationService.process(parentFile, (fm) => {
             const key = Object.keys(fm).find(k => k.toLowerCase() === attachmentsKey.toLowerCase());
             if (!key) return;
             const raw = fm[key];
@@ -1779,13 +2157,17 @@ export class BulkEditService {
      */
     async cleanupLinksForDeletedFile(deletedPath: string, deletedBasename: string): Promise<void> {
         const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+        const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
         const attachmentsKey = 'attachments';
+
+        const norm = (s: string) => normalizePath(s).toLowerCase();
+
+        await this.cascadeRecurrenceCleanupForDeletedTemplate(deletedPath, deletedBasename);
 
         const isMatch = (linkValue: any): boolean => {
             if (linkValue == null) return false;
             const target = extractLinkTarget(String(linkValue));
             if (!target) return false;
-            const norm = (s: string) => normalizePath(s).toLowerCase();
             return target === deletedBasename ||
                 norm(target) === norm(deletedPath) ||
                 norm(target) === norm(deletedBasename);
@@ -1797,20 +2179,31 @@ export class BulkEditService {
             const cache = this.plugin.app.metadataCache.getFileCache(file);
             const fm = cache?.frontmatter;
             const hasPk = !!fm && Object.keys(fm).some(k => k.toLowerCase() === parentKey.toLowerCase());
+            const hasCk = !!fm && Object.keys(fm).some(k => k.toLowerCase() === childKey.toLowerCase());
             const hasAk = !!fm && Object.keys(fm).some(k => k.toLowerCase() === attachmentsKey.toLowerCase());
             let frontmatterChanged = false;
 
-            if (hasPk || hasAk) {
+            if (hasPk || hasCk || hasAk) {
                 try {
-                    await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
-                        // Clean childOf (single parent ref)
+                    await this.plugin.frontmatterMutationService.process(file, (frontmatter) => {
                         const pk = Object.keys(frontmatter).find(k => k.toLowerCase() === parentKey.toLowerCase());
                         if (pk && isMatch(frontmatter[pk])) {
                             delete frontmatter[pk];
                             frontmatterChanged = true;
                         }
 
-                        // Clean attachments array
+                        const ck = Object.keys(frontmatter).find(k => k.toLowerCase() === childKey.toLowerCase());
+                        if (ck) {
+                            const raw = frontmatter[ck];
+                            const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);
+                            const filtered = arr.filter(v => !isMatch(v));
+                            if (filtered.length !== arr.length) {
+                                frontmatterChanged = true;
+                                if (filtered.length === 0) delete frontmatter[ck];
+                                else frontmatter[ck] = filtered;
+                            }
+                        }
+
                         const ak = Object.keys(frontmatter).find(k => k.toLowerCase() === attachmentsKey.toLowerCase());
                         if (ak) {
                             const raw = frontmatter[ak];
@@ -1853,6 +2246,55 @@ export class BulkEditService {
         if (touchedFiles.length > 0) {
             setTimeout(() => touchedFiles.forEach((file) => this.plugin.persistentMenuManager?.refreshMenusForFile(file)), 200);
             this.notifyFilesChanged(touchedFiles);
+        }
+    }
+
+    private async cascadeRecurrenceCleanupForDeletedTemplate(deletedPath: string, deletedBasename: string): Promise<void> {
+        const norm = (s: string) => normalizePath(s).toLowerCase();
+        const normalizedDeletedPath = norm(deletedPath);
+        const seriesName = stripDateSuffix(deletedBasename).trim().toLowerCase();
+
+        const files = this.plugin.app.vault.getMarkdownFiles();
+        const cleanedFiles: TFile[] = [];
+
+        for (const file of files) {
+            const cache = this.plugin.app.metadataCache.getFileCache(file);
+            const fm = cache?.frontmatter;
+            if (!fm) continue;
+
+            const hasRule = !!(fm.recurrenceRule || fm.recurrence);
+            if (!hasRule && !this.getRawRecurrenceTemplateValue(fm)) continue;
+
+            const rawTemplateRef = this.getRawRecurrenceTemplateValue(fm);
+            const templateTarget = rawTemplateRef ? extractLinkTarget(rawTemplateRef) : '';
+            const refMatch = templateTarget && (
+                norm(templateTarget) === normalizedDeletedPath ||
+                templateTarget.toLowerCase() === deletedBasename.toLowerCase()
+            );
+
+            const nameMatch = !refMatch && seriesName && !this.isTemplateFrontmatter(fm) &&
+                this.getSeriesBaseName(file).toLowerCase() === seriesName;
+
+            if (!refMatch && !nameMatch) continue;
+
+            try {
+                await this.plugin.frontmatterMutationService.process(file, (fmw) => {
+                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrenceRule');
+                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrence');
+                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'recurrenceTemplate');
+                    this.deleteFrontmatterValueCaseInsensitive(fmw, 'isRecurrenceTemplate');
+                });
+                cleanedFiles.push(file);
+                logger.log(`[TPS GCM] Cascade: stripped recurrence from ${file.path} (template deleted: ${deletedPath})`);
+            } catch (err) {
+                logger.warn(`[TPS GCM] Cascade: failed to clean recurrence for ${file.path}:`, err);
+            }
+        }
+
+        if (cleanedFiles.length > 0) {
+            new Notice(`Stopped ${cleanedFiles.length} recurring instance(s) — template "${deletedBasename}" deleted.`);
+            setTimeout(() => cleanedFiles.forEach((f) => this.plugin.persistentMenuManager?.refreshMenusForFile(f)), 200);
+            this.notifyFilesChanged(cleanedFiles);
         }
     }
 }

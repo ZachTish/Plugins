@@ -6,45 +6,31 @@ export interface KanbanCheckboxTaskItem {
     rawText: string;
     text: string;
     checked: boolean;
+    checkboxState: string;
     propertyMap: Record<string, string>;
     scheduledDateToken: string | null;
     scheduledTimeToken: string | null;
 }
 
-const TASK_LINE_RE = /^[\t ]*-\s+\[([ xX])\]\s+(.*)$/;
-const INLINE_PROP_RE = /\[([a-zA-Z0-9_-]+)::\s*([^\]]+)\]/g;
-const KANBAN_DATE_RE = /@\{([^}]+)\}/;
-const KANBAN_TIME_RE = /@@\{([^}]+)\}/;
 const TASKS_EMOJI_DUE_RE = /📅\s*(\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)/i;
 const TASKS_EMOJI_SCHEDULED_RE = /⏳\s*(\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)/i;
 const TASKS_EMOJI_START_RE = /🛫\s*(\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)/i;
+
+export interface GcmTaskSemanticsApi {
+    parseTaskLine?: (line: string) => {
+        checkboxState: string | null;
+        body: string;
+        text: string;
+        inlineProperties: Record<string, string>;
+        scheduledDateToken: string | null;
+        scheduledTimeToken: string | null;
+    } | null;
+}
 
 export function isKanbanBoardFileFromFrontmatter(frontmatter: Record<string, unknown> | undefined): boolean {
     const fm = frontmatter || {};
     const value = String(fm["kanban-plugin"] ?? fm["kanbanPlugin"] ?? "").trim().toLowerCase();
     return value === "board";
-}
-
-function normalizeTaskText(raw: string): string {
-    return String(raw || "")
-        .replace(/@@\{[^}]*\}/g, "")
-        .replace(/@\{[^}]*\}/g, "")
-        .replace(INLINE_PROP_RE, "")
-        .replace(/\s+#([^\s#]+)/g, "")
-        .trim();
-}
-
-function extractInlineProperties(rawText: string): Record<string, string> {
-    const map: Record<string, string> = {};
-    INLINE_PROP_RE.lastIndex = 0;
-    let match: RegExpExecArray | null = null;
-    while ((match = INLINE_PROP_RE.exec(rawText)) !== null) {
-        const key = String(match[1] ?? "").trim().toLowerCase();
-        const value = String(match[2] ?? "").trim();
-        if (!key || !value) continue;
-        map[key] = value;
-    }
-    return map;
 }
 
 function combineKanbanDateTime(datePart: string, timePart: string | null): string {
@@ -54,24 +40,52 @@ function combineKanbanDateTime(datePart: string, timePart: string | null): strin
     return t ? `${d} ${t}` : d;
 }
 
-export function parseKanbanCheckboxTasks(content: string): KanbanCheckboxTaskItem[] {
+export function parseKanbanCheckboxTasks(content: string, semanticsApi?: GcmTaskSemanticsApi | null): KanbanCheckboxTaskItem[] {
     const lines = String(content || "").split("\n");
     const tasks: KanbanCheckboxTaskItem[] = [];
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        const m = line.match(TASK_LINE_RE);
+        const parsed = semanticsApi?.parseTaskLine?.(line) || null;
+        if (parsed) {
+            const checkboxState = String(parsed.checkboxState || "").trim();
+            tasks.push({
+                lineNumber: i,
+                rawText: String(parsed.body || ""),
+                text: String(parsed.text || "").trim() || String(parsed.body || "").trim(),
+                checked: checkboxState.toLowerCase() === "x",
+                checkboxState,
+                propertyMap: parsed.inlineProperties || {},
+                scheduledDateToken: parsed.scheduledDateToken || null,
+                scheduledTimeToken: parsed.scheduledTimeToken || null,
+            });
+            continue;
+        }
+
+        const m = line.match(/^[\t ]*(?:[-*+]|\d+\.)\s+\[([^\]]*)\]\s+(.*)$/);
         if (!m) continue;
-        const checked = String(m[1] || "").toLowerCase() === "x";
+        const checkboxState = String(m[1] || "").trim();
+        const checked = checkboxState.toLowerCase() === "x";
         const rawText = String(m[2] || "");
-        const propertyMap = extractInlineProperties(rawText);
-        const dateMatch = rawText.match(KANBAN_DATE_RE);
-        const timeMatch = rawText.match(KANBAN_TIME_RE);
+        const propertyMap: Record<string, string> = {};
+        for (const match of rawText.matchAll(/\[([a-zA-Z0-9_-]+)::\s*([^\]]+)\]/g)) {
+            const key = String(match[1] ?? "").trim().toLowerCase();
+            const value = String(match[2] ?? "").trim();
+            if (key && value) propertyMap[key] = value;
+        }
+        const dateMatch = rawText.match(/@\{([^}]+)\}/);
+        const timeMatch = rawText.match(/@@\{([^}]+)\}/);
         tasks.push({
             lineNumber: i,
             rawText,
-            text: normalizeTaskText(rawText),
+            text: rawText
+                .replace(/@@\{[^}]*\}/g, "")
+                .replace(/@\{[^}]*\}/g, "")
+                .replace(/\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, "")
+                .replace(/\s+#([^\s#]+)/g, "")
+                .trim(),
             checked,
+            checkboxState,
             propertyMap,
             scheduledDateToken: dateMatch?.[1]?.trim() || null,
             scheduledTimeToken: timeMatch?.[1]?.trim() || null,

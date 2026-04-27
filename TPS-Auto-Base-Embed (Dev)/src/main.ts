@@ -6,6 +6,8 @@ import {
   WorkspaceLeaf,
   MarkdownView,
 } from "obsidian";
+import { Decoration, type DecorationSet, EditorView, ViewPlugin, WidgetType, type ViewUpdate } from '@codemirror/view';
+import { RangeSetBuilder } from '@codemirror/state';
 import { AutoBaseEmbedSettingTab } from "./settings-tab";
 
 // ============ Types ============
@@ -33,18 +35,21 @@ export interface BaseEmbedRule {
   enabled: boolean;
   conditions: BaseEmbedConditions;
   initialState?: "collapsed" | "expanded" | "default";
+  renderPlacement?: "floating" | "after-title" | "after-content";
 }
 
 export interface AutoBaseEmbedSettings {
   enabled: boolean;
   enableCanvasEmbeds: boolean;
   enableCanvasNodeEmbeds: boolean;
+  debugLogging: boolean;
   renderMode: "floating" | "inline";
   inlinePlacement: "after-title" | "after-content";
   rules: BaseEmbedRule[];
   excludeFiles: string;
   defaultExpanded: boolean;
   accordionMode: boolean;
+  alwaysExpanded: boolean;
   manualExpansionState?: Record<string, boolean>;
   // Legacy fields kept for cleanup only
   basePath?: string;
@@ -56,37 +61,73 @@ const DEFAULT_SETTINGS: AutoBaseEmbedSettings = {
   enabled: true,
   enableCanvasEmbeds: false,
   enableCanvasNodeEmbeds: false,
+  debugLogging: false,
   renderMode: "floating",
   inlinePlacement: "after-content",
   rules: [],
   excludeFiles: "",
   defaultExpanded: false,
   accordionMode: false,
+  alwaysExpanded: false,
   manualExpansionState: {},
 };
 
 const EMBED_CLASS = "tps-auto-base-embed";
 const STYLE_ID = "tps-auto-base-embed-style";
 const INLINE_ANCHOR_CLASS = "tps-auto-base-embed-anchor";
+const INLINE_SECTION_CLASS = "tps-auto-base-embed-inline-section";
+const SOURCE_END_WIDGET_CLASS = 'tps-auto-base-embed-source-end-widget';
+const SOURCE_END_HOST_CLASS = 'tps-auto-base-embed-source-end-host';
 const COLLAPSED_ATTR = "data-tps-auto-base-embed-collapsed";
 const RENDERING_ATTR = "data-tps-auto-base-embed-rendering";
 const BUILD_STAMP = "2026-03-15T23:05:00Z";
 const REFRESH_COOLDOWN_MS = 1500;
+type RuleRenderPlacement = "floating" | "after-title" | "after-content";
+
+class SourceEndEmbedWidget extends WidgetType {
+  constructor(private readonly filePath: string) {
+    super();
+  }
+
+  eq(other: SourceEndEmbedWidget): boolean {
+    return other.filePath === this.filePath;
+  }
+
+  toDOM(): HTMLElement {
+    const wrapper = document.createElement('div');
+    wrapper.className = SOURCE_END_WIDGET_CLASS;
+    wrapper.dataset.filePath = this.filePath;
+
+    const host = document.createElement('div');
+    host.className = SOURCE_END_HOST_CLASS;
+    host.dataset.filePath = this.filePath;
+    host.dataset.inlinePlacement = 'after-content';
+    wrapper.appendChild(host);
+    return wrapper;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
 
 // ============ Plugin ============
 
 export default class AutoBaseEmbedPlugin extends Plugin {
   settings: AutoBaseEmbedSettings;
-  private overlayByLeaf = new WeakMap<WorkspaceLeaf, HTMLElement>();
-  private inlineAnchorByLeaf = new WeakMap<WorkspaceLeaf, HTMLElement>();
+  private editorExtension = this.createEditorExtension();
+  private hostEntriesByLeaf = new WeakMap<WorkspaceLeaf, Map<RuleRenderPlacement, HTMLElement>>();
+  private inlineAnchorsByLeaf = new WeakMap<WorkspaceLeaf, Map<Exclude<RuleRenderPlacement, "floating">, HTMLElement>>();
   private overlayObservers = new WeakMap<WorkspaceLeaf, ResizeObserver>();
   private headerObservers = new WeakMap<HTMLElement, MutationObserver>();
+  private contentObservers = new WeakMap<WorkspaceLeaf, MutationObserver>();
   private renderTokens = new WeakMap<WorkspaceLeaf, number>();
   private renderSignatureByLeaf = new WeakMap<WorkspaceLeaf, string>();
   private lastRefreshMetaByLeaf = new WeakMap<WorkspaceLeaf, { signature: string; at: number }>();
   private expandedPanels = new WeakMap<WorkspaceLeaf, Set<string>>();
   private currentFileByLeaf = new WeakMap<WorkspaceLeaf, string>();
   private headerSyncTimers = new WeakMap<WorkspaceLeaf, number>();
+  private titleReattachObservers = new WeakMap<WorkspaceLeaf, MutationObserver>();
   private typingRefreshTimers = new WeakMap<WorkspaceLeaf, number>();
   private leafRetryTimers = new WeakMap<WorkspaceLeaf, number>();
   private refreshInFlight = new WeakSet<WorkspaceLeaf>();
@@ -147,7 +188,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     extra?: Record<string, unknown>,
   ): void {
     const snapshot = this.getLeafScrollSnapshot(leaf);
-    console.info("[TPS Auto Base Embed] [Scroll]", {
+    this.debugInfo("[TPS Auto Base Embed] [Scroll]", {
       stage,
       file: file?.path ?? null,
       renderMode: this.getEffectiveRenderMode(leaf),
@@ -157,12 +198,23 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     });
   }
 
+  private debugInfo(message: string, ...args: unknown[]): void {
+    if (!this.settings?.debugLogging) return;
+    console.info(message, ...args);
+  }
+
+  private debugWarn(message: string, ...args: unknown[]): void {
+    if (!this.settings?.debugLogging) return;
+    console.warn(message, ...args);
+  }
+
   async onload(): Promise<void> {
     await this.loadSettings();
     this.clearAllOverlaysFromDom();
-    console.info(`[TPS Auto Base Embed] Loaded build ${BUILD_STAMP}`);
+    this.debugInfo(`[TPS Auto Base Embed] Loaded build ${BUILD_STAMP}`);
 
     this.addSettingTab(new AutoBaseEmbedSettingTab(this.app, this));
+    this.registerEditorExtension(this.editorExtension);
     this.injectStyles();
     this.updateBottomObstructionOffset();
     this.setupKeyboardDetection();
@@ -188,9 +240,9 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         // acting on it would start a render → layout-change → render loop.
         const leaves = this.getSupportedLeaves();
         const allFresh = leaves.length > 0 && leaves.every((leaf) => {
-          const overlay = this.overlayByLeaf.get(leaf);
-          if (!overlay?.isConnected) return false;
-          if (!this.hasRenderableHost(overlay)) return false;
+          const hosts = this.getAllHostsForLeaf(leaf).map(([, host]) => host).filter((host) => host?.isConnected);
+          if (hosts.length === 0) return false;
+          if (!hosts.some((host) => this.hasRenderableHost(host))) return false;
           const lastRender = this.lastRefreshMetaByLeaf.get(leaf);
           return !!lastRender && Date.now() - lastRender.at < REFRESH_COOLDOWN_MS;
         });
@@ -217,9 +269,10 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("editor-change", (view) => {
-        if (this.isEditorFocused()) return;
         const leaf = (view as any)?.leaf as WorkspaceLeaf | undefined;
-        if (leaf) this.scheduleTypingRefresh(leaf);
+        if (!leaf) return;
+        if (this.isEditorFocused() && !this.hasAfterContentRulesForLeaf(leaf)) return;
+        this.scheduleTypingRefresh(leaf);
       })
     );
     this.registerEvent(
@@ -266,6 +319,14 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     this.registerDomEvent(document, "dragstart", (event: DragEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target?.closest(`.${EMBED_CLASS}`)) return;
+      if (
+        target.closest(".tps-kanban-card") ||
+        target.closest(".tps-calendar-entry") ||
+        target.closest(".fc-event") ||
+        target.closest("[data-tps-task-context='true']")
+      ) {
+        return;
+      }
       const filePath = this.extractEmbeddableFilePath(target);
       if (!filePath || !event.dataTransfer) return;
       event.dataTransfer.effectAllowed = "copy";
@@ -360,11 +421,10 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   }
 
   private extractEmbeddableFilePath(target: HTMLElement): string | null {
-    const sourceEl = target.closest<HTMLElement>("[data-path], [data-href], a.internal-link, .internal-link");
+    const sourceEl = target.closest<HTMLElement>("[data-href], a.internal-link, .internal-link");
     if (!sourceEl) return null;
 
     const candidateValues = [
-      sourceEl.getAttribute("data-path"),
       sourceEl.getAttribute("data-href"),
       sourceEl.getAttribute("href"),
       sourceEl.getAttribute("aria-label"),
@@ -429,13 +489,13 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       window.setTimeout(() => {
         if (!this.isSupportedLeaf(leaf)) return;
         if (this.refreshInFlight.has(leaf)) return;
-        const existingHost = this.overlayByLeaf.get(leaf);
+        const existingHost = this.getAllHostsForLeaf(leaf)[0]?.[1];
         const currentFile = this.getLeafFile(leaf);
         const sameSource = existingHost?.getAttribute("data-source-path") === currentFile?.path;
         const hasPanel = !!existingHost?.querySelector(`.${EMBED_CLASS}__panel`);
         const hasRenderingPanel = !!existingHost?.querySelector(`.${EMBED_CLASS}__panel[${RENDERING_ATTR}="true"]`);
         if (
-          this.getEffectiveRenderMode(leaf) === "inline"
+          Array.from(this.getAllHostsForLeaf(leaf)).some(([placement]) => placement !== 'floating')
           && existingHost?.isConnected
           && sameSource
           && (hasPanel || hasRenderingPanel)
@@ -443,7 +503,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           return;
         }
         const activeLeaf = this.app.workspace.getMostRecentLeaf?.() || this.app.workspace.activeLeaf;
-        if (activeLeaf !== leaf && !this.overlayByLeaf.get(leaf)?.isConnected) return;
+        if (activeLeaf !== leaf && !this.getAllHostsForLeaf(leaf).some(([, host]) => host?.isConnected)) return;
         void this.refreshLeaf(leaf, { resetExpanded: delay === delays[0] ? options?.resetExpanded : false });
       }, delay);
     }
@@ -462,34 +522,40 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     if (!this.settings.enabled) return;
     const leaves = this.getSupportedLeaves();
     for (const leaf of leaves) {
-      const overlay = this.overlayByLeaf.get(leaf);
-      const desiredMode = this.getEffectiveRenderMode(leaf);
-      const currentMode = overlay?.getAttribute("data-render-mode");
-      if (overlay && (!overlay.isConnected || currentMode !== desiredMode)) {
-        this.overlayByLeaf.delete(leaf);
+      let needsRefresh = false;
+      for (const [placement, overlay] of this.getAllHostsForLeaf(leaf)) {
+        if (!overlay?.isConnected) {
+          this.deleteHostForPlacement(leaf, placement);
+          needsRefresh = true;
+          continue;
+        }
+        if (placement === 'floating') {
+          const view = leaf.view as any;
+          const viewContainer = view?.containerEl as HTMLElement | undefined;
+          const leafContent = viewContainer?.closest?.(".workspace-leaf-content") as HTMLElement | null;
+          const attachTarget = leafContent || viewContainer || null;
+          if (!attachTarget || overlay.parentElement !== attachTarget) {
+            needsRefresh = true;
+          }
+          continue;
+        }
+        const mountTarget = this.resolveInlineMountTarget(leaf, placement);
+        if (!mountTarget || overlay.parentElement !== mountTarget.parent || overlay.nextSibling !== mountTarget.before) {
+          needsRefresh = true;
+        }
+      }
+      if (needsRefresh) {
+        this.logScrollSnapshot("reattach-refresh", leaf, this.getLeafFile(leaf), { reason: "host-mismatch" });
         void this.refreshLeaf(leaf, { resetExpanded: false });
         continue;
       }
-      if (desiredMode === "inline" && overlay?.isConnected) {
-        const mountTarget = this.resolveInlineMountTarget(leaf);
-        if (
-          !mountTarget
-          || overlay.parentElement !== mountTarget.parent
-          || overlay.nextSibling !== mountTarget.before
-        ) {
-          this.logScrollSnapshot("reattach-refresh", leaf, this.getLeafFile(leaf), {
-            reason: !mountTarget ? "missing-mount-target" : "mount-target-mismatch",
-          });
-          void this.refreshLeaf(leaf, { resetExpanded: false });
-        }
-        continue;
-      }
-      if (desiredMode === "floating" && overlay?.isConnected) {
+      const floatingOverlay = this.getHostForPlacement(leaf, 'floating');
+      if (floatingOverlay?.isConnected) {
         const view = leaf.view as any;
         const viewContainer = view?.containerEl as HTMLElement | undefined;
         const leafContent = viewContainer?.closest?.(".workspace-leaf-content") as HTMLElement | null;
         const attachTarget = leafContent || viewContainer || null;
-        if (!attachTarget || overlay.parentElement !== attachTarget) {
+        if (!attachTarget || floatingOverlay.parentElement !== attachTarget) {
           this.logScrollSnapshot("reattach-refresh", leaf, this.getLeafFile(leaf), {
             reason: !attachTarget ? "missing-floating-target" : "floating-target-mismatch",
           });
@@ -500,16 +566,17 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   }
 
   private applyOverlayVisibility(leaf: WorkspaceLeaf): void {
-    const overlay = this.overlayByLeaf.get(leaf);
-    if (!overlay?.isConnected) return;
-    if (this.swipeCollapsed) {
-      overlay.style.visibility = "hidden";
-      overlay.style.opacity = "0";
-      overlay.style.pointerEvents = "none";
-    } else {
-      overlay.style.removeProperty("visibility");
-      overlay.style.removeProperty("opacity");
-      overlay.style.removeProperty("pointer-events");
+    for (const [placement, overlay] of this.getAllHostsForLeaf(leaf)) {
+      if (placement !== 'floating' || !overlay?.isConnected) continue;
+      if (this.swipeCollapsed) {
+        overlay.style.visibility = "hidden";
+        overlay.style.opacity = "0";
+        overlay.style.pointerEvents = "none";
+      } else {
+        overlay.style.removeProperty("visibility");
+        overlay.style.removeProperty("opacity");
+        overlay.style.removeProperty("pointer-events");
+      }
     }
   }
 
@@ -587,6 +654,9 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       state.scroller.removeEventListener("scroll", state.listener);
     }
     this.scrollHideListeners.clear();
+    for (const leaf of this.getSupportedLeaves()) {
+      this.detachContentObserver(leaf);
+    }
     // Stop all canvas node watchers
     for (const leaf of this.canvasLeafData.keys()) {
       this.stopCanvasLeafWatcher(leaf);
@@ -616,6 +686,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const loaded = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+    let updatedRulePlacements = false;
     if (!this.settings.manualExpansionState || typeof this.settings.manualExpansionState !== "object") {
       this.settings.manualExpansionState = {};
     }
@@ -625,6 +696,15 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     const removedLegacyRules = cleanedRules.length !== this.settings.rules.length;
     if (removedLegacyRules) {
       this.settings.rules = cleanedRules;
+    }
+    const legacyDefaultPlacement: RuleRenderPlacement = this.settings.renderMode === 'inline'
+      ? this.settings.inlinePlacement
+      : 'floating';
+    for (const rule of this.settings.rules) {
+      if (rule.renderPlacement !== 'floating' && rule.renderPlacement !== 'after-title' && rule.renderPlacement !== 'after-content') {
+        rule.renderPlacement = legacyDefaultPlacement;
+        updatedRulePlacements = true;
+      }
     }
     const hadLegacyFields =
       typeof this.settings.basePaths === "string" ||
@@ -636,7 +716,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       delete this.settings.excludeFolders;
     }
 
-    if (removedLegacyRules || hadLegacyFields) {
+    if (removedLegacyRules || hadLegacyFields || updatedRulePlacements) {
       await this.saveData(this.settings);
     }
   }
@@ -681,6 +761,218 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     return this.settings.enableCanvasEmbeds && type === "canvas";
   }
 
+  private getLeafContentObserverRoot(leaf: WorkspaceLeaf): HTMLElement | null {
+    const view = leaf.view as any;
+    const viewContainer = view?.containerEl as HTMLElement | undefined;
+    if (!viewContainer?.isConnected) return null;
+    return (
+      viewContainer.querySelector<HTMLElement>(".markdown-preview-view, .markdown-reading-view")
+      || viewContainer.querySelector<HTMLElement>(".markdown-source-view")
+      || null
+    );
+  }
+
+  private isNodeInsideAutoBaseEmbed(node: Node | null | undefined): boolean {
+    if (!node) return false;
+    const element = node instanceof HTMLElement ? node : node.parentElement;
+    return !!element?.closest?.(`.${EMBED_CLASS}`);
+  }
+
+  private mutationTouchesNoteBody(mutation: MutationRecord): boolean {
+    if (mutation.type === "childList") {
+      const nodes = [
+        ...Array.from(mutation.addedNodes),
+        ...Array.from(mutation.removedNodes),
+      ];
+      if (nodes.length === 0) return false;
+      return nodes.some((node) => !this.isNodeInsideAutoBaseEmbed(node));
+    }
+    if (mutation.type === "characterData" || mutation.type === "attributes") {
+      return !this.isNodeInsideAutoBaseEmbed(mutation.target);
+    }
+    return true;
+  }
+
+  private attachContentObserver(leaf: WorkspaceLeaf): void {
+    const existing = this.contentObservers.get(leaf);
+    if (existing) existing.disconnect();
+
+    const root = this.getLeafContentObserverRoot(leaf);
+    if (!root) return;
+
+    const observer = new MutationObserver((mutations) => {
+      if (!this.settings.enabled) return;
+      if (!this.isSupportedLeaf(leaf)) return;
+      if (this.refreshInFlight.has(leaf)) return;
+      if (!mutations.some((mutation) => this.mutationTouchesNoteBody(mutation))) return;
+      this.scheduleLeafRefresh(leaf, { resetExpanded: false }, 250);
+    });
+
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    this.contentObservers.set(leaf, observer);
+  }
+
+  private detachContentObserver(leaf: WorkspaceLeaf): void {
+    const observer = this.contentObservers.get(leaf);
+    if (!observer) return;
+    observer.disconnect();
+    this.contentObservers.delete(leaf);
+  }
+
+  private getLeafForEditorView(editorView: EditorView): WorkspaceLeaf | null {
+    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+      const markdownView = leaf.view as MarkdownView & { editor?: { cm?: EditorView } };
+      if (markdownView?.editor && (markdownView.editor as any).cm === editorView) {
+        return leaf;
+      }
+    }
+    return null;
+  }
+
+  private isLivePreviewMarkdownView(view: MarkdownView | null | undefined): boolean {
+    if (!(view instanceof MarkdownView)) return false;
+    const container = (view as any)?.containerEl as HTMLElement | undefined;
+    return !!container?.querySelector?.('.markdown-source-view.is-live-preview');
+  }
+
+  private isPlainSourceModeLeaf(leaf: WorkspaceLeaf): boolean {
+    const view = leaf.view instanceof MarkdownView ? leaf.view : null;
+    const mode = String((view as any)?.getMode?.() || (view as any)?.mode || '').toLowerCase();
+    return mode === 'source' && !this.isLivePreviewMarkdownView(view);
+  }
+
+  private createEditorExtension() {
+    const plugin = this;
+    return ViewPlugin.fromClass(class {
+      decorations: DecorationSet;
+
+      constructor(view: EditorView) {
+        this.decorations = this.buildDecorations(view);
+      }
+
+      update(update: ViewUpdate) {
+        if (update.docChanged || update.viewportChanged || update.focusChanged || update.geometryChanged || update.selectionSet) {
+          this.decorations = this.buildDecorations(update.view);
+        }
+      }
+
+      private buildDecorations(view: EditorView): DecorationSet {
+        const builder = new RangeSetBuilder<Decoration>();
+        const leaf = plugin.getLeafForEditorView(view);
+        const markdownView = leaf?.view instanceof MarkdownView ? leaf.view : null;
+        const file = markdownView?.file instanceof TFile ? markdownView.file : null;
+        const mode = String((markdownView as any)?.getMode?.() || (markdownView as any)?.mode || '').toLowerCase();
+        if (file && mode === 'source' && plugin.isLivePreviewMarkdownView(markdownView)) {
+          builder.add(
+            view.state.doc.length,
+            view.state.doc.length,
+            Decoration.widget({
+              widget: new SourceEndEmbedWidget(file.path),
+              side: 1,
+            }),
+          );
+        }
+        return builder.finish();
+      }
+    }, {
+      decorations: (value) => value.decorations,
+    });
+  }
+
+  private getHostMap(leaf: WorkspaceLeaf): Map<RuleRenderPlacement, HTMLElement> {
+    let map = this.hostEntriesByLeaf.get(leaf);
+    if (!map) {
+      map = new Map();
+      this.hostEntriesByLeaf.set(leaf, map);
+    }
+    return map;
+  }
+
+  private getHostForPlacement(leaf: WorkspaceLeaf, placement: RuleRenderPlacement): HTMLElement | undefined {
+    return this.hostEntriesByLeaf.get(leaf)?.get(placement);
+  }
+
+  private getAllHostsForLeaf(leaf: WorkspaceLeaf): Array<[RuleRenderPlacement, HTMLElement]> {
+    return Array.from(this.hostEntriesByLeaf.get(leaf)?.entries() || []);
+  }
+
+  private setHostForPlacement(leaf: WorkspaceLeaf, placement: RuleRenderPlacement, host: HTMLElement): void {
+    this.getHostMap(leaf).set(placement, host);
+  }
+
+  private deleteHostForPlacement(leaf: WorkspaceLeaf, placement: RuleRenderPlacement): void {
+    const map = this.hostEntriesByLeaf.get(leaf);
+    if (!map) return;
+    map.delete(placement);
+    if (map.size === 0) {
+      this.hostEntriesByLeaf.delete(leaf);
+    }
+  }
+
+  private getInlineAnchorMap(leaf: WorkspaceLeaf): Map<Exclude<RuleRenderPlacement, "floating">, HTMLElement> {
+    let map = this.inlineAnchorsByLeaf.get(leaf);
+    if (!map) {
+      map = new Map();
+      this.inlineAnchorsByLeaf.set(leaf, map);
+    }
+    return map;
+  }
+
+  private getInlineAnchor(leaf: WorkspaceLeaf, placement: Exclude<RuleRenderPlacement, "floating">): HTMLElement | undefined {
+    return this.inlineAnchorsByLeaf.get(leaf)?.get(placement);
+  }
+
+  private setInlineAnchor(leaf: WorkspaceLeaf, placement: Exclude<RuleRenderPlacement, "floating">, anchor: HTMLElement): void {
+    this.getInlineAnchorMap(leaf).set(placement, anchor);
+  }
+
+  private getEffectiveRulePlacement(rule: BaseEmbedRule, leaf: WorkspaceLeaf): RuleRenderPlacement {
+    const explicit = rule.renderPlacement;
+    if (explicit === 'floating' || explicit === 'after-title' || explicit === 'after-content') {
+      if (explicit !== 'floating') {
+        const type = String((leaf.view as any)?.getViewType?.() || '');
+        if (type !== 'markdown') return 'floating';
+      }
+      return explicit;
+    }
+    const type = String((leaf.view as any)?.getViewType?.() || '');
+    if (this.settings.renderMode === 'inline' && type === 'markdown') {
+      return this.settings.inlinePlacement;
+    }
+    return 'floating';
+  }
+
+  private hasAfterContentRulesForLeaf(leaf: WorkspaceLeaf): boolean {
+    const file = this.getLeafFile(leaf);
+    if (!file) return false;
+    return this.settings.rules.some((rule) =>
+      this.shouldEmbedRule(rule, file) && this.getEffectiveRulePlacement(rule, leaf) === 'after-content'
+    );
+  }
+
+  private findSourceEndWidgetHost(leaf: WorkspaceLeaf): HTMLElement | null {
+    const view = leaf.view as any;
+    const containerEl = view?.containerEl as HTMLElement | undefined;
+    const file = this.getLeafFile(leaf);
+    if (!containerEl || !file) return null;
+    return containerEl.querySelector<HTMLElement>(`.${SOURCE_END_HOST_CLASS}[data-file-path="${CSS.escape(file.path)}"]`);
+  }
+
+  private groupRulesByPlacement(leaf: WorkspaceLeaf, rules: BaseEmbedRule[]): Map<RuleRenderPlacement, BaseEmbedRule[]> {
+    const groups = new Map<RuleRenderPlacement, BaseEmbedRule[]>();
+    for (const rule of rules) {
+      const placement = this.getEffectiveRulePlacement(rule, leaf);
+      const bucket = groups.get(placement) || [];
+      bucket.push(rule);
+      groups.set(placement, bucket);
+    }
+    return groups;
+  }
+
   private getLeafFile(leaf: WorkspaceLeaf): TFile | null {
     const file = (leaf.view as any)?.file;
     return file instanceof TFile ? file : null;
@@ -709,13 +1001,11 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         continue;
       }
 
-      const overlay = this.overlayByLeaf.get(leaf);
-      const basePaths = overlay?.getAttribute("data-base-paths");
-      if (!basePaths) continue;
-      const matchesBase = basePaths
-        .split(",")
-        .map((path) => normalizePath(path))
-        .some((path) => path === normalizedFilePath);
+      const matchesBase = this.getAllHostsForLeaf(leaf).some(([, overlay]) => {
+        const basePaths = overlay?.getAttribute("data-base-paths");
+        if (!basePaths) return false;
+        return basePaths.split(",").map((path) => normalizePath(path)).some((path) => path === normalizedFilePath);
+      });
       if (matchesBase) {
         impacted.push(leaf);
       }
@@ -1028,6 +1318,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       if (
         cursor.classList.contains(EMBED_CLASS) ||
         cursor.classList.contains(INLINE_ANCHOR_CLASS) ||
+        cursor.classList.contains(INLINE_SECTION_CLASS) ||
         cursor.classList.contains("tps-daily-note-nav") ||
         cursor.classList.contains("metadata-container")
       ) {
@@ -1044,6 +1335,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
   private resolveInlineMountTarget(
     leaf: WorkspaceLeaf,
+    placement: Exclude<RuleRenderPlacement, "floating">,
   ): { parent: HTMLElement; before: ChildNode | null } | null {
     const view = leaf.view as any;
     const viewContainer = view?.containerEl as HTMLElement | undefined;
@@ -1055,6 +1347,18 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     const sourceEditor =
       sourceView?.querySelector<HTMLElement>(".cm-editor")
       || sourceView?.querySelector<HTMLElement>(".cm-scroller")?.closest(".cm-editor")
+      || null;
+    const sourceScroller =
+      sourceView?.querySelector<HTMLElement>(".cm-scroller")
+      || sourceEditor?.querySelector<HTMLElement>(".cm-scroller")
+      || null;
+    const sourceSizer =
+      sourceScroller?.querySelector<HTMLElement>(".cm-sizer")
+      || sourceEditor?.querySelector<HTMLElement>(".cm-sizer")
+      || null;
+    const sourceContentContainer =
+      sourceSizer?.querySelector<HTMLElement>(":scope > .cm-contentContainer")
+      || sourceSizer?.querySelector<HTMLElement>(".cm-contentContainer")
       || null;
     const sourceInlineTitle =
       sourceView?.querySelector<HTMLElement>(".inline-title")
@@ -1068,18 +1372,25 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       || viewContainer.querySelector<HTMLElement>(".markdown-reading-view")
       || viewContainer.querySelector<HTMLElement>(".markdown-preview-view")
       || null;
-    const inlineTitle = previewRoot?.querySelector<HTMLElement>(".inline-title")
-      || viewContainer.querySelector<HTMLElement>(".inline-title");
+    const inlineTitle =
+      previewRoot?.querySelector<HTMLElement>(":scope > .inline-title")
+      || previewRoot?.querySelector<HTMLElement>(":scope > h1")
+      || previewRoot?.querySelector<HTMLElement>(".markdown-preview-section .inline-title")
+      || previewRoot?.querySelector<HTMLElement>(".markdown-preview-section h1")
+      || previewRoot?.querySelector<HTMLElement>(".inline-title")
+      || viewContainer.querySelector<HTMLElement>(".inline-title")
+      || viewContainer.querySelector<HTMLElement>(".markdown-preview-view h1, .markdown-reading-view h1");
     const previewVisible = this.isElementActuallyVisible(previewRoot);
 
-    const shouldUseSource = mode === "source" ? sourceVisible : sourceVisible && !previewVisible;
-    const shouldUsePreview = mode === "preview" ? previewVisible : previewVisible && !sourceVisible;
+    const isLivePreview = this.isLivePreviewMarkdownView(view as MarkdownView);
+    const shouldUseSource = sourceVisible && isLivePreview;
+    const shouldUsePreview = previewVisible;
 
     if (shouldUseSource) {
       const sourceParent = sourceEditor?.parentElement || sourceView;
       if (!sourceParent || !sourceEditor) return null;
 
-      if (this.settings.inlinePlacement === "after-title") {
+      if (placement === "after-title") {
         if (
           sourceInlineTitle?.isConnected
           && sourceInlineTitle.parentElement
@@ -1099,6 +1410,25 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           before: this.normalizeInlineBeforeNode(sourceParent, sourceEditor),
         };
       }
+      const sourceEndHost = this.findSourceEndWidgetHost(leaf);
+      if (sourceEndHost?.isConnected) {
+        return {
+          parent: sourceEndHost,
+          before: null,
+        };
+      }
+      if (sourceContentContainer?.isConnected && sourceContentContainer.parentElement) {
+        return {
+          parent: sourceContentContainer.parentElement,
+          before: this.normalizeInlineBeforeNode(sourceContentContainer.parentElement, sourceContentContainer.nextSibling),
+        };
+      }
+      if (sourceSizer?.isConnected) {
+        return {
+          parent: sourceSizer,
+          before: this.normalizeInlineBeforeNode(sourceSizer, null),
+        };
+      }
       return {
         parent: sourceParent,
         before: this.normalizeInlineBeforeNode(sourceParent, sourceEditor.nextSibling),
@@ -1109,7 +1439,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       const sourceParent = sourceEditor?.parentElement || sourceView;
       if (!sourceParent || !sourceEditor) return null;
 
-      if (this.settings.inlinePlacement === "after-title") {
+      if (placement === "after-title") {
         if (
           sourceInlineTitle?.isConnected
           && sourceInlineTitle.parentElement
@@ -1127,6 +1457,25 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         return {
           parent: sourceParent,
           before: this.normalizeInlineBeforeNode(sourceParent, sourceEditor),
+        };
+      }
+      const sourceEndHost = this.findSourceEndWidgetHost(leaf);
+      if (sourceEndHost?.isConnected) {
+        return {
+          parent: sourceEndHost,
+          before: null,
+        };
+      }
+      if (sourceContentContainer?.isConnected && sourceContentContainer.parentElement) {
+        return {
+          parent: sourceContentContainer.parentElement,
+          before: this.normalizeInlineBeforeNode(sourceContentContainer.parentElement, sourceContentContainer.nextSibling),
+        };
+      }
+      if (sourceSizer?.isConnected) {
+        return {
+          parent: sourceSizer,
+          before: this.normalizeInlineBeforeNode(sourceSizer, null),
         };
       }
       return {
@@ -1140,6 +1489,12 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     const firstSection = previewSections[0] || null;
     const lastSection = previewSections.length > 0 ? previewSections[previewSections.length - 1] : null;
     const dailyNav = previewRoot?.querySelector<HTMLElement>(".tps-daily-note-nav--under-title");
+    const previewContentStart =
+      previewChildren.find((child) =>
+        child.classList.contains("markdown-preview-section")
+        || child.classList.contains("markdown-preview-pusher")
+        || child.classList.contains("markdown-preview-sizer"),
+      ) || null;
     const previewFooter = previewChildren.find((child) =>
       child.classList.contains("metadata-container")
       || child.classList.contains("metadata-properties")
@@ -1147,18 +1502,45 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       || child.classList.contains("mod-footer"),
     ) || null;
 
-    if (this.settings.inlinePlacement === "after-title") {
+    if (placement === "after-title") {
+      if (
+        dailyNav?.isConnected
+        && dailyNav.parentElement
+      ) {
+        return {
+          parent: this.ensureInlineAnchorAfterNode(leaf, dailyNav, placement),
+          before: null,
+        };
+      }
+      if (
+        inlineTitle?.isConnected
+      ) {
+        return {
+          parent: this.ensureInlineAnchorAfterNode(leaf, inlineTitle, placement),
+          before: null,
+        };
+      }
+      const inlineTitleSection = inlineTitle?.closest<HTMLElement>(".markdown-preview-section");
+      if (
+        inlineTitleSection?.isConnected
+        && inlineTitleSection.children.length <= 1
+      ) {
+        return {
+          parent: this.ensureInlineAnchorAfterNode(leaf, inlineTitleSection, placement),
+          before: null,
+        };
+      }
       if (previewRoot?.isConnected) {
         return {
           parent: this.ensureReadingModeInlineAnchor(
             leaf,
             previewRoot,
-            this.settings.inlinePlacement,
+            placement,
             dailyNav?.parentElement === previewRoot
               ? dailyNav.nextSibling
               : inlineTitle?.parentElement === previewRoot
                 ? inlineTitle.nextSibling
-                : firstSection,
+                : previewContentStart || firstSection,
           ),
           before: null,
         };
@@ -1167,12 +1549,12 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     }
 
     if (previewVisible) {
-      if (this.settings.inlinePlacement === "after-content" && lastSection) {
+      if (placement === "after-content" && lastSection) {
         return {
           parent: this.ensureReadingModeInlineAnchor(
             leaf,
             previewRoot,
-            this.settings.inlinePlacement,
+            placement,
             previewFooter || lastSection.nextSibling,
           ),
           before: null,
@@ -1183,7 +1565,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           parent: this.ensureReadingModeInlineAnchor(
             leaf,
             previewRoot,
-            this.settings.inlinePlacement,
+            placement,
             previewFooter || lastSection.nextSibling,
           ),
           before: null,
@@ -1193,7 +1575,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         parent: this.ensureReadingModeInlineAnchor(
           leaf,
           previewRoot,
-          this.settings.inlinePlacement,
+          placement,
           previewFooter,
         ),
         before: null,
@@ -1208,16 +1590,49 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     placement: "after-title" | "after-content",
     before: ChildNode | null,
   ): HTMLElement {
-    let anchor = this.inlineAnchorByLeaf.get(leaf);
+    let anchor = this.getInlineAnchor(leaf, placement);
     if (!anchor) {
       anchor = document.createElement("div");
       anchor.className = INLINE_ANCHOR_CLASS;
-      this.inlineAnchorByLeaf.set(leaf, anchor);
+      this.setInlineAnchor(leaf, placement, anchor);
     }
     anchor.setAttribute("data-inline-placement", placement);
+
+    let section = anchor.parentElement;
+    if (!section || !section.classList.contains(INLINE_SECTION_CLASS)) {
+      section = document.createElement("div");
+      section.className = `markdown-preview-section ${INLINE_SECTION_CLASS}`;
+      section.setAttribute("data-inline-placement", placement);
+      section.appendChild(anchor);
+    } else {
+      section.setAttribute("data-inline-placement", placement);
+      if (anchor.parentElement !== section) {
+        section.empty();
+        section.appendChild(anchor);
+      }
+    }
+
     const normalizedBefore = this.normalizeInlineBeforeNode(previewRoot, before);
-    if (anchor.parentElement !== previewRoot || anchor.nextSibling !== normalizedBefore) {
-      previewRoot.insertBefore(anchor, normalizedBefore);
+    if (section.parentElement !== previewRoot || section.nextSibling !== normalizedBefore) {
+      previewRoot.insertBefore(section, normalizedBefore);
+    }
+    return anchor;
+  }
+
+  private ensureInlineAnchorAfterNode(
+    leaf: WorkspaceLeaf,
+    afterNode: HTMLElement,
+    placement: "after-title" | "after-content",
+  ): HTMLElement {
+    let anchor = this.getInlineAnchor(leaf, placement);
+    if (!anchor) {
+      anchor = document.createElement("div");
+      anchor.className = INLINE_ANCHOR_CLASS;
+      this.setInlineAnchor(leaf, placement, anchor);
+    }
+    anchor.setAttribute("data-inline-placement", placement);
+    if (anchor.parentElement !== afterNode.parentElement || anchor.previousSibling !== afterNode) {
+      afterNode.insertAdjacentElement("afterend", anchor);
     }
     return anchor;
   }
@@ -1227,43 +1642,46 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     const viewContainer = view?.containerEl as HTMLElement | undefined;
     const leafContent = viewContainer?.closest?.(".workspace-leaf-content") as HTMLElement | null;
     if (!leafContent?.isConnected) return;
+    const trackedHosts = new Set(this.getAllHostsForLeaf(leaf).map(([, host]) => host));
     const hosts = Array.from(leafContent.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}`));
     for (const host of hosts) {
       if (host === currentHost) continue;
+      if (trackedHosts.has(host)) continue;
       if (currentHost.contains(host) || host.contains(currentHost)) continue;
       host.remove();
     }
   }
 
-  private ensureHost(leaf: WorkspaceLeaf): HTMLElement | null {
-    const desiredMode = this.getEffectiveRenderMode(leaf);
-    let host = this.overlayByLeaf.get(leaf);
+  private ensureHost(leaf: WorkspaceLeaf, placement: RuleRenderPlacement): HTMLElement | null {
+    let host = this.getHostForPlacement(leaf, placement);
     if (host?.isConnected) {
       const currentMode = host.getAttribute("data-render-mode");
+      const desiredMode = placement === 'floating' ? 'floating' : 'inline';
       if (currentMode !== desiredMode) {
-        this.removeOverlay(leaf);
+        host.remove();
+        this.deleteHostForPlacement(leaf, placement);
         host = undefined;
       }
     }
 
-    if (desiredMode === "inline") {
-      const mountTarget = this.resolveInlineMountTarget(leaf);
+    if (placement !== "floating") {
+      const mountTarget = this.resolveInlineMountTarget(leaf, placement);
       if (!mountTarget) return null;
       if (!host) {
         host = document.createElement("div");
         host.className = EMBED_CLASS;
-        this.overlayByLeaf.set(leaf, host);
+        this.setHostForPlacement(leaf, placement, host);
       }
       host.setAttribute("data-render-mode", "inline");
-      host.setAttribute("data-inline-placement", this.settings.inlinePlacement);
+      host.setAttribute("data-inline-placement", placement);
       const isCodeMirrorInline = mountTarget.parent.classList.contains("cm-content");
       host.classList.toggle("cm-line", isCodeMirrorInline);
       host.classList.toggle(`${EMBED_CLASS}--cm-inline`, isCodeMirrorInline);
       if (host.parentElement !== mountTarget.parent || host.nextSibling !== mountTarget.before) {
-        console.info("[TPS Auto Base Embed] [Mount]", {
+        this.debugInfo("[TPS Auto Base Embed] [Mount]", {
           file: this.getLeafFile(leaf)?.path ?? null,
-          renderMode: desiredMode,
-          inlinePlacement: this.settings.inlinePlacement,
+          renderMode: 'inline',
+          inlinePlacement: placement,
           parentClass: mountTarget.parent.className,
           beforeNode:
             mountTarget.before instanceof HTMLElement
@@ -1271,6 +1689,9 @@ export default class AutoBaseEmbedPlugin extends Plugin {
               : mountTarget.before?.nodeName ?? null,
         });
         mountTarget.parent.insertBefore(host, mountTarget.before);
+      }
+      if (placement === "after-title") {
+        this.setupTitleReattachObserver(leaf, host, mountTarget);
       }
       this.cleanupDuplicateHostsForLeaf(leaf, host);
       const observer = this.overlayObservers.get(leaf);
@@ -1288,17 +1709,49 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     return this.ensureFloatingOverlay(leaf);
   }
 
+  private setupTitleReattachObserver(
+    leaf: WorkspaceLeaf,
+    host: HTMLElement,
+    mountTarget: { parent: HTMLElement; before: ChildNode | null },
+  ): void {
+    const existing = this.titleReattachObservers.get(leaf);
+    if (existing) existing.disconnect();
+
+    const plugin = this;
+    let reattachScheduled = false;
+    const doReattach = () => {
+      reattachScheduled = false;
+      if (!host.isConnected && plugin.getHostForPlacement(leaf, "after-title") === host) {
+        const freshTarget = plugin.resolveInlineMountTarget(leaf, "after-title");
+        if (freshTarget) {
+          freshTarget.parent.insertBefore(host, freshTarget.before);
+          if (freshTarget.parent !== mountTarget.parent) {
+            observer.disconnect();
+            observer.observe(freshTarget.parent, { childList: true });
+          }
+        }
+      }
+    };
+    const observer = new MutationObserver(() => {
+      if (!host.isConnected && !reattachScheduled) {
+        reattachScheduled = true;
+        requestAnimationFrame(doReattach);
+      }
+    });
+
+    observer.observe(mountTarget.parent, { childList: true });
+    this.titleReattachObservers.set(leaf, observer);
+  }
+
   private buildRenderSignature(
     leaf: WorkspaceLeaf,
     file: TFile,
     rules: BaseEmbedRule[],
   ): string {
-    const mode = this.getEffectiveRenderMode(leaf);
-    const placement = mode === "inline" ? this.settings.inlinePlacement : "floating";
     const ruleKey = rules
-      .map((rule) => `${rule.id}:${normalizePath(rule.basePath)}:${rule.initialState || "default"}`)
+      .map((rule) => `${rule.id}:${normalizePath(rule.basePath)}:${rule.initialState || "default"}:${this.getEffectiveRulePlacement(rule, leaf)}`)
       .join("|");
-    return `${mode}::${placement}::${file.path}::${ruleKey}`;
+    return `${file.path}::${ruleKey}`;
   }
 
   private hasRenderableHost(container: HTMLElement | null | undefined): boolean {
@@ -1310,28 +1763,50 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
   private canReuseExistingRender(
     leaf: WorkspaceLeaf,
+    placement: RuleRenderPlacement,
     container: HTMLElement,
     signature: string,
     shouldResetExpanded: boolean,
   ): boolean {
     if (shouldResetExpanded) {
-      console.info("[TPS Auto Base Embed] [Reuse] failed: shouldResetExpanded=true");
+      this.debugInfo("[TPS Auto Base Embed] [Reuse] failed: shouldResetExpanded=true");
       return false;
     }
     if (!container.isConnected) {
-      console.info("[TPS Auto Base Embed] [Reuse] failed: !container.isConnected");
+      this.debugInfo("[TPS Auto Base Embed] [Reuse] failed: !container.isConnected");
       return false;
     }
     if (!container.querySelector(`.${EMBED_CLASS}__panel`)) {
-      console.info("[TPS Auto Base Embed] [Reuse] failed: no panel found");
+      this.debugInfo("[TPS Auto Base Embed] [Reuse] failed: no panel found");
+      return false;
+    }
+    if (!this.hostMatchesPlacementTarget(leaf, placement, container)) {
+      this.debugInfo(`[TPS Auto Base Embed] [Reuse] failed: host target mismatch for ${placement}`);
       return false;
     }
     const currentSig = this.renderSignatureByLeaf.get(leaf);
     if (currentSig !== signature) {
-      console.info(`[TPS Auto Base Embed] [Reuse] failed: signature mismatch. Current: ${currentSig}, Target: ${signature}`);
+      this.debugInfo(`[TPS Auto Base Embed] [Reuse] failed: signature mismatch. Current: ${currentSig}, Target: ${signature}`);
       return false;
     }
     return true;
+  }
+
+  private hostMatchesPlacementTarget(
+    leaf: WorkspaceLeaf,
+    placement: RuleRenderPlacement,
+    host: HTMLElement | null | undefined,
+  ): boolean {
+    if (!host?.isConnected) return false;
+    if (placement === 'floating') {
+      const view = leaf.view as any;
+      const viewContainer = view?.containerEl as HTMLElement | undefined;
+      const leafContent = viewContainer?.closest?.('.workspace-leaf-content') as HTMLElement | null;
+      const attachTarget = leafContent || viewContainer || null;
+      return !!attachTarget && host.parentElement === attachTarget;
+    }
+    const mountTarget = this.resolveInlineMountTarget(leaf, placement);
+    return !!mountTarget && host.parentElement === mountTarget.parent && host.nextSibling === mountTarget.before;
   }
 
   private mergeRefreshOptions(
@@ -1349,9 +1824,8 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     if (this.refreshInFlight.has(leaf)) {
       const currentFilePath = this.currentFileByLeaf.get(leaf);
       const latestFilePath = this.getLeafFile(leaf)?.path;
-      const overlay = this.overlayByLeaf.get(leaf);
-      const desiredMode = this.getEffectiveRenderMode(leaf);
-      const modeChanged = overlay?.getAttribute("data-render-mode") !== desiredMode;
+      const hosts = this.getAllHostsForLeaf(leaf);
+      const modeChanged = hosts.some(([placement, host]) => host?.getAttribute("data-render-mode") !== (placement === 'floating' ? 'floating' : 'inline'));
       const fileChanged = !!currentFilePath && !!latestFilePath && currentFilePath !== latestFilePath;
       if (!fileChanged && !modeChanged) {
         return;
@@ -1386,12 +1860,14 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     });
     if (!this.isSupportedLeaf(leaf)) {
       this.releaseSwipeGestureTracking(leaf);
+      this.detachContentObserver(leaf);
       this.removeOverlay(leaf);
       return;
     }
     const file = this.getLeafFile(leaf);
     if (!file || (file.extension !== "md" && file.extension !== "canvas")) {
       this.releaseSwipeGestureTracking(leaf);
+      this.detachContentObserver(leaf);
       this.currentFileByLeaf.delete(leaf);
       this.renderSignatureByLeaf.delete(leaf);
       this.removeOverlay(leaf);
@@ -1399,6 +1875,15 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     }
     if (!this.settings.enabled) {
       this.releaseSwipeGestureTracking(leaf);
+      this.detachContentObserver(leaf);
+      this.removeOverlay(leaf);
+      return;
+    }
+
+    if (this.isPlainSourceModeLeaf(leaf)) {
+      this.releaseSwipeGestureTracking(leaf);
+      this.detachContentObserver(leaf);
+      this.renderSignatureByLeaf.delete(leaf);
       this.removeOverlay(leaf);
       return;
     }
@@ -1413,9 +1898,10 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
     // Get matching rules for this file
     const matchingRules = this.settings.rules.filter((rule) => this.shouldEmbedRule(rule, file));
+    const matchingRuleGroups = this.groupRulesByPlacement(leaf, matchingRules);
 
     if (matchingRules.length === 0) {
-      const existingContainer = this.overlayByLeaf.get(leaf);
+      const existingContainer = this.getAllHostsForLeaf(leaf).find(([, host]) => host && this.hasRenderableHost(host))?.[1];
       if (
         existingContainer &&
         this.hasRenderableHost(existingContainer) &&
@@ -1426,6 +1912,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       }
       this.renderSignatureByLeaf.delete(leaf);
       this.releaseSwipeGestureTracking(leaf);
+      this.detachContentObserver(leaf);
       this.removeOverlay(leaf);
       return;
     }
@@ -1450,29 +1937,39 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     // Exclude files check (global)
     const excludedFiles = this.parseList(this.settings.excludeFiles);
     if (excludedFiles.some((p) => normalizePath(p) === file.path)) {
+      this.detachContentObserver(leaf);
       this.removeOverlay(leaf);
       return;
     }
 
     const renderSignature = this.buildRenderSignature(leaf, file, matchingRules);
-    const container = this.ensureHost(leaf);
-    if (!container) {
-      this.scheduleLeafRefresh(leaf, { resetExpanded: false }, 250);
-      return;
-    }
     const lastRefreshMeta = this.lastRefreshMetaByLeaf.get(leaf);
     if (
       lastRefreshMeta?.signature === renderSignature
       && Date.now() - lastRefreshMeta.at < REFRESH_COOLDOWN_MS
-      && this.hasRenderableHost(container)
+      && this.getAllHostsForLeaf(leaf).some(([, host]) => this.hasRenderableHost(host))
+      && Array.from(matchingRuleGroups.entries()).every(([placement]) =>
+        this.hostMatchesPlacementTarget(leaf, placement, this.getHostForPlacement(leaf, placement))
+      )
     ) {
-      container.setAttribute("data-base-paths", matchingRules.map((r) => r.basePath).join(","));
-      container.setAttribute("data-source-path", file.path);
+      for (const [placement, rules] of matchingRuleGroups) {
+        const container = this.getHostForPlacement(leaf, placement);
+        container?.setAttribute("data-base-paths", rules.map((r) => r.basePath).join(","));
+        container?.setAttribute("data-source-path", file.path);
+      }
       return;
     }
-    if (this.canReuseExistingRender(leaf, container, renderSignature, shouldResetExpanded)) {
-      container.setAttribute("data-base-paths", matchingRules.map((r) => r.basePath).join(","));
-      container.setAttribute("data-source-path", file.path);
+    if (
+      this.getAllHostsForLeaf(leaf).length > 0 &&
+      this.getAllHostsForLeaf(leaf).every(([placement, container]) =>
+        this.canReuseExistingRender(leaf, placement, container, renderSignature, shouldResetExpanded)
+      )
+    ) {
+      for (const [placement, rules] of matchingRuleGroups) {
+        const container = this.getHostForPlacement(leaf, placement);
+        container?.setAttribute("data-base-paths", rules.map((r) => r.basePath).join(","));
+        container?.setAttribute("data-source-path", file.path);
+      }
       return;
     }
     
@@ -1485,74 +1982,65 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       if (!basePaths.includes(path)) expanded.delete(path);
     }
 
-    container.setAttribute("data-base-paths", basePaths.join(","));
-    container.setAttribute("data-source-path", file.path);
-
     // Seed the cooldown timestamp BEFORE rendering so the metadataCache.changed
     // guard is active if MarkdownRenderer.render (fallback path) is used.
     this.lastRefreshMetaByLeaf.set(leaf, { signature: renderSignature, at: Date.now() });
 
-    const nextPanels: HTMLElement[] = [];
-    const oldPanels = Array.from(container.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
-
-    // When the file has changed, immediately remove old panels so the previous
-    // file's content is never displayed under the new file context. For same-file
-    // re-renders (metadata updates, etc.) we keep the old panels alive until the
-    // new ones are ready to avoid a flash of empty content.
-    if (fileChanged && oldPanels.length > 0) {
-      for (const p of oldPanels) this.unloadPanel(p);
-    }
-
-    for (const rule of matchingRules) {
-      if (this.renderTokens.get(leaf) !== nextToken) return;
-      if (file.path === rule.basePath) continue;
-      const baseFile = this.app.vault.getAbstractFileByPath(rule.basePath);
-      if (!(baseFile instanceof TFile)) continue;
-      // Pass file.path as sourcePath so the Bases plugin resolves queries and
-      // relative paths in the context of the note that contains the embed.
-      const panel = await this.buildPanel(leaf, baseFile, rule.basePath, file.path, view as any, nextToken, container);
-      if (panel && this.renderTokens.get(leaf) === nextToken) {
-        nextPanels.push(panel);
+    const desiredPlacements = new Set<RuleRenderPlacement>(matchingRuleGroups.keys());
+    for (const [placement, host] of this.getAllHostsForLeaf(leaf)) {
+      if (!desiredPlacements.has(placement)) {
+        this.clearPanels(host);
+        host.remove();
+        this.deleteHostForPlacement(leaf, placement);
       }
     }
-    if (nextPanels.length === 0) {
-      // Clean up newly appended panels if any
-      const currentNew = Array.from(container.querySelectorAll(`.${EMBED_CLASS}__panel`)).filter((p) => !oldPanels.includes(p as HTMLElement));
-      currentNew.forEach((p) => p.remove());
 
-      // Only tolerate a transient cache drop for same-file re-renders.
-      // If the file has changed, never preserve panels from the old file.
-      if (
-        !fileChanged
-        && container.getAttribute("data-source-path") === file.path
-        && oldPanels.length > 0
-      ) {
-        this.logScrollSnapshot("refresh-preserved-empty", leaf, file, { token: nextToken });
+    let renderedPanelCount = 0;
+    for (const [placement, rules] of matchingRuleGroups) {
+      const container = this.ensureHost(leaf, placement);
+      if (!container) {
+        this.scheduleLeafRefresh(leaf, { resetExpanded: false }, 250);
         return;
       }
+      this.clearPanels(container);
+      container.setAttribute("data-base-paths", rules.map((r) => r.basePath).join(","));
+      container.setAttribute("data-source-path", file.path);
+
+      for (const rule of rules) {
+        if (this.renderTokens.get(leaf) !== nextToken) return;
+        if (file.path === rule.basePath) continue;
+        const baseFile = this.app.vault.getAbstractFileByPath(rule.basePath);
+        if (!(baseFile instanceof TFile)) continue;
+        const panel = await this.buildPanel(leaf, baseFile, rule.basePath, file.path, view as any, nextToken, container);
+        if (panel && this.renderTokens.get(leaf) === nextToken) {
+          renderedPanelCount += 1;
+        }
+      }
+    }
+
+    if (renderedPanelCount === 0) {
       this.renderSignatureByLeaf.delete(leaf);
       this.releaseSwipeGestureTracking(leaf);
+      this.detachContentObserver(leaf);
       this.removeOverlay(leaf);
       this.logScrollSnapshot("refresh-empty", leaf, file, { token: nextToken });
       return;
     }
-    
-    for (const oldPanel of oldPanels) {
-      this.unloadPanel(oldPanel as HTMLElement);
-    }
+
     this.renderSignatureByLeaf.set(leaf, renderSignature);
     // Refresh the timestamp now that all panels have finished rendering, so the
     // cooldown window extends from render-end rather than only from render-start.
     this.lastRefreshMetaByLeaf.set(leaf, { signature: renderSignature, at: Date.now() });
     this.ensureSwipeGestureTracking(leaf);
+    this.attachContentObserver(leaf);
     if (options) {
       this.setSwipeCollapsed(false);
     } else {
       this.applyOverlayVisibility(leaf);
     }
-    this.logScrollSnapshot("refresh-end", leaf, file, {
+      this.logScrollSnapshot("refresh-end", leaf, file, {
       token: nextToken,
-      panels: container.children.length,
+      panels: renderedPanelCount,
       signature: renderSignature,
     });
     window.setTimeout(() => {
@@ -1570,7 +2058,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   }
 
   private ensureFloatingOverlay(leaf: WorkspaceLeaf): HTMLElement {
-    let overlay = this.overlayByLeaf.get(leaf);
+    let overlay = this.getHostForPlacement(leaf, 'floating');
     const view = leaf.view;
     const viewContainer = (view as any).containerEl as HTMLElement | undefined;
     if (!viewContainer) return document.createElement("div");
@@ -1607,7 +2095,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       this.attachOverlayObserver(leaf, overlay, leafContent);
     }
 
-    this.overlayByLeaf.set(leaf, overlay);
+    this.setHostForPlacement(leaf, 'floating', overlay);
     this.applyOverlayVisibility(leaf);
     return overlay;
   }
@@ -1660,13 +2148,23 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
   private scheduleTypingRefresh(leaf: WorkspaceLeaf): void {
     this.lastTypingAt.set(leaf, Date.now());
+    const existing = this.typingRefreshTimers.get(leaf);
+    if (existing != null) {
+      window.clearTimeout(existing);
+    }
+    const timer = window.setTimeout(() => {
+      this.typingRefreshTimers.delete(leaf);
+      void this.refreshLeaf(leaf, { resetExpanded: false });
+    }, this.hasAfterContentRulesForLeaf(leaf) ? 80 : 180);
+    this.typingRefreshTimers.set(leaf, timer);
   }
 
   private hasExpandedPanel(leaf: WorkspaceLeaf): boolean {
-    const overlay = this.overlayByLeaf.get(leaf);
-    if (!overlay?.isConnected) return false;
-    const panels = Array.from(overlay.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
-    return panels.some((panel) => panel.getAttribute(COLLAPSED_ATTR) === "false");
+    return this.getAllHostsForLeaf(leaf).some(([, overlay]) => {
+      if (!overlay?.isConnected) return false;
+      const panels = Array.from(overlay.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
+      return panels.some((panel) => panel.getAttribute(COLLAPSED_ATTR) === "false");
+    });
   }
 
   private unloadPanel(panel: HTMLElement): void {
@@ -1708,94 +2206,100 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     if (this.renderTokens.get(leaf) !== renderToken) return null;
     const panel = document.createElement("div");
     panel.className = `${EMBED_CLASS}__panel`;
-    const isExpanded = this.getExpandedSet(leaf).has(basePath);
-    panel.setAttribute(COLLAPSED_ATTR, isExpanded ? "false" : "true");
+    const alwaysExpanded = this.settings.alwaysExpanded;
+    const isExpanded = alwaysExpanded || this.getExpandedSet(leaf).has(basePath);
+    panel.setAttribute(COLLAPSED_ATTR, "false");
     panel.setAttribute(RENDERING_ATTR, "true");
     panel.setAttribute("data-base-path", basePath);
-    // Derive a human-readable label from the base filename (strip directory and extension).
-    const baseLabel = basePath.replace(/.*\//, "").replace(/\.base$/i, "");
-    panel.innerHTML = `
-      <div class="${EMBED_CLASS}__bar">
-        <div class="${EMBED_CLASS}__bar-left">
-          <span class="${EMBED_CLASS}__bar-label">${baseLabel}</span>
+
+    if (!alwaysExpanded) {
+      const baseLabel = basePath.replace(/.*\//, "").replace(/\.base$/i, "");
+      panel.innerHTML = `
+        <div class="${EMBED_CLASS}__bar">
+          <div class="${EMBED_CLASS}__bar-left">
+            <span class="${EMBED_CLASS}__bar-label">${baseLabel}</span>
+          </div>
+          <div class="${EMBED_CLASS}__bar-right">
+            <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded base">▸</button>
+          </div>
         </div>
-        <div class="${EMBED_CLASS}__bar-right">
-          <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded base">▸</button>
-        </div>
-      </div>
-      <div class="${EMBED_CLASS}__content"></div>
-    `;
+        <div class="${EMBED_CLASS}__content"></div>
+      `;
 
-    const toggle = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
-    const bar = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar`);
-    const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
-    const togglePanel = () => {
-      const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
+      const toggle = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
+      const bar = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar`);
+      const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
+      const togglePanel = () => {
+        const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
 
-      // Accordion Mode: Collapse others if expanding
-      if (collapsed && this.settings.accordionMode) {
-        const container = panel.parentElement;
-        if (container) {
-          const neighbors = Array.from(container.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
-          const expandedSet = this.getExpandedSet(leaf);
-          for (const neighbor of neighbors) {
-            if (neighbor !== panel && neighbor.getAttribute(COLLAPSED_ATTR) === "false") {
-              neighbor.setAttribute(COLLAPSED_ATTR, "true");
-              const t = neighbor.querySelector(`.${EMBED_CLASS}__toggle`);
-              if (t) t.textContent = "▸";
+        if (collapsed && this.settings.accordionMode) {
+          const container = panel.parentElement;
+          if (container) {
+            const neighbors = Array.from(container.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
+            const expandedSet = this.getExpandedSet(leaf);
+            for (const neighbor of neighbors) {
+              if (neighbor !== panel && neighbor.getAttribute(COLLAPSED_ATTR) === "false") {
+                neighbor.setAttribute(COLLAPSED_ATTR, "true");
+                const t = neighbor.querySelector(`.${EMBED_CLASS}__toggle`);
+                if (t) t.textContent = "▸";
 
-              const path = neighbor.getAttribute("data-base-path");
-              if (path) expandedSet.delete(path);
+                const path = neighbor.getAttribute("data-base-path");
+                if (path) expandedSet.delete(path);
 
-              // Clean up observer
-              const obs = this.headerObservers.get(neighbor);
-              if (obs) {
-                obs.disconnect();
-                this.headerObservers.delete(neighbor);
+                const obs = this.headerObservers.get(neighbor);
+                if (obs) {
+                  obs.disconnect();
+                  this.headerObservers.delete(neighbor);
+                }
               }
             }
           }
         }
-      }
 
-      panel.setAttribute(COLLAPSED_ATTR, collapsed ? "false" : "true");
-      if (toggle) toggle.textContent = collapsed ? "▾" : "▸";
-      const expandedSet = this.getExpandedSet(leaf);
-      if (collapsed) {
-        expandedSet.add(basePath);
-        this.setManualExpansionState(basePath, true);
-      } else {
-        expandedSet.delete(basePath);
-        this.setManualExpansionState(basePath, false);
-      }
-      if (contentEl) {
-        if (!collapsed) {
-          const existing = this.headerObservers.get(panel);
-          if (existing) {
-            existing.disconnect();
-            this.headerObservers.delete(panel);
+        panel.setAttribute(COLLAPSED_ATTR, collapsed ? "false" : "true");
+        if (toggle) toggle.textContent = collapsed ? "▾" : "▸";
+        const expandedSet = this.getExpandedSet(leaf);
+        if (collapsed) {
+          expandedSet.add(basePath);
+          this.setManualExpansionState(basePath, true);
+        } else {
+          expandedSet.delete(basePath);
+          this.setManualExpansionState(basePath, false);
+        }
+        if (contentEl) {
+          if (!collapsed) {
+            const existing = this.headerObservers.get(panel);
+            if (existing) {
+              existing.disconnect();
+              this.headerObservers.delete(panel);
+            }
           }
         }
+      };
+      if (toggle) {
+        toggle.textContent = isExpanded ? "▾" : "▸";
+        toggle.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          togglePanel();
+        });
       }
-    };
-    if (toggle) {
-      toggle.textContent = isExpanded ? "▾" : "▸";
-      toggle.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        togglePanel();
-      });
+      if (bar) {
+        bar.addEventListener("click", (event) => {
+          const target = event.target as HTMLElement | null;
+          if (target?.closest(`.${EMBED_CLASS}__toggle`)) return;
+          if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          togglePanel();
+        });
+      }
+      if (!contentEl) return panel;
+    } else {
+      panel.innerHTML = `<div class="${EMBED_CLASS}__content"></div>`;
     }
-    if (bar) {
-      bar.addEventListener("click", (event) => {
-        const target = event.target as HTMLElement | null;
-        if (target?.closest(`.${EMBED_CLASS}__toggle`)) return;
-        if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
-        event.preventDefault();
-        event.stopPropagation();
-        togglePanel();
-      });
-    }
+
+    const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
     if (!contentEl) return panel;
     contentEl.empty();
     const renderTarget = document.createElement("div");
@@ -1841,7 +2345,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
             usedEmbedRegistry = true;
           }
         } catch (e) {
-          console.warn("[TPS Auto Base Embed] embedRegistry failed, falling back to MarkdownRenderer", e);
+          this.debugWarn("[TPS Auto Base Embed] embedRegistry failed, falling back to MarkdownRenderer", e);
         }
       }
     }
@@ -1856,9 +2360,10 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     }
 
     // Guard: if this panel wasn't explicitly expanded by the user, keep it collapsed after initial render.
-    if (!this.getExpandedSet(leaf).has(basePath)) {
+    if (!alwaysExpanded && !this.getExpandedSet(leaf).has(basePath)) {
       panel.setAttribute(COLLAPSED_ATTR, "true");
-      if (toggle) toggle.textContent = "▸";
+      const toggleBtn = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
+      if (toggleBtn) toggleBtn.textContent = "▸";
     }
 
     return panel;
@@ -1872,8 +2377,11 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
   private syncEmbeddedPanelMode(contentEl: HTMLElement, panel: HTMLElement): void {
     const calendarSelector = ".bases-calendar-wrapper, .calendar-embed-view, .fc";
+    const kanbanSelector = ".tps-kanban-container, .tps-kanban-board, .tps-kanban-root";
     const isCalendarPanel = !!contentEl.querySelector<HTMLElement>(calendarSelector);
+    const isKanbanPanel = !!contentEl.querySelector<HTMLElement>(kanbanSelector);
     panel.classList.toggle(`${EMBED_CLASS}__panel--calendar`, isCalendarPanel);
+    panel.classList.toggle(`${EMBED_CLASS}__panel--kanban`, isKanbanPanel);
   }
 
   private syncBaseHeader(_contentEl: HTMLElement, _panel: HTMLElement): void {
@@ -1883,6 +2391,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
   private removeOverlay(leaf: WorkspaceLeaf): void {
     this.releaseSwipeGestureTracking(leaf);
+    this.detachContentObserver(leaf);
     const retryTimer = this.leafRetryTimers.get(leaf);
     if (retryTimer != null) {
       window.clearTimeout(retryTimer);
@@ -1890,27 +2399,42 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     }
     this.renderSignatureByLeaf.delete(leaf);
     this.lastRefreshMetaByLeaf.delete(leaf);
+    const reattachObserver = this.titleReattachObservers.get(leaf);
+    if (reattachObserver) {
+      reattachObserver.disconnect();
+      this.titleReattachObservers.delete(leaf);
+    }
     const observer = this.overlayObservers.get(leaf);
     if (observer) {
       observer.disconnect();
       this.overlayObservers.delete(leaf);
     }
-    const overlay = this.overlayByLeaf.get(leaf);
-    if (overlay?.isConnected) {
-      this.clearPanels(overlay);
-      const view = leaf.view as any;
-      const viewContainer = (view as any).containerEl as HTMLElement | undefined;
-      const leafContent = viewContainer?.closest?.(".workspace-leaf-content") as HTMLElement | null;
-      leafContent?.style.removeProperty("--tps-auto-base-embed-height");
-      overlay.remove();
+    const view = leaf.view as any;
+    const viewContainer = (view as any).containerEl as HTMLElement | undefined;
+    const leafContent = viewContainer?.closest?.(".workspace-leaf-content") as HTMLElement | null;
+    leafContent?.style.removeProperty("--tps-auto-base-embed-height");
+    for (const [placement, overlay] of this.getAllHostsForLeaf(leaf)) {
+      if (overlay?.isConnected) {
+        this.clearPanels(overlay);
+        overlay.remove();
+      }
+      this.deleteHostForPlacement(leaf, placement);
     }
-    this.overlayByLeaf.delete(leaf);
     this.syncGlobalFloatingEmbedHeight();
-    const anchor = this.inlineAnchorByLeaf.get(leaf);
-    if (anchor?.isConnected) {
-      anchor.remove();
+    const anchorMap = this.inlineAnchorsByLeaf.get(leaf);
+    if (anchorMap) {
+      for (const anchor of anchorMap.values()) {
+        const section = anchor.parentElement;
+        if (section?.classList.contains(INLINE_SECTION_CLASS) && section.isConnected) {
+          section.remove();
+          continue;
+        }
+        if (anchor?.isConnected) {
+          anchor.remove();
+        }
+      }
     }
-    this.inlineAnchorByLeaf.delete(leaf);
+    this.inlineAnchorsByLeaf.delete(leaf);
   }
 
   private async getBaseHeaderTitle(baseFile: TFile): Promise<string> {
@@ -1991,21 +2515,62 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       }
       .${EMBED_CLASS}[data-render-mode="inline"] {
         position: relative;
+        display: block;
+        flex: 0 0 100%;
+        align-self: stretch;
         left: auto;
         transform: none;
         bottom: auto;
         z-index: 0;
+        clear: both;
         margin: 14px 0 0;
         padding-top: 12px;
+      }
+      .${EMBED_CLASS}[data-render-mode="inline"][data-inline-placement="after-content"] {
         border-top: 1px solid var(--background-modifier-border);
       }
       .${EMBED_CLASS}[data-render-mode="inline"][data-inline-placement="after-title"] {
+        border-bottom: 1px solid var(--background-modifier-border);
+        padding-top: 0;
+        padding-bottom: 12px;
         margin-top: 10px;
-        padding-top: 10px;
+      }
+      .${INLINE_ANCHOR_CLASS}[data-inline-placement="after-title"],
+      .${INLINE_ANCHOR_CLASS}[data-inline-placement="after-content"] {
+        display: block;
+        width: 100%;
+        clear: both;
+        flex: 0 0 100%;
+        align-self: stretch;
+      }
+      .${INLINE_SECTION_CLASS}[data-inline-placement="after-title"],
+      .${INLINE_SECTION_CLASS}[data-inline-placement="after-content"] {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        clear: both;
+      }
+      .${SOURCE_END_WIDGET_CLASS} {
+        display: block;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        line-height: 0;
+        font-size: 0;
+        pointer-events: none;
+      }
+      .${SOURCE_END_HOST_CLASS} {
+        display: block;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        line-height: normal;
+        font-size: var(--font-text-size);
+        pointer-events: auto;
       }
       .${EMBED_CLASS}[data-render-mode="inline"][data-inline-placement="after-content"] {
         margin-top: 18px;
-        margin-bottom: 10px;
+        margin-bottom: 0;
       }
       .${EMBED_CLASS}[data-render-mode="inline"].${EMBED_CLASS}--cm-inline {
         display: block;
@@ -2141,9 +2706,38 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         opacity: 1;
         transition: max-height 0.25s ease, opacity 0.2s ease;
       }
-      .${EMBED_CLASS}__panel--calendar .${EMBED_CLASS}__content {
+      .${EMBED_CLASS}__panel--calendar .${EMBED_CLASS}__content,
+      .${EMBED_CLASS}__panel--kanban .${EMBED_CLASS}__content {
         max-height: none;
+      }
+      .${EMBED_CLASS}__panel--calendar .${EMBED_CLASS}__content {
         overflow: hidden;
+      }
+      .${EMBED_CLASS}__panel--kanban .${EMBED_CLASS}__content {
+        overflow: visible;
+      }
+      .${EMBED_CLASS}__panel--kanban .workspace-leaf-content,
+      .${EMBED_CLASS}__panel--kanban .view-content,
+      .${EMBED_CLASS}__panel--kanban .markdown-preview-view,
+      .${EMBED_CLASS}__panel--kanban .markdown-rendered,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-scroll,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-container,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-board,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-lane,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-cards {
+        height: auto !important;
+        max-height: none !important;
+        min-height: 0 !important;
+      }
+      .${EMBED_CLASS}__panel--kanban .workspace-leaf-content,
+      .${EMBED_CLASS}__panel--kanban .view-content,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-scroll,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-container,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-board,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-lane,
+      .${EMBED_CLASS}__panel--kanban .tps-kanban-cards {
+        overflow: visible !important;
+        flex: 0 0 auto !important;
       }
       .${EMBED_CLASS}__panel[${RENDERING_ATTR}="true"] .${EMBED_CLASS}__content {
         display: block;
@@ -2787,64 +3381,71 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   ): Promise<HTMLElement | null> {
     const panel = document.createElement("div");
     panel.className = `${EMBED_CLASS}__panel`;
-    const isExpanded = expandedSet.has(basePath);
-    panel.setAttribute(COLLAPSED_ATTR, isExpanded ? "false" : "true");
+    const alwaysExpanded = this.settings.alwaysExpanded;
+    const isExpanded = alwaysExpanded || expandedSet.has(basePath);
+    panel.setAttribute(COLLAPSED_ATTR, "false");
     panel.setAttribute(RENDERING_ATTR, "true");
     panel.setAttribute("data-base-path", basePath);
-    const baseLabel = basePath.replace(/.*\//, "").replace(/\.base$/i, "");
-    panel.innerHTML = `
-      <div class="${EMBED_CLASS}__bar">
-        <div class="${EMBED_CLASS}__bar-left">
-          <span class="${EMBED_CLASS}__bar-label">${baseLabel}</span>
-        </div>
-        <div class="${EMBED_CLASS}__bar-right">
-          <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded base">▸</button>
-        </div>
-      </div>
-      <div class="${EMBED_CLASS}__content"></div>
-    `;
 
-    const toggle = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
-    const bar = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar`);
+    if (!alwaysExpanded) {
+      const baseLabel = basePath.replace(/.*\//, "").replace(/\.base$/i, "");
+      panel.innerHTML = `
+        <div class="${EMBED_CLASS}__bar">
+          <div class="${EMBED_CLASS}__bar-left">
+            <span class="${EMBED_CLASS}__bar-label">${baseLabel}</span>
+          </div>
+          <div class="${EMBED_CLASS}__bar-right">
+            <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded base">▸</button>
+          </div>
+        </div>
+        <div class="${EMBED_CLASS}__content"></div>
+      `;
+
+      const toggle = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
+      const bar = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar`);
+
+      if (toggle) {
+        toggle.textContent = isExpanded ? "▾" : "▸";
+        toggle.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
+          panel.setAttribute(COLLAPSED_ATTR, collapsed ? "false" : "true");
+          if (toggle) toggle.textContent = collapsed ? "▾" : "▸";
+          if (collapsed) {
+            expandedSet.add(basePath);
+            this.setManualExpansionState(basePath, true);
+          } else {
+            expandedSet.delete(basePath);
+            this.setManualExpansionState(basePath, false);
+          }
+        });
+      }
+      if (bar) {
+        bar.addEventListener("click", (event) => {
+          const target = event.target as HTMLElement | null;
+          if (target?.closest(`.${EMBED_CLASS}__toggle`)) return;
+          if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
+          panel.setAttribute(COLLAPSED_ATTR, collapsed ? "false" : "true");
+          const toggleBtn = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
+          if (toggleBtn) toggleBtn.textContent = collapsed ? "▾" : "▸";
+          if (collapsed) {
+            expandedSet.add(basePath);
+            this.setManualExpansionState(basePath, true);
+          } else {
+            expandedSet.delete(basePath);
+            this.setManualExpansionState(basePath, false);
+          }
+        });
+      }
+    } else {
+      panel.innerHTML = `<div class="${EMBED_CLASS}__content"></div>`;
+    }
+
     const contentEl = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__content`);
-
-    if (toggle) {
-      toggle.textContent = isExpanded ? "▾" : "▸";
-      toggle.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
-        panel.setAttribute(COLLAPSED_ATTR, collapsed ? "false" : "true");
-        if (toggle) toggle.textContent = collapsed ? "▾" : "▸";
-        if (collapsed) {
-          expandedSet.add(basePath);
-          this.setManualExpansionState(basePath, true);
-        } else {
-          expandedSet.delete(basePath);
-          this.setManualExpansionState(basePath, false);
-        }
-      });
-    }
-    if (bar) {
-      bar.addEventListener("click", (event) => {
-        const target = event.target as HTMLElement | null;
-        if (target?.closest(`.${EMBED_CLASS}__toggle`)) return;
-        if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const collapsed = panel.getAttribute(COLLAPSED_ATTR) === "true";
-        panel.setAttribute(COLLAPSED_ATTR, collapsed ? "false" : "true");
-        if (toggle) toggle.textContent = collapsed ? "▾" : "▸";
-        if (collapsed) {
-          expandedSet.add(basePath);
-          this.setManualExpansionState(basePath, true);
-        } else {
-          expandedSet.delete(basePath);
-          this.setManualExpansionState(basePath, false);
-        }
-      });
-    }
-
     if (!contentEl) return panel;
     contentEl.empty();
 
@@ -2875,7 +3476,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
             usedEmbedRegistry = true;
           }
         } catch (e) {
-          console.warn("[TPS Auto Base Embed] canvas-node embedRegistry failed, falling back", e);
+          this.debugWarn("[TPS Auto Base Embed] canvas-node embedRegistry failed, falling back", e);
         }
       }
     }
@@ -2886,9 +3487,10 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     this.syncEmbeddedPanelMode(contentEl, panel);
     panel.setAttribute(RENDERING_ATTR, "false");
 
-    if (!expandedSet.has(basePath)) {
+    if (!alwaysExpanded && !expandedSet.has(basePath)) {
       panel.setAttribute(COLLAPSED_ATTR, "true");
-      if (toggle) toggle.textContent = "▸";
+      const toggleBtn = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
+      if (toggleBtn) toggleBtn.textContent = "▸";
     }
 
     return panel;

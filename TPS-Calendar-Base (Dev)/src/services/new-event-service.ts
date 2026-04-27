@@ -14,8 +14,9 @@ import { applyTemplateVars, buildTemplateVars, type TemplateVars } from "../util
 import { TypeFolderOption, TypeFolderService } from "./type-folder-service";
 import { resolveTemplateFile } from "../utils/template-resolution-service";
 import { mergeTagInputs, normalizeTagValue } from "../utils/tag-utils";
-import { applyParentLinkToChild } from "./parent-child-link";
+import { applyParentLinkToChild, buildParentLinkTarget } from "./parent-child-link";
 import { getPluginById } from "../core";
+import { getDailyNoteResolver } from "../../../TPS-Controller (Dev)/src/utils/daily-note-resolver";
 
 export interface NewEventServiceConfig {
   app: App;
@@ -43,6 +44,21 @@ export interface NewEventCreationOptions {
   templateOverride?: string | null;
   templateTypeOverride?: string | null;
 }
+
+export interface PreparedEventCreation {
+  title: string;
+  folderPath: string;
+  path: string;
+  templateFile: TFile | null;
+  parentFile: TFile | null;
+  frontmatter: Record<string, any>;
+  frontmatterDefaults: Record<string, any>;
+  frontmatterOverrides: Record<string, any>;
+  useBaseDefaults: boolean;
+  templateVars: TemplateVars;
+}
+
+const TASK_LINKED_NOTE_PROPERTY = "linkednote";
 
 export class NewEventService {
   private config: NewEventServiceConfig;
@@ -259,6 +275,118 @@ export class NewEventService {
     }
   }
 
+  async prepareEventCreation(
+    start: Date,
+    end: Date,
+    frontmatterOverrides?: Record<string, any>,
+    options?: NewEventCreationOptions,
+  ): Promise<PreparedEventCreation | null> {
+    const rawTitle = await this.promptForTitle(options?.typeFolderOverride);
+
+    if (rawTitle === undefined || rawTitle === "__LINK_EXISTING_CANCEL__") {
+      this.pendingLinkExisting = false;
+      this.pendingTypeFolderPath = null;
+      return null;
+    }
+
+    const titleInput = rawTitle && rawTitle.trim() ? rawTitle.trim() : "";
+    const { cleanTitle: extractedTitle, tags } = this.extractTags(titleInput);
+    const resolvedTags = await this.resolveTags(tags);
+    if (resolvedTags === null) return null;
+
+    let parentFile: TFile | null = this.pendingExistingParent;
+    const isLinkingExisting = !!parentFile && this.pendingLinkExisting;
+    this.pendingExistingParent = null;
+    if (!isLinkingExisting) {
+      parentFile = null;
+    }
+    this.pendingLinkExisting = false;
+
+    let cleanTitle = extractedTitle;
+    if (!cleanTitle || !cleanTitle.trim()) {
+      const parentTitle = parentFile?.basename?.trim() || "";
+      if (!parentTitle) {
+        this.pendingTypeFolderPath = null;
+        return null;
+      }
+      cleanTitle = parentTitle;
+    }
+
+    let finalOverrides = frontmatterOverrides ? { ...frontmatterOverrides } : {};
+    if (end < new Date()) {
+      const choice = await this.promptForPastEvent();
+      if (choice === "cancel") {
+        this.pendingTypeFolderPath = null;
+        return null;
+      }
+      if (choice === "complete") {
+        finalOverrides.status = "complete";
+      }
+    } else {
+      const now = new Date();
+      if (start <= now && end > now) {
+        const statusValue = this.config.inProgressStatusValue || "working";
+        const choice = await this.promptForInProgressEvent(statusValue);
+        if (choice === "cancel") {
+          this.pendingTypeFolderPath = null;
+          return null;
+        }
+        if (choice === "in-progress") {
+          finalOverrides.status = statusValue;
+        }
+      }
+    }
+
+    const folderPath = this.resolveFolderPath(
+      this.pendingTypeFolderPath ?? options?.typeFolderOverride,
+    );
+    await this.ensureFolderExists(folderPath);
+
+    const path = this.buildUniquePath(folderPath, cleanTitle, start);
+    const templateFile = await this.resolveTemplateSelection(
+      options?.templateOverride ?? this.config.templatePath,
+      options?.templateTypeOverride ?? this.config.templateType,
+    );
+    const includeAdditionalFrontmatter = !options?.useBaseDefaults;
+    const frontmatter = this.buildFrontmatter(
+      cleanTitle,
+      start,
+      end,
+      resolvedTags,
+      finalOverrides,
+      includeAdditionalFrontmatter,
+    );
+    const defaults = options?.frontmatterDefaults ?? {};
+    const overridesWithFolder = {
+      ...frontmatter,
+      folderPath,
+    };
+
+    const templateVars: TemplateVars = {
+      title: cleanTitle,
+      scheduled: frontmatter.scheduled,
+      due: frontmatter.due,
+      status: frontmatter.status,
+      priority: frontmatter.priority,
+      tags: resolvedTags,
+    };
+
+    this.pendingTypeFolderPath = null;
+
+    return {
+      title: cleanTitle,
+      folderPath,
+      path,
+      templateFile,
+      parentFile,
+      frontmatter,
+      frontmatterDefaults: defaults,
+      frontmatterOverrides: overridesWithFolder,
+      useBaseDefaults: !!options?.useBaseDefaults,
+      templateVars,
+    };
+  }
+
   async createTask(
     start: Date,
     end: Date,
@@ -283,6 +411,14 @@ export class NewEventService {
       const resolvedTags = await this.resolveTags(tags);
       if (resolvedTags === null) return null;
 
+      let parentFile: TFile | null = this.pendingExistingParent;
+      const isLinkingExisting = !!parentFile && this.pendingLinkExisting;
+      this.pendingExistingParent = null;
+      if (!isLinkingExisting) {
+        parentFile = null;
+      }
+      this.pendingLinkExisting = false;
+
       const finalOverrides = frontmatterOverrides ? { ...frontmatterOverrides } : {};
       const defaults = options?.frontmatterDefaults ?? {};
 
@@ -292,21 +428,43 @@ export class NewEventService {
       );
       const mergedTags = mergedTagInputs.map((tag) => normalizeTagValue(tag)).filter(Boolean);
 
-      const cleanTitle = extractedTitle?.trim() || "Untitled";
-      const targetFile = await this.ensureTaskTargetFile(targetFilePath);
-      const taskLine = this.buildTaskLine(cleanTitle, start, end, mergedTags, defaults, finalOverrides);
+      const cleanTitle = extractedTitle?.trim() || parentFile?.basename?.trim() || "Untitled";
+      const taskTargetPath = isLinkingExisting && parentFile ? parentFile.path : targetFilePath;
+      const targetFile = await this.ensureTaskTargetFile(taskTargetPath);
+      const linkedNoteValue = null;
+      const taskLine = this.buildTaskLine(
+        cleanTitle,
+        start,
+        end,
+        mergedTags,
+        defaults,
+        finalOverrides,
+        linkedNoteValue,
+      );
       const existing = await this.config.app.vault.cachedRead(targetFile);
-      const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-      await this.config.app.vault.modify(targetFile, `${existing}${separator}${taskLine}\n`);
+      const nextContent = this.insertLineAtTopOfBody(existing, taskLine);
+      await this.config.app.vault.modify(targetFile, nextContent);
       return targetFile;
     } catch (error) {
       logger.error('[NewEventService] Error creating task:', error);
       throw error;
     } finally {
       this.createInProgress = false;
+      this.pendingExistingParent = null;
       this.pendingTypeFolderPath = null;
       this.pendingLinkExisting = false;
     }
+  }
+
+  private getEditorForFile(file: TFile): any | null {
+    const leaves = this.config.app.workspace.getLeavesOfType('markdown');
+    for (const leaf of leaves) {
+      const view = leaf.view as any;
+      if (view?.file?.path === file.path && view?.editor) {
+        return view.editor;
+      }
+    }
+    return null;
   }
 
   private extractTags(title: string): { cleanTitle: string; tags: string[] } {
@@ -347,6 +505,7 @@ export class NewEventService {
     tags: string[],
     defaults: Record<string, any>,
     overrides: Record<string, any>,
+    linkedNoteValue?: string | null,
   ): string {
     const startKey = this.getConfigPropertyName(this.config.startProperty, "scheduled");
     const endKey = this.getConfigPropertyName(this.config.endProperty, "timeEstimate");
@@ -369,6 +528,16 @@ export class NewEventService {
     }
 
     const merged = { ...defaults, ...overrides };
+    const reservedKeys = new Set([
+      startKey.toLowerCase(),
+      endKey.toLowerCase(),
+      "status",
+      "priority",
+      "tags",
+      "title",
+      "folderpath",
+      TASK_LINKED_NOTE_PROPERTY,
+    ]);
     const priorityValue = merged.priority;
     const statusValue = merged.status;
     if (typeof statusValue === "string" && statusValue.trim()) {
@@ -377,12 +546,79 @@ export class NewEventService {
     if (typeof priorityValue === "string" && priorityValue.trim()) {
       properties.push(`[priority:: ${priorityValue.trim()}]`);
     }
+    for (const [rawKey, rawValue] of Object.entries(merged)) {
+      const key = String(rawKey || "").trim();
+      if (!key || reservedKeys.has(key.toLowerCase())) continue;
+      const formattedValue = this.formatTaskInlinePropertyValue(rawValue);
+      if (!formattedValue) continue;
+      properties.push(`[${key}:: ${formattedValue}]`);
+    }
+    if (typeof linkedNoteValue === "string" && linkedNoteValue.trim()) {
+      properties.push(`[${TASK_LINKED_NOTE_PROPERTY}:: ${linkedNoteValue.trim()}]`);
+    }
 
     const tagSuffix = tags.length > 0
       ? ` ${tags.map((tag) => `#${normalizeTagValue(tag)}`).join(" ")}`
       : "";
 
     return `- [ ] ${title}${properties.length > 0 ? ` ${properties.join(" ")}` : ""}${tagSuffix}`;
+  }
+
+  private formatTaskInlinePropertyValue(value: unknown): string | null {
+    if (value === undefined || value === null) return null;
+    if (Array.isArray(value)) {
+      const items = value
+        .map((item) => this.formatTaskInlinePropertyValue(item))
+        .filter((item): item is string => !!item);
+      return items.length > 0 ? items.join(", ") : null;
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed || null;
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    return null;
+  }
+
+  private insertLineAtTopOfBody(content: string, line: string): string {
+    const normalized = String(content || "").replace(/\r\n/g, "\n");
+    if (!normalized) return `${line}\n`;
+
+    const lines = normalized.split("\n");
+    if (lines[0]?.trim() !== '---') {
+      if (normalized.endsWith("\n")) {
+        return `${line}\n${normalized}`;
+      }
+      return `${line}\n${normalized}\n`;
+    }
+
+    let frontmatterEndIndex = -1;
+    for (let i = 1; i < lines.length; i += 1) {
+      if (lines[i]?.trim() === '---') {
+        frontmatterEndIndex = i;
+        break;
+      }
+    }
+
+    if (frontmatterEndIndex < 0) {
+      if (normalized.endsWith("\n") || normalized.length === 0) return `${normalized}${line}\n`;
+      return `${normalized}\n${line}\n`;
+    }
+
+    const beforeInsert = lines.slice(0, frontmatterEndIndex + 1);
+    const afterFrontmatter = lines.slice(frontmatterEndIndex + 1);
+    const hasLeadingBlank = afterFrontmatter.length > 0 && afterFrontmatter[0]?.trim() === '';
+    const remaining = hasLeadingBlank ? afterFrontmatter.slice(1) : afterFrontmatter;
+    const resultLines = [...beforeInsert, '', line];
+    if (remaining.length > 0) {
+      resultLines.push('');
+      resultLines.push(...remaining);
+    }
+    let result = resultLines.join('\n');
+    if (!result.endsWith('\n')) result += '\n';
+    return result;
   }
 
   private async ensureTaskTargetFile(targetFilePath: string): Promise<TFile> {
@@ -1258,6 +1494,19 @@ export class NewEventService {
     throw new Error(`[NewEventService] Could not create file after ${MAX_RETRIES} retries for "${initialPath}"`);
   }
 
+  /**
+   * Format a date as a filename-safe suffix using the vault's daily-note format.
+   * Infers the actual format from existing daily note filenames (Obsidian expands
+   * short tokens like ddd→dddd, D→Do when creating files).
+   */
+  private formatDateSuffix(date: Date): string {
+    const m = (window as any).moment;
+    if (!m) {
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    }
+    return getDailyNoteResolver(this.config.app).formatFilename(date);
+  }
+
   private buildUniquePath(folderPath: string, title: string, date: Date): string {
     const strippedTitle = title
       .replace(/\s+\d{4}-\d{2}-\d{2}(?:\s+\d+)?$/g, "")
@@ -1269,11 +1518,8 @@ export class NewEventService {
       .replace(/\s+/g, " ")
       .trim();
 
-    // Build date suffix
-    const dateSuffix = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
-      2,
-      "0",
-    )}-${String(date.getDate()).padStart(2, "0")}`;
+    // Use the inferred daily-note date format so filenames match the rest of the vault.
+    const dateSuffix = this.formatDateSuffix(date);
 
     const baseTitle = sanitizedTitle || "Untitled";
     const finalTitle = `${baseTitle} ${dateSuffix}`;

@@ -1,5 +1,6 @@
 import { App, TFile, WorkspaceLeaf, moment } from "obsidian";
 import { NOTIFICATION_VIEW_TYPE } from "../views/notification-view";
+import { NotificationItemsModal } from "../modals/notification-modal";
 import * as logger from "../logger";
 import type { TPSControllerSettings, OverdueItem } from "../types";
 import {
@@ -7,6 +8,7 @@ import {
     formatTemplate, checkStopCondition, hasRequiredStatus,
     shouldIgnoreForReminder, isAllDayEvent, hasExplicitTimeInValue,
 } from "../utils/time-calculation-service";
+import { CheckboxPatterns } from "./checkbox-pattern-service";
 import {
     buildReminderTargetsForFile,
     buildEffectiveReminderContextForTarget,
@@ -24,6 +26,21 @@ export class OverdueService {
     ) {}
 
     async openNotificationModal(): Promise<void> {
+        const settings = this.getSettings();
+        if ((settings.notificationPresentationMode || "sidebar") === "modal") {
+            new NotificationItemsModal(this.app, {
+                settings,
+                getOverdueItems: () => this.getOverdueItems(),
+                snoozeFile: (file, minutes) => this.snoozeFile(file, minutes),
+                snoozeOverdueItem: (item, minutes) => this.snoozeItem(item, minutes),
+                openFile: (file) => this.openFile(file),
+                markFileComplete: (file) => this.markFileComplete(file),
+                markFileWontDo: (file) => this.markFileWontDo(file),
+                markOverdueItemComplete: (item) => this.markItemComplete(item),
+                markOverdueItemWontDo: (item) => this.markItemWontDo(item),
+            }).open();
+            return;
+        }
         const { workspace } = this.app;
         let leaf: WorkspaceLeaf | null = null;
         const leaves = workspace.getLeavesOfType(NOTIFICATION_VIEW_TYPE);
@@ -63,12 +80,13 @@ export class OverdueService {
                 for (const reminder of reminders) {
                     if (!reminder.enabled) continue;
 
-                    const ctx = buildEffectiveReminderContextForTarget(target, fm, reminder.property, settings);
+                    const ctx = buildEffectiveReminderContextForTarget(this.app, target, fm, reminder.property, settings);
                     if (!ctx) continue;
                     const effectiveFm = ctx.frontmatter;
                     const propertyValue = ctx.propertyValue;
 
-                    if (shouldIgnoreForReminder(file, cache, effectiveFm, reminder, ignorePaths, ignoreTags, ignoreStatuses)) continue;
+                    if (shouldIgnoreForReminder(file, cache, effectiveFm, reminder, ignorePaths, ignoreTags, ignoreStatuses,
+                        { skipPathIgnore: target.sourceType === "task-item" || target.sourceType === "kanban-task", skipTagIgnore: target.sourceType === "task-item" || target.sourceType === "kanban-task" })) continue;
                     if (!hasRequiredStatus(effectiveFm, reminder)) continue;
 
                     let snoozedUntil: number | undefined;
@@ -132,6 +150,7 @@ export class OverdueService {
                         remaining: diff,
                         duration: String(effectiveFm["duration"] ?? ""),
                     };
+                    const isTaskItem = target.sourceType === 'task-item' || target.sourceType === 'kanban-task';
                     overdueItems.push({
                         file,
                         reminder,
@@ -142,13 +161,14 @@ export class OverdueService {
                         sourceType: target.sourceType,
                         taskLineNumber: target.task?.lineNumber,
                         taskText: target.task?.text,
+                        checkboxState: target.task?.checkboxState,
                         title: formatTemplate(reminder.title, vars),
                         body: formatTemplate(reminder.body, vars),
                         snoozedUntil,
                         isAllDay: isAllDaySafe,
                         status: String(effectiveFm[this.getSettings().statusKey] ?? effectiveFm['status'] ?? ''),
-                        icon: effectiveFm['icon'] ? String(effectiveFm['icon']) : '',
-                        color: effectiveFm['color'] ? String(effectiveFm['color']) : '',
+                        icon: isTaskItem ? '' : (effectiveFm['icon'] ? String(effectiveFm['icon']) : ''),
+                        color: isTaskItem ? '' : (effectiveFm['color'] ? String(effectiveFm['color']) : ''),
                     });
                 }
             }
@@ -188,16 +208,17 @@ export class OverdueService {
             const target: import('./reminder-target-service').ReminderEvaluationTarget = {
                 sourceKey: item.sourceKey || item.file.path,
                 sourceType: item.sourceType || 'file',
-                task: item.taskLineNumber !== undefined ? { lineNumber: item.taskLineNumber, text: item.taskText || '', checked: false, state: ' ', propertyMap: {} } as any : undefined,
+                task: item.taskLineNumber !== undefined ? { lineNumber: item.taskLineNumber, text: item.taskText || '', rawText: item.taskText || '', checked: false, checkboxState: ' ', propertyMap: {}, scheduledDateToken: null, scheduledTimeToken: null } as any : undefined,
             };
 
             // PHASE 1: Check if the CURRENT reminder will fire again
             const currentReminder = reminders.find(r => r.id === currentReminderId);
             if (currentReminder?.enabled) {
                 const reminder = currentReminder;
-                const ctx = buildEffectiveReminderContextForTarget(target, fm, reminder.property, settings);
+                const ctx = buildEffectiveReminderContextForTarget(this.app, target, fm, reminder.property, settings);
                 if (ctx && 
-                    !shouldIgnoreForReminder(item.file, cache, ctx.frontmatter, reminder, ignorePaths, ignoreTags, ignoreStatuses) &&
+                    !shouldIgnoreForReminder(item.file, cache, ctx.frontmatter, reminder, ignorePaths, ignoreTags, ignoreStatuses,
+                        { skipPathIgnore: target.sourceType === "task-item" || target.sourceType === "kanban-task", skipTagIgnore: target.sourceType === "task-item" || target.sourceType === "kanban-task" }) &&
                     hasRequiredStatus(ctx.frontmatter, reminder) &&
                     !reminder.stopConditions.some((cond) => checkStopCondition(ctx.frontmatter, cond))) {
                     
@@ -249,12 +270,10 @@ export class OverdueService {
                                     nextLabel = currentReminderLabel;
                                     isRepeatingCurrent = true;
                                     intervalMins = reminder.repeatIntervalMinutes;
-                                    console.log(`[TPS-Controller Annotation] ${item.file.basename}: Current reminder repeating, nextTime=${new Date(nextRepeat).toLocaleTimeString()}, intervalMins=${intervalMins}`);
                                 } else if (now < tTime) {
                                     // Future non-repeating trigger
                                     nextTime = tTime;
                                     nextLabel = currentReminderLabel;
-                                    console.log(`[TPS-Controller Annotation] ${item.file.basename}: Current reminder future, nextTime=${new Date(tTime).toLocaleTimeString()}`);
                                 }
                             }
                         } else {
@@ -295,12 +314,10 @@ export class OverdueService {
                                 nextLabel = currentReminderLabel;
                                 isRepeatingCurrent = true;
                                 intervalMins = reminder.repeatIntervalMinutes;
-                                console.log(`[TPS-Controller Annotation] ${item.file.basename}: Current reminder repeating, nextTime=${new Date(nextRepeat).toLocaleTimeString()}, intervalMins=${intervalMins}`);
                             } else if (now < tTime) {
                                 // Future non-repeating trigger
                                 nextTime = tTime;
                                 nextLabel = currentReminderLabel;
-                                console.log(`[TPS-Controller Annotation] ${item.file.basename}: Current reminder future, nextTime=${new Date(tTime).toLocaleTimeString()}`);
                             }
                         }
                     }
@@ -313,9 +330,10 @@ export class OverdueService {
                     if (!reminder.enabled) continue;
                     // Skip the current reminder - we want to see what's NEXT
                     if (reminder.id === currentReminderId) continue;
-                    const ctx = buildEffectiveReminderContextForTarget(target, fm, reminder.property, settings);
+                    const ctx = buildEffectiveReminderContextForTarget(this.app, target, fm, reminder.property, settings);
                     if (!ctx) continue;
-                    if (shouldIgnoreForReminder(item.file, cache, ctx.frontmatter, reminder, ignorePaths, ignoreTags, ignoreStatuses)) continue;
+                    if (shouldIgnoreForReminder(item.file, cache, ctx.frontmatter, reminder, ignorePaths, ignoreTags, ignoreStatuses,
+                        { skipPathIgnore: target.sourceType === "task-item" || target.sourceType === "kanban-task", skipTagIgnore: target.sourceType === "task-item" || target.sourceType === "kanban-task" })) continue;
                     if (!hasRequiredStatus(ctx.frontmatter, reminder)) continue;
                     if (reminder.stopConditions.some((cond) => checkStopCondition(ctx.frontmatter, cond))) continue;
                     const { start: pt, end: ret } = parseTimeRange(ctx.propertyValue);
@@ -356,7 +374,6 @@ export class OverdueService {
                         if (nextTime === undefined || tTime < nextTime) {
                             nextTime = tTime;
                             nextLabel = reminder.label || reminder.id;
-                            console.log(`[TPS-Controller Annotation] ${item.file.basename}: Next different reminder at ${new Date(tTime).toLocaleTimeString()}, label=${nextLabel}`);
                         }
                     }
                 }
@@ -404,13 +421,17 @@ export class OverdueService {
         if (!nextLine || nextLine === oldLine) return;
         lines[lineNumber] = nextLine;
         await this.app.vault.modify(file, lines.join("\n"));
+        (this.app.workspace as any)?.trigger?.("tps-task-line-updated", {
+            path: file.path,
+            lineNumber,
+        });
     }
 
     private upsertInlineProperty(line: string, key: string, value: string): string {
-        const taskMatch = line.match(/^([\t ]*-\s+\[[^\]]\]\s+)(.*)$/);
+        const taskMatch = line.match(CheckboxPatterns.CHECKBOX_LINE_CAPTURE);
         if (!taskMatch) return line;
         const prefix = taskMatch[1];
-        let body = taskMatch[2] ?? "";
+        let body = taskMatch[3] ?? "";
         const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const propRe = new RegExp(`\\[${escaped}::\\s*[^\\]]*\\]`, "i");
         if (propRe.test(body)) {
@@ -418,11 +439,11 @@ export class OverdueService {
         } else {
             body = `${body.trimEnd()} [${key}:: ${value}]`;
         }
-        return `${prefix}${body}`.trimEnd();
+        return `${prefix}[${taskMatch[2]}]${body}`.trimEnd();
     }
 
     private setTaskCheckboxState(line: string, stateChar: " " | "x" | "-"): string {
-        return line.replace(/^([\t ]*-\s+\[)[ xX-](\]\s+)/, `$1${stateChar}$2`);
+        return line.replace(CheckboxPatterns.CHECKBOX_LINE_CAPTURE, `$1[${stateChar}]$3`);
     }
 
     async snoozeItem(item: OverdueItem, minutes: number): Promise<void> {
@@ -471,9 +492,11 @@ export class OverdueService {
         const snoozeTimeStr = minutes > 0
             ? moment().add(minutes, "minutes").format("YYYY-MM-DD HH:mm")
             : "";
-        await this.app.fileManager.processFrontMatter(file, (fm) => {
-            fm[snoozeKey] = snoozeTimeStr;
-        });
+        const gcmApi = (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu')?.api;
+        if (!gcmApi?.applyCalendarFrontmatterMutation) {
+            throw new Error('TPS Global Context Menu API unavailable for overdue snooze mutation');
+        }
+        await gcmApi.applyCalendarFrontmatterMutation({ file, updates: { [snoozeKey]: snoozeTimeStr }, folderPath: file.parent?.path || '/', userInitiated: true });
     }
 
     openFile(file: TFile): void {
@@ -481,25 +504,25 @@ export class OverdueService {
         if (leaf) void leaf.openFile(file);
     }
 
+    private getCompletionTimestamp(): string {
+        return moment().format('YYYY-MM-DD HH:mm:ss');
+    }
+
     async markFileComplete(file: TFile): Promise<void> {
-        const now = (window as any).moment
-            ? (window as any).moment().format('YYYY-MM-DD HH:mm:ss')
-            : new Date().toISOString().replace('T', ' ').slice(0, 19);
-        await this.app.fileManager.processFrontMatter(file, (fm) => {
-            fm.status = 'complete';
-            fm.completedDate = now;
-        });
-        (this.app.workspace as any).trigger('tps-gcm-files-updated', [file.path]);
+        const now = this.getCompletionTimestamp();
+        const gcmApi = (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu')?.api;
+        if (!gcmApi?.applyCalendarFrontmatterMutation) {
+            throw new Error('TPS Global Context Menu API unavailable for overdue completion mutation');
+        }
+        await gcmApi.applyCalendarFrontmatterMutation({ file, updates: { status: 'complete', completedDate: now }, folderPath: file.parent?.path || '/', userInitiated: true });
     }
 
     async markFileWontDo(file: TFile): Promise<void> {
-        const now = (window as any).moment
-            ? (window as any).moment().format('YYYY-MM-DD HH:mm:ss')
-            : new Date().toISOString().replace('T', ' ').slice(0, 19);
-        await this.app.fileManager.processFrontMatter(file, (fm) => {
-            fm.status = 'wont-do';
-            fm.completedDate = now;
-        });
-        (this.app.workspace as any).trigger('tps-gcm-files-updated', [file.path]);
+        const now = this.getCompletionTimestamp();
+        const gcmApi = (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu')?.api;
+        if (!gcmApi?.applyCalendarFrontmatterMutation) {
+            throw new Error('TPS Global Context Menu API unavailable for overdue wont-do mutation');
+        }
+        await gcmApi.applyCalendarFrontmatterMutation({ file, updates: { status: 'wont-do', completedDate: now }, folderPath: file.parent?.path || '/', userInitiated: true });
     }
 }

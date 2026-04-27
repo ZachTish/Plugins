@@ -48,6 +48,7 @@ export class RuleApplicationService {
         })) return false;
 
         if (!options.force && this.metadataManager.shouldIgnoreFileEvent(file.path)) return false;
+        if (this.shouldSkipAfterFreshGcmWrite(file.path, options.reason)) return false;
 
         const iconField = settings.frontmatterIconField;
         const colorField = settings.frontmatterColorField;
@@ -375,15 +376,12 @@ export class RuleApplicationService {
             return false;
         }
 
-        let changed = false;
-        // Remove all existing case-variant duplicates so writes always converge to one key.
-        for (const existingKey of matchingKeys) {
-            delete mutableFrontmatter[existingKey];
-            changed = true;
-        }
-
         if (desiredValue === null) {
-            return changed;
+            if (matchingKeys.length === 0) return false;
+            for (const existingKey of matchingKeys) {
+                delete mutableFrontmatter[existingKey];
+            }
+            return true;
         }
 
         const finalValue = desiredValue !== undefined
@@ -395,17 +393,49 @@ export class RuleApplicationService {
             })();
 
         if (finalValue === undefined) {
-            return changed;
+            if (matchingKeys.length <= 1) return false;
+            const keepKey = preferredExistingKey ?? key;
+            const keepValue = preferredExistingValue;
+            for (const existingKey of matchingKeys) {
+                if (existingKey === keepKey) continue;
+                delete mutableFrontmatter[existingKey];
+            }
+            if (preferredExistingKey && preferredExistingKey !== keepKey) {
+                delete mutableFrontmatter[preferredExistingKey];
+                mutableFrontmatter[keepKey] = keepValue as unknown;
+            }
+            return true;
         }
 
-        mutableFrontmatter[key] = finalValue;
-
-        // If we only rewrote the same canonical key with the same value, treat as unchanged.
-        if (!changed && preferredExistingKey === key && previousCanonicalValue === finalValue) {
-            return false;
+        if (matchingKeys.length === 0) {
+            mutableFrontmatter[key] = finalValue;
+            return true;
         }
 
-        return true;
+        if (matchingKeys.length === 1) {
+            const onlyKey = matchingKeys[0];
+            const previousValue = typeof mutableFrontmatter[onlyKey] === "string"
+                ? String(mutableFrontmatter[onlyKey] ?? "")
+                : String(mutableFrontmatter[onlyKey] ?? "");
+            if (onlyKey === key && previousValue === finalValue) {
+                return false;
+            }
+            mutableFrontmatter[onlyKey] = finalValue;
+            return previousValue !== finalValue;
+        }
+
+        const keepKey = preferredExistingKey ?? key;
+        let changed = false;
+        for (const existingKey of matchingKeys) {
+            if (existingKey === keepKey) continue;
+            delete mutableFrontmatter[existingKey];
+            changed = true;
+        }
+        const previousValue = typeof mutableFrontmatter[keepKey] === "string"
+            ? String(mutableFrontmatter[keepKey] ?? "")
+            : String(mutableFrontmatter[keepKey] ?? "");
+        mutableFrontmatter[keepKey] = finalValue;
+        return changed || previousValue !== finalValue;
     }
 
     private collectTagsFromCache(file: TFile, frontmatter: Record<string, unknown> | null): string[] {
@@ -630,6 +660,34 @@ export class RuleApplicationService {
         ].map((key) => String(key || "").trim()).filter(Boolean)));
     }
 
+    private shouldSkipAfterFreshGcmWrite(path: string, reason: string): boolean {
+        if (reason !== "metadata-change" && reason !== "modify-save" && reason !== "rename") {
+            return false;
+        }
+
+        const pluginsRegistry = (this.app as any)?.plugins;
+        const gcm =
+            pluginsRegistry?.getPlugin?.("tps-global-context-menu") ||
+            pluginsRegistry?.plugins?.["tps-global-context-menu"] ||
+            pluginsRegistry?.plugins?.["TPS-Global-Context-Menu (Dev)"];
+        const frontmatterApi = (gcm as any)?.api?.frontmatter;
+
+        try {
+            if (typeof frontmatterApi?.isWriteInProgress === "function" && frontmatterApi.isWriteInProgress(path)) {
+                this.logger.debug("Skipping Companion auto-apply during TPS GCM write", { path, reason });
+                return true;
+            }
+            if (typeof frontmatterApi?.wasRecentlyWritten === "function" && frontmatterApi.wasRecentlyWritten(path)) {
+                this.logger.debug("Skipping Companion auto-apply immediately after TPS GCM write", { path, reason });
+                return true;
+            }
+        } catch (error) {
+            this.logger.debug("Fresh TPS GCM write check failed", { path, reason, error });
+        }
+
+        return false;
+    }
+
     private collectParentLinkCandidates(raw: unknown): string[] {
         const output: string[] = [];
         const seen = new Set<string>();
@@ -850,10 +908,41 @@ export class RuleApplicationService {
             }
         }
         if (changed) {
-            mutableFrontmatter["tags"] = Array.from(initialSet);
+            this.setFrontmatterValueCaseInsensitive(mutableFrontmatter, "tags", Array.from(initialSet));
             return true;
         }
-        return false;
+       return false;
+   }
+
+    private setFrontmatterValueCaseInsensitive(
+        frontmatter: Record<string, unknown>,
+        key: string,
+        value: unknown,
+    ): boolean {
+        const normalizedKey = key.trim().toLowerCase();
+        const matchingKeys = Object.keys(frontmatter).filter(
+            (existingKey) => existingKey.trim().toLowerCase() === normalizedKey,
+        );
+
+        if (matchingKeys.length === 0) {
+            frontmatter[key] = value;
+            return true;
+        }
+
+        if (matchingKeys.length === 1) {
+            const onlyKey = matchingKeys[0];
+            const previousValue = frontmatter[onlyKey];
+            frontmatter[onlyKey] = value;
+            return previousValue !== value;
+        }
+
+        const keepKey = matchingKeys.find((existingKey) => existingKey === key) ?? matchingKeys[0];
+        for (const existingKey of matchingKeys) {
+            if (existingKey === keepKey) continue;
+            delete frontmatter[existingKey];
+        }
+        frontmatter[keepKey] = value;
+        return true;
     }
 
     private isMarkdownFile(file: TFile): boolean {

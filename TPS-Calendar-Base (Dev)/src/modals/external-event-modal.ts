@@ -11,6 +11,7 @@ import {
 import { resolveTemplateFile as resolveTemplateFilePath } from "../utils/template-resolution-service";
 import { mergeTagInputs, normalizeTagValue } from "../utils/tag-utils";
 import { getPluginById } from "../core";
+import { getDailyNoteResolver } from "../../../TPS-Controller (Dev)/src/utils/daily-note-resolver";
 
 const malformedFrontmatterWarnedPaths = new Set<string>();
 
@@ -189,6 +190,7 @@ export async function createMeetingNoteFromExternalEvent(
     uidKey: string;
     titleKey: string;
     statusKey: string;
+    sourceUrlKey?: string;
   },
   existingFile?: TFile
 ): Promise<TFile | null> {
@@ -279,7 +281,7 @@ export async function createMeetingNoteFromExternalEvent(
   } else {
     const resolvedEventIdKey = frontmatterKeys?.eventIdKey || "externalEventId";
     if (event.id) {
-      const existingByEventId = findExistingNoteByEventId(app, event.id, resolvedEventIdKey);
+       const existingByEventId = await findExistingNoteByEventId(app, event.id, resolvedEventIdKey);
       if (existingByEventId) {
         logger.log(`[CreateMeetingNote] Note already exists for "${event.title}" (${event.id}) — reusing ${existingByEventId.path}`);
         return existingByEventId;
@@ -339,9 +341,11 @@ export async function createMeetingNoteFromExternalEvent(
     const momentApi = moment as unknown as (input: Date | string) => { format: (pattern: string) => string; isValid?: () => boolean };
     const dateSuffix = sanitizeFileName(momentApi(event.startDate).format(preferredDateFormat));
     const titleAlreadyHasDate = titleContainsDateToken(event.title, event.startDate, preferredDateFormat);
-    const rawBasename = titleAlreadyHasDate || !dateSuffix
+    const timeSuffix = buildScheduledTimeSuffix(event.startDate, event.isAllDay);
+    const basenameWithDate = titleAlreadyHasDate || !dateSuffix
       ? sanitizedTitle
       : `${sanitizedTitle} ${dateSuffix}`;
+    const rawBasename = timeSuffix ? `${basenameWithDate} ${timeSuffix}` : basenameWithDate;
     const safeBasename = sanitizePathSegment(app, rawBasename);
     const deterministicPath = normalizePath(`${folder}/${safeBasename}.md`);
 
@@ -426,6 +430,13 @@ export async function createMeetingNoteFromExternalEvent(
       if (value === undefined) continue;
       setFrontmatterValueCaseInsensitive(fm, key, value);
     }
+    const resolvedSourceUrlKey = frontmatterKeys?.sourceUrlKey;
+    if (resolvedSourceUrlKey && event.sourceUrl) {
+      const normalized = String(event.sourceUrl).trim().replace(/\/+$/, "");
+      if (normalized) {
+        setFrontmatterValueCaseInsensitive(fm, resolvedSourceUrlKey, normalized);
+      }
+    }
   });
 
   // Create bidirectional link if parent file is provided
@@ -469,7 +480,7 @@ function normalizeKey(key: string): string {
   return String(key || "").trim().toLowerCase();
 }
 
-function findExistingNoteByEventId(app: App, eventId: string, eventIdKey: string): TFile | null {
+async function findExistingNoteByEventId(app: App, eventId: string, eventIdKey: string): Promise<TFile | null> {
   if (!eventId) return null;
   const targetId = String(eventId).trim();
   const keyLower = eventIdKey.toLowerCase();
@@ -480,30 +491,20 @@ function findExistingNoteByEventId(app: App, eventId: string, eventIdKey: string
     if (storedId == null) continue;
     if (String(storedId).trim() === targetId) return file;
   }
+  for (const file of app.vault.getMarkdownFiles()) {
+    try {
+      const content = await app.vault.cachedRead(file);
+      const rawFm = extractRawFrontmatter(content);
+      if (!rawFm) continue;
+      const rawId = findRawFrontmatterValue(rawFm, keyLower);
+      if (String(rawId || "").trim() === targetId) return file;
+    } catch { /* ignore */ }
+  }
   return null;
 }
 
 async function getDailyNoteDateFormat(app: App): Promise<string> {
-  const dailyNotes = (app as any).internalPlugins?.getPluginById?.("daily-notes");
-  const format = dailyNotes?.instance?.options?.format;
-  if (format && typeof format === "string" && format.trim()) {
-    return format.trim();
-  }
-
-  try {
-    const configDir = (app.vault as any)?.configDir || ".obsidian";
-    const configPath = normalizePath(`${configDir}/daily-notes.json`);
-    const raw = await app.vault.adapter.read(configPath);
-    const parsed = JSON.parse(raw);
-    const configFormat = parsed?.format;
-    if (typeof configFormat === "string" && configFormat.trim()) {
-      return configFormat.trim();
-    }
-  } catch {
-    // Ignore config read/parse errors.
-  }
-
-  return "YYYY-MM-DD";
+  return getDailyNoteResolver(app).displayFormat;
 }
 
 function sanitizeFileName(value: string): string {
@@ -531,7 +532,7 @@ function titleContainsDateToken(title: string, date: Date, preferredFormat: stri
 
   const parsed = momentApi(
     normalizedTitle,
-    [preferredFormat, "YYYY-MM-DD", "dddd, MMMM Do YYYY", "MMMM D, YYYY", "MMM D, YYYY"],
+    [preferredFormat, "YYYY-MM-DD", "dddd, MMMM Do YYYY", "ddd, MMM D YYYY", "MMMM D, YYYY", "MMM D, YYYY"],
     true,
   );
   if (!parsed.isValid()) return false;
@@ -849,4 +850,14 @@ async function normalizeDuplicateLeadingFrontmatter(app: App, file: TFile): Prom
   malformedFrontmatterWarnedPaths.delete(file.path);
   logger.log("[ExternalEvent] Consolidated duplicate leading frontmatter blocks", { file: file.path });
   return true;
+}
+
+function buildScheduledTimeSuffix(date: Date | null | undefined, isAllDay?: boolean): string {
+  if (isAllDay) return "";
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+  if (hours === 0 && minutes === 0) return "";
+  const momentApi = moment as unknown as (input: Date | string) => { format: (pattern: string) => string };
+  return momentApi(date).format("h.mma").toLowerCase();
 }

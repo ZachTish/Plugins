@@ -24,9 +24,7 @@ export class DeviceRoleManager {
             // New device or undefined state: Default to Passive Replica
             this._currentRole = "user";
             window.localStorage.setItem(this.storageKey, "user");
-            console.log("[TPS Controller] New device detected. Defaulting to 'user' (Passive).");
         }
-        console.log(`[TPS Controller] Device Role initialized: ${this._currentRole}`);
     }
 
     public get role(): DeviceRole {
@@ -40,7 +38,6 @@ export class DeviceRoleManager {
     public setRole(role: DeviceRole) {
         this._currentRole = role;
         window.localStorage.setItem(this.storageKey, role);
-        console.log(`[TPS Controller] Device role set to: ${role}`);
         if (this.onRoleChange) {
             this.onRoleChange(role);
         }

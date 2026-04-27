@@ -285,11 +285,22 @@
       "label": "Templates",
       "match": "(^|[\\\\/])_templates([\\\\/]|$)",
       "flags": ""
+    },
+    {
+      "label": "root",
+      "match": "^[^/]+\\.md$",
+      "flags": "i"
     }
   ],
   "linterLocale": "system-default",
   "logLevel": "ERROR",
-  "lintCommands": [],
+  "lintCommands": [
+    {
+      "id": "templater-obsidian:replace-in-file-templater",
+      "name": "Templater: Replace templates in the active file",
+      "enabled": true
+    }
+  ],
   "customRegexes": [],
   "commonStyles": {
     "aliasArrayStyle": "single string to single-line",

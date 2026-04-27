@@ -7,6 +7,8 @@ import { App, TFile, moment, normalizePath } from "obsidian";
 import * as logger from "../logger";
 import type { ExternalCalendarEvent, PropertyReminder, TPSControllerSettings } from "../types";
 import { normalizeCalendarUrl, parseFrontmatterDate } from "../utils";
+import { getDailyNoteResolver } from "../utils/daily-note-resolver";
+import { CheckboxPatterns } from "./checkbox-pattern-service";
 import {
     parseDate, parseTimeRange, parseDuration, getEffectiveEndTime,
     formatTemplate, formatRemaining, checkStopCondition,
@@ -21,6 +23,11 @@ import {
 } from "./reminder-target-service";
 import { ExternalCalendarService } from "./external-calendar-service";
 
+interface GcmItemSemanticsApi {
+    extractInlineProperty?: (text: string, ...keys: string[]) => string | null;
+    stripInlineProperties?: (text: string) => string;
+}
+
 export interface PendingNotification {
     title: string;
     body: string;
@@ -28,7 +35,7 @@ export interface PendingNotification {
     isAllDay: boolean;
     reminderId: string;
     sourceKey?: string;
-    sourceType?: "file" | "kanban-task" | "external-event";
+    sourceType?: "file" | "kanban-task" | "task-item" | "external-event";
     taskLineNumber?: number;
     taskText?: string;
 }
@@ -45,8 +52,6 @@ interface ReminderFileLike {
 
 interface LocalEventMatchIndex {
     eventIds: Set<string>;
-    uidStartKeys: Set<string>;
-    titleDayKeys: Set<string>;
 }
 
 export class ReminderEngine {
@@ -56,6 +61,12 @@ export class ReminderEngine {
     constructor(app: App, externalCalendarService: ExternalCalendarService) {
         this.app = app;
         this.externalCalendarService = externalCalendarService;
+    }
+
+    private getGcmItemSemanticsApi(): GcmItemSemanticsApi | null {
+        return (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu')?.api
+            || (this.app as any)?.plugins?.plugins?.['TPS-Global-Context-Menu (Dev)']?.api
+            || null;
     }
 
     async evaluateReminders(settings: TPSControllerSettings): Promise<ReminderRunResult> {
@@ -158,7 +169,7 @@ export class ReminderEngine {
             if (!reminder.enabled) continue;
             if (reminderFilter && !reminderFilter(reminder)) continue;
 
-            const ctx = buildEffectiveReminderContextForTarget(target, baseFrontmatter, reminder.property, settings);
+            const ctx = buildEffectiveReminderContextForTarget(this.app, target, baseFrontmatter, reminder.property, settings);
             if (!ctx) continue;
             const effectiveFm = ctx.frontmatter;
             const propValue = ctx.propertyValue;
@@ -171,6 +182,10 @@ export class ReminderEngine {
                 settings.globalIgnorePaths,
                 settings.globalIgnoreTags,
                 settings.globalIgnoreStatuses,
+                {
+                    skipPathIgnore: target.sourceType === "task-item" || target.sourceType === "kanban-task",
+                    skipTagIgnore: target.sourceType === "task-item" || target.sourceType === "kanban-task",
+                },
             )) {
                 continue;
             }
@@ -188,10 +203,6 @@ export class ReminderEngine {
             let finalTriggerBase = propTime;
             if (reminder.triggerAtEnd) {
                 if (!effectiveEndTime) continue;
-                finalTriggerBase = effectiveEndTime;
-            }
-
-            if (!reminder.triggerAtEnd && reminder.mode === "timeblock" && effectiveEndTime) {
                 finalTriggerBase = effectiveEndTime;
             }
 
@@ -283,16 +294,6 @@ export class ReminderEngine {
             let shouldNotify = false;
             if (!state.triggered) {
                 if (!reminder.repeatUntilComplete && state.lastTriggerKey === triggerKey && state.lastSent) continue;
-                if (reminder.mode === "timeblock") {
-                    const staleMs = 5 * 60 * 1000;
-                    if (params.now - triggerTime > staleMs) {
-                        state.triggered = true;
-                        state.repeatCount = 0;
-                        state.lastTriggerKey = triggerKey;
-                        stateChanged = true;
-                        continue;
-                    }
-                }
                 shouldNotify = true;
                 state.triggered = true;
                 state.repeatCount = 0;
@@ -394,8 +395,11 @@ export class ReminderEngine {
         settings: TPSControllerSettings,
     ): Promise<LocalEventMatchIndex> {
         const eventIds = new Set<string>();
-        const uidStartKeys = new Set<string>();
-        const titleDayKeys = new Set<string>();
+        const dailyResolver = getDailyNoteResolver(this.app);
+        const dailyFolderNorm = normalizePath(String(dailyResolver.folder || "").trim());
+        const hasDailyFallbackTaskLists = (settings.externalCalendars || []).some(
+            (calendar) => (calendar.autoCreateMode || "note") === "task-list" && !String(calendar.autoCreateTaskListPath || "").trim(),
+        );
         const taskListPaths = new Set(
             (settings.externalCalendars || [])
                 .filter((calendar) => (calendar.autoCreateMode || "note") === "task-list")
@@ -409,23 +413,14 @@ export class ReminderEngine {
             const cache = this.app.metadataCache.getFileCache(file);
             const fm = (cache?.frontmatter || {}) as Record<string, unknown>;
             const eventId = this.normalizeIdentityValue(this.findKeyInsensitive(fm, settings.eventIdKey));
-            const uidValue = this.normalizeIdentityValue(this.findKeyInsensitive(fm, settings.uidKey));
-            const startValue = this.normalizeIdentityValue(
-                this.findKeyInsensitive(fm, settings.startProperty) ?? this.findKeyInsensitive(fm, "scheduled"),
-            );
-            const titleValue = this.normalizeIdentityValue(this.findKeyInsensitive(fm, settings.titleKey));
 
             if (eventId) eventIds.add(eventId);
 
-            const startDate = startValue ? parseFrontmatterDate(startValue) : null;
-            const uidForMatch = uidValue || (eventId ? this.extractUid(eventId) || eventId : null);
-            const uidStartKey = this.buildUidStartKey(uidForMatch, startDate);
-            if (uidStartKey) uidStartKeys.add(uidStartKey);
-
-            const titleDayKey = this.buildTitleDayKey(titleValue, startDate);
-            if (titleDayKey) titleDayKeys.add(titleDayKey);
-
-            if (!taskListPaths.has(normalizePath(file.path))) continue;
+            const normalizedFilePath = normalizePath(file.path);
+            const isDailyFallbackTaskFile = hasDailyFallbackTaskLists
+                && dailyResolver.isDailyNoteBasename(file.basename)
+                && normalizePath(file.parent?.path || "") === dailyFolderNorm;
+            if (!taskListPaths.has(normalizedFilePath) && !isDailyFallbackTaskFile) continue;
 
             try {
                 const content = await this.app.vault.cachedRead(file);
@@ -433,69 +428,40 @@ export class ReminderEngine {
                     const parsed = this.parseTaskListMatchLine(line, settings);
                     if (!parsed) continue;
                     if (parsed.eventId) eventIds.add(parsed.eventId);
-                    const parsedUidStartKey = this.buildUidStartKey(parsed.uid || parsed.eventId, parsed.startDate);
-                    if (parsedUidStartKey) uidStartKeys.add(parsedUidStartKey);
-                    const parsedTitleDayKey = this.buildTitleDayKey(parsed.title, parsed.startDate);
-                    if (parsedTitleDayKey) titleDayKeys.add(parsedTitleDayKey);
                 }
             } catch (error) {
                 logger.warn(`[ReminderEngine] Failed reading task-list reminder file ${file.path}`, error);
             }
         }
 
-        return { eventIds, uidStartKeys, titleDayKeys };
+        return { eventIds };
     }
 
     private parseTaskListMatchLine(
         line: string,
         settings: TPSControllerSettings,
-    ): { eventId: string | null; uid: string | null; title: string | null; startDate: Date | null } | null {
-        const checkboxMatch = line.match(/^\s*-\s+\[[^\]]*\]\s+(.*)$/);
+    ): { eventId: string | null } | null {
+        const checkboxMatch = line.match(CheckboxPatterns.ANY_CHECKBOX_CONTENT);
         if (!checkboxMatch) return null;
 
         const body = checkboxMatch[1] || "";
         const eventId = this.extractInlineFieldValue(body, settings.eventIdKey);
-        const uid = this.extractInlineFieldValue(body, settings.uidKey);
-        const scheduled = this.extractInlineFieldValue(body, settings.startProperty)
-            || this.extractInlineFieldValue(body, "scheduled");
-        const title = this.stripInlineFields(body);
-        const startDate = scheduled ? parseFrontmatterDate(scheduled) : null;
-
-        if (!eventId && !uid && !title) return null;
-        return { eventId, uid, title, startDate };
+        if (!eventId) return null;
+        return { eventId };
     }
 
     private matchesLocalEvent(index: LocalEventMatchIndex, event: ExternalCalendarEvent): boolean {
-        if (index.eventIds.has(event.id)) return true;
-
-        const uidStartKey = this.buildUidStartKey(event.uid || this.extractUid(event.id) || event.id, event.startDate);
-        if (uidStartKey && index.uidStartKeys.has(uidStartKey)) return true;
-
-        const titleDayKey = this.buildTitleDayKey(event.title, event.startDate);
-        return !!titleDayKey && index.titleDayKeys.has(titleDayKey);
-    }
-
-    private buildUidStartKey(uid: string | null | undefined, startDate: Date | null | undefined): string | null {
-        const normalizedUid = this.normalizeIdentityValue(uid);
-        if (!normalizedUid || !startDate || !Number.isFinite(startDate.getTime())) return null;
-        const roundedMs = Math.round(startDate.getTime() / 60000) * 60000;
-        return `${normalizedUid}|${roundedMs}`;
-    }
-
-    private buildTitleDayKey(title: string | null | undefined, startDate: Date | null | undefined): string | null {
-        const normalizedTitle = this.normalizeIdentityValue(title)?.toLowerCase();
-        if (!normalizedTitle || !startDate || !Number.isFinite(startDate.getTime())) return null;
-        return `${normalizedTitle}|${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(startDate.getDate()).padStart(2, "0")}`;
+        return index.eventIds.has(event.id);
     }
 
     private extractInlineFieldValue(text: string, key: string): string | null {
+        const semanticsApi = this.getGcmItemSemanticsApi();
+        if (semanticsApi?.extractInlineProperty) {
+            return semanticsApi.extractInlineProperty(text, key);
+        }
         const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const match = text.match(new RegExp(`\\[${escaped}::\\s*([^\\]]+)\\]`, "i"));
         return match?.[1] ? String(match[1]).trim() : null;
-    }
-
-    private stripInlineFields(text: string): string {
-        return text.replace(/\s*\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, "").trim();
     }
 
     private findKeyInsensitive(obj: Record<string, unknown>, key: string): unknown {
@@ -513,15 +479,6 @@ export class ReminderEngine {
             return null;
         }
         return normalized;
-    }
-
-    private extractUid(id: string): string | null {
-        const suffixPattern = /[-_](?:dup[-_])?(?:\d{4}\d{2}\d{2}T\d{2}\d{2}\d{2}|\d{13,})$/;
-        const match = id.match(suffixPattern);
-        if (match && match.index && match.index > 0) {
-            return id.substring(0, match.index);
-        }
-        return null;
     }
 
     private isArchivedFile(file: TFile, archiveFolder: string): boolean {

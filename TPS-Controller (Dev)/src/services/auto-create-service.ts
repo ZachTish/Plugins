@@ -2,9 +2,14 @@ import { App, TFile, normalizePath, Notice } from "obsidian";
 import * as logger from "../logger";
 import { ExternalCalendarService } from "./external-calendar-service";
 import { ExternalCalendarEvent } from "../types";
-import { createMeetingNoteFromExternalEvent } from "./external-event-modal";
+import { buildExternalEventNoteBasename, createMeetingNoteFromExternalEvent } from "./external-event-modal";
 import { formatDateTimeForFrontmatter, parseFrontmatterDate, matchesExclusionPattern, normalizeCalendarUrl, normalizeComparablePath } from "../utils";
 import { mergeTagInputs, normalizeTagValue, parseTagInput } from "../utils/tag-utils";
+import { getDailyNoteResolver } from "../utils/daily-note-resolver";
+import { ensureDailyNoteFile } from "../utils/daily-note-create";
+import { applyTemplateVars, buildTemplateVars } from "../utils/template-variable-service";
+import { resolveTemplateFile } from "../utils/template-resolution-service";
+import { CheckboxPatterns } from "./checkbox-pattern-service";
 
 interface CalendarAutoCreateConfig {
     mode?: "note" | "task-list";
@@ -17,14 +22,21 @@ interface CalendarAutoCreateConfig {
     autoCreateEnabled?: boolean;
 }
 
+interface EventComparison {
+    normalizedTitle: string;
+    normalizedLocation: string;
+    expectedStart: string;
+    expectedEnd: string | number;
+}
+
 export interface AutoCreateServiceConfig {
     startProperty: string;
     endProperty: string;
     useEndDuration: boolean;
     dateFormat?: string;
-    noLossSyncMode: boolean;
-    syncOnEventDelete: 'delete' | 'archive' | 'nothing';
+    orphanArchiveGraceCycles: number;
     archiveFolder: string;
+    archiveNotePath: string;
     globalIgnorePaths: string[];
     canceledStatusValue: string | null;
     allowAutoCreate?: boolean;
@@ -34,39 +46,42 @@ export interface AutoCreateServiceConfig {
     titleKey: string;
     statusKey: string;
     previousStatusKey: string;
+    scheduledDateProperty: string;
+    scheduledStartProperty: string;
+    scheduledEndProperty: string;
     orphanCandidateAtKey: string;
     orphanMissCountKey: string;
     orphanReasonKey: string;
     cancelledAtKey: string;
     scanRootFolders: string[];
+    syncBackfillDays?: number;
 }
 
 /** Vault note with stored frontmatter values for string-based comparison. */
 interface VaultNote {
     file: TFile;
     eventId: string | null;
-    uid: string;
     /** Raw frontmatter string — compared as-is, never re-parsed to Date for matching. */
     storedStart: string;
     storedEnd: string | number;
     storedTitle: string;
     storedLocation: string;
-    /** Parsed start date, only used for uid+start fallback matching. */
+    /** Parsed start date, used for range-limited orphan handling. */
     startDate: Date | null;
-    sourceUrl: string | null;
     orphanCandidateAt: string | null;
     isArchived: boolean;
 }
 
 interface TaskListItemRecord {
     eventId: string;
-    uid: string | null;
     sourceUrl: string | null;
     scheduledValue: string | null;
     title: string;
     lineNumber: number;
     line: string;
+    checkboxState: string;
     isCompleted: boolean;
+    inlineProperties: Record<string, string>;
 }
 
 interface TaskListState {
@@ -78,12 +93,20 @@ interface TaskListState {
     changed: boolean;
 }
 
+interface NoteCreateResult {
+    file: TFile | null;
+    reusedExisting: boolean;
+}
+
+interface GcmItemSemanticsApi {
+    extractInlineProperty?: (text: string, ...keys: string[]) => string | null;
+    stripInlineProperties?: (text: string) => string;
+}
+
 export class AutoCreateService {
     app: App;
     config: AutoCreateServiceConfig;
     private isSyncing = false;
-    private readonly malformedFrontmatterWarnedPaths = new Set<string>();
-
     /**
      * Orphan grace period: tracks how many consecutive sync cycles a note
      * has gone unmatched. Persists across sync calls (instance-level state).
@@ -101,9 +124,9 @@ export class AutoCreateService {
             startProperty: "scheduled",
             endProperty: "timeEstimate",
             useEndDuration: true,
-            noLossSyncMode: true,
-            syncOnEventDelete: 'nothing',
+            orphanArchiveGraceCycles: 5,
             archiveFolder: "",
+            archiveNotePath: "",
             globalIgnorePaths: [],
             canceledStatusValue: null,
             allowAutoCreate: false,
@@ -113,6 +136,9 @@ export class AutoCreateService {
             titleKey: "title",
             statusKey: "status",
             previousStatusKey: "tpsCalendarPrevStatus",
+            scheduledDateProperty: "",
+            scheduledStartProperty: "",
+            scheduledEndProperty: "",
             orphanCandidateAtKey: "tpsCalendarOrphanCandidateAt",
             orphanMissCountKey: "tpsCalendarOrphanMissCount",
             orphanReasonKey: "tpsCalendarOrphanReason",
@@ -123,6 +149,12 @@ export class AutoCreateService {
 
     updateConfig(config: Partial<AutoCreateServiceConfig>) {
         this.config = { ...this.config, ...config };
+    }
+
+    private getGcmItemSemanticsApi(): GcmItemSemanticsApi | null {
+        return (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu')?.api
+            || (this.app as any)?.plugins?.plugins?.['TPS-Global-Context-Menu (Dev)']?.api
+            || null;
     }
 
     async checkAndCreateMeetingNotes(
@@ -152,7 +184,8 @@ export class AutoCreateService {
             this.taskListStateByPath.clear();
 
             const rangeStart = new Date();
-            rangeStart.setDate(rangeStart.getDate() - 14);
+            const backfillDays = this.config.syncBackfillDays ?? 0;
+            rangeStart.setDate(rangeStart.getDate() - (backfillDays > 0 ? backfillDays : 14));
             const rangeEnd = new Date();
             rangeEnd.setDate(rangeEnd.getDate() + 60);
 
@@ -166,28 +199,43 @@ export class AutoCreateService {
 
             // Build O(1) lookup maps from vault notes
             logger.log('[AutoCreateService] Building vault index...');
-            const { byEventId, byUidStart, byTitleDay, allNotes } = await this.buildVaultIndex();
+            const { byEventId, allNotes } = await this.buildVaultIndex();
 
             let created = 0, updated = 0, deleted = 0, quarantined = 0, restored = 0;
+            const uniqueRemoteEvents: ExternalCalendarEvent[] = [];
             const processedEventIds = new Set<string>();
-            const processedUidStartKeys = new Set<string>();
-            const matchedFilePaths = new Set<string>();
 
             for (const event of remoteEvents) {
-                const uidStartKey = this.buildUidStartKey(event);
-                if (processedEventIds.has(event.id) || processedUidStartKeys.has(uidStartKey)) {
+                const normalizedSourceUrl = this.normalizeSourceUrl(event.sourceUrl);
+                const eventKey = normalizedSourceUrl
+                    ? this.buildSourceScopedKey(normalizedSourceUrl, event.id)
+                    : event.id;
+                if (processedEventIds.has(eventKey)) {
                     continue;
                 }
-                processedEventIds.add(event.id);
-                processedUidStartKeys.add(uidStartKey);
+                processedEventIds.add(eventKey);
+                uniqueRemoteEvents.push(event);
+            }
 
+            uniqueRemoteEvents.sort((left, right) => {
+                const startDelta = left.startDate.getTime() - right.startDate.getTime();
+                if (startDelta !== 0) return startDelta;
+                const titleDelta = left.title.localeCompare(right.title);
+                if (titleDelta !== 0) return titleDelta;
+                return left.id.localeCompare(right.id);
+            });
+            logger.log(`[AutoCreateService] Processing ${uniqueRemoteEvents.length} event(s) sequentially.`);
+
+            const matchedFilePaths = new Set<string>();
+            for (let index = 0; index < uniqueRemoteEvents.length; index++) {
+                const event = uniqueRemoteEvents[index];
                 try {
+                    logger.log(`[AutoCreateService] Event ${index + 1}/${uniqueRemoteEvents.length}: ${event.title}`);
+                    const normalizedEventSourceUrl = this.normalizeSourceUrl(event.sourceUrl);
                     const result = await this.processEvent(
                         event,
                         byEventId,
-                        byUidStart,
-                        byTitleDay,
-                        calendarConfigs[event.sourceUrl || ""],
+                        calendarConfigs[normalizedEventSourceUrl || ""] || calendarConfigs[event.sourceUrl || ""] || null,
                         filterTerms,
                         forceRegenerate
                     );
@@ -202,24 +250,25 @@ export class AutoCreateService {
                             const note: VaultNote = {
                                 file: result.file,
                                 eventId: event.id,
-                                uid: event.uid || event.id,
                                 storedStart: formatDateTimeForFrontmatter(event.startDate),
                                 storedEnd: this.config.useEndDuration
                                     ? Math.round((event.endDate.getTime() - event.startDate.getTime()) / 60000)
                                     : formatDateTimeForFrontmatter(event.endDate),
-                                storedTitle: event.title,
-                                storedLocation: event.location || "",
+                                storedTitle: (event.title || "").trim(),
+                                storedLocation: (event.location || "").trim(),
                                 startDate: event.startDate,
-                                sourceUrl: this.normalizeSourceUrl(event.sourceUrl),
                                 orphanCandidateAt: null,
                                 isArchived: false,
                             };
-                            byEventId.set(event.id, note);
-                            byUidStart.set(uidStartKey, note);
+                            if (!byEventId.has(event.id)) {
+                                byEventId.set(event.id, note);
+                            }
                         }
                     }
                 } catch (error) {
                     logger.error(`[AutoCreateService] Error processing event "${event.title}"`, error);
+                } finally {
+                    await this.pauseBetweenEvents();
                 }
             }
 
@@ -243,9 +292,8 @@ export class AutoCreateService {
             for (const note of allNotes) {
                 if (note.isArchived) continue;
                 if (matchedFilePaths.has(note.file.path)) {
-                    // Matched — reset miss count if any
                     this.orphanMissCount.delete(note.file.path);
-                    if (this.config.noLossSyncMode && note.orphanCandidateAt) {
+                    if (note.orphanCandidateAt) {
                         const wasCleared = await this.clearOrphanCandidate(note.file);
                         if (wasCleared) restored++;
                     }
@@ -261,24 +309,35 @@ export class AutoCreateService {
                     continue;
                 }
 
-                const noteDate = note.startDate ?? this.getRecurrenceDateFromId(note.eventId);
+                const noteDate = note.startDate;
                 if (!noteDate || noteDate < rangeStart || noteDate > rangeEnd) continue;
 
                 currentOrphanPaths.add(note.file.path);
-                const missCount = (this.orphanMissCount.get(note.file.path) || 0) + 1;
+                const prevMiss = this.readMissCountFromFrontmatter(note);
+                const missCount = prevMiss + 1;
                 this.orphanMissCount.set(note.file.path, missCount);
 
-                if (missCount < AutoCreateService.ORPHAN_GRACE_CYCLES) {
-                    logger.warn(`[AutoCreateService] Orphan candidate (miss ${missCount}/${AutoCreateService.ORPHAN_GRACE_CYCLES}): ${note.file.path}`);
-                } else {
-                    logger.warn(`[AutoCreateService] Orphan confirmed (miss ${missCount}): ${note.file.path}`);
-                    if (this.config.noLossSyncMode) {
-                        if (await this.markOrphanCandidate(note, missCount)) {
-                            quarantined++;
-                        }
-                    } else if (await this.deleteOrArchive(note.file)) {
+                const hasProtectedBodyContent = await this.hasProtectedBodyContent(note.file);
+                const graceCycles = this.config.orphanArchiveGraceCycles;
+                if (hasProtectedBodyContent) {
+                    logger.warn(`[AutoCreateService] Orphan candidate retained because note has body content: ${note.file.path}`);
+                    await this.markOrphanCandidate(note, missCount, "protected-body-content");
+                    quarantined++;
+                    continue;
+                }
+
+                if (graceCycles > 0 && missCount < graceCycles) {
+                    logger.warn(`[AutoCreateService] Orphan candidate (miss ${missCount}/${graceCycles}): ${note.file.path}`);
+                    await this.markOrphanCandidate(note, missCount);
+                    quarantined++;
+                } else if (graceCycles > 0 && missCount >= graceCycles) {
+                    logger.warn(`[AutoCreateService] Orphan confirmed after ${missCount} misses, archiving: ${note.file.path}`);
+                    if (await this.archiveFile(note.file)) {
                         deleted++;
                         this.recordOrphanDeletion(note.eventId);
+                    } else {
+                        await this.markOrphanCandidate(note, missCount);
+                        quarantined++;
                     }
                     this.orphanMissCount.delete(note.file.path);
                 }
@@ -356,18 +415,16 @@ export class AutoCreateService {
 
     private async buildVaultIndex(): Promise<{
         byEventId: Map<string, VaultNote>;
-        byUidStart: Map<string, VaultNote>;
-        byTitleDay: Map<string, VaultNote>;
         allNotes: VaultNote[];
     }> {
         const byEventId = new Map<string, VaultNote>();
-        const byUidStart = new Map<string, VaultNote>();
         const allNotes: VaultNote[] = [];
 
         const files = await this.getScopedMarkdownFiles();
         for (const file of files) {
             const isTrash = normalizePath(file.path).toLowerCase().startsWith(".trash");
             if (isTrash) continue;
+            if (this.isArchivedNote(file)) continue;
 
             const normPath = normalizeComparablePath(file.path);
             const normBase = normalizeComparablePath(file.basename);
@@ -381,9 +438,7 @@ export class AutoCreateService {
             if (!fm) continue;
 
             const eventId = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.eventIdKey));
-            const uidRaw = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.uidKey));
-            const uid = uidRaw || (eventId ? (this.extractUid(eventId) || eventId) : "");
-            if (!uid && !eventId) continue;
+            if (!eventId) continue;
 
             // Store raw frontmatter values as strings for comparison — no Date re-parsing
             const storedStartRaw = this.findKeyInsensitive(fm, this.config.startProperty)
@@ -397,10 +452,9 @@ export class AutoCreateService {
 
             const storedTitle = String(this.findKeyInsensitive(fm, this.config.titleKey) ?? "").trim();
             const storedLocation = String(this.findKeyInsensitive(fm, "location") ?? "").trim();
-            const sourceUrl = this.normalizeSourceUrl(this.findKeyInsensitive(fm, this.config.sourceUrlKey));
             const orphanCandidateAt = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.orphanCandidateAtKey));
 
-            // Parse start date deterministically for uid+start fallback matching only
+            // Parse start date deterministically for orphan handling only.
             let startDate: Date | null = null;
             if (storedStart) {
                 startDate = parseFrontmatterDate(storedStart);
@@ -409,49 +463,25 @@ export class AutoCreateService {
             const note: VaultNote = {
                 file,
                 eventId,
-                uid,
                 storedStart,
                 storedEnd,
                 storedTitle,
                 storedLocation,
                 startDate,
-                sourceUrl,
                 orphanCandidateAt,
                 isArchived: this.isArchivedNote(file),
             };
 
             allNotes.push(note);
 
-            // Primary index: eventId → note
             if (eventId) {
-                byEventId.set(eventId, note);
-            }
-
-            // Secondary index: uid|startMs → note (for fallback matching)
-            if (uid && startDate && Number.isFinite(startDate.getTime())) {
-                // Round to nearest minute to absorb minor timestamp jitter
-                const roundedMs = Math.round(startDate.getTime() / 60000) * 60000;
-                const key = `${uid}|${roundedMs}`;
-                if (!byUidStart.has(key)) {
-                    byUidStart.set(key, note);
+                if (!byEventId.has(eventId)) {
+                    byEventId.set(eventId, note);
                 }
             }
         }
 
-        // Tertiary index: normalizedTitle|YYYY-MM-DD → note
-        // Catches old-format files whose event IDs changed (ms-timestamp → stable-string migration)
-        // or notes that lack identity frontmatter but have a matching title+date.
-        const byTitleDay = new Map<string, VaultNote>();
-        for (const note of allNotes) {
-            if (note.isArchived) continue;
-            if (!note.storedTitle || !note.startDate || !Number.isFinite(note.startDate.getTime())) continue;
-            const normTitle = note.storedTitle.trim().toLowerCase();
-            const sd = note.startDate;
-            const tdKey = `${normTitle}|${sd.getFullYear()}-${String(sd.getMonth() + 1).padStart(2, '0')}-${String(sd.getDate()).padStart(2, '0')}`;
-            if (!byTitleDay.has(tdKey)) byTitleDay.set(tdKey, note);
-        }
-
-        return { byEventId, byUidStart, byTitleDay, allNotes };
+        return { byEventId, allNotes };
     }
 
     private getConfiguredScanRoots(): string[] {
@@ -465,14 +495,100 @@ export class AutoCreateService {
         return Array.from(roots);
     }
 
-    private async ensureTaskListState(taskListPath: string, heading: string | null | undefined): Promise<TaskListState | null> {
+    public async countTaskListEntriesForCalendar(taskListPath: string, calendarUrl: string): Promise<number> {
+        const normalizedPath = normalizePath(String(taskListPath || "").trim());
+        const normalizedSource = this.normalizeSourceUrl(calendarUrl);
+        if (!normalizedPath || !normalizedSource) return 0;
+
+        const file = this.app.vault.getAbstractFileByPath(normalizedPath);
+        if (!(file instanceof TFile)) return 0;
+
+        const content = await this.app.vault.cachedRead(file);
+        const lines = content.split(/\r?\n/);
+        let count = 0;
+        for (let i = 0; i < lines.length; i++) {
+            const parsed = this.parseTaskListLine(lines[i], i);
+            if (!parsed) continue;
+            if (this.normalizeSourceUrl(parsed.sourceUrl) === normalizedSource) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    public async migrateTaskListCalendarPath(calendarUrl: string, oldPath: string, newPath: string): Promise<number> {
+        const normalizedSource = this.normalizeSourceUrl(calendarUrl);
+        const normalizedOldPath = normalizePath(String(oldPath || "").trim());
+        const normalizedNewPath = normalizePath(String(newPath || "").trim());
+        if (!normalizedSource || !normalizedOldPath || !normalizedNewPath || normalizedOldPath === normalizedNewPath) {
+            return 0;
+        }
+
+        const oldFile = this.app.vault.getAbstractFileByPath(normalizedOldPath);
+        if (!(oldFile instanceof TFile)) {
+            return 0;
+        }
+
+        const oldContent = await this.app.vault.cachedRead(oldFile);
+        const oldLines = oldContent.split(/\r?\n/);
+        const movedRows: TaskListItemRecord[] = [];
+        const keptOldLines: string[] = [];
+        for (let i = 0; i < oldLines.length; i++) {
+            const parsed = this.parseTaskListLine(oldLines[i], i);
+            if (parsed && this.normalizeSourceUrl(parsed.sourceUrl) === normalizedSource) {
+                movedRows.push(parsed);
+                continue;
+            }
+            keptOldLines.push(oldLines[i]);
+        }
+
+        if (movedRows.length === 0) {
+            return 0;
+        }
+
+        const destinationState = await this.ensureTaskListState(normalizedNewPath, null, null);
+        if (!destinationState) {
+            return 0;
+        }
+
+        const destinationContent = await this.app.vault.cachedRead(destinationState.file);
+        const destinationLines = destinationContent.split(/\r?\n/);
+        const movedEventIds = new Set(movedRows.map((row) => row.eventId));
+
+        const filteredDestinationLines: string[] = [];
+        for (let i = 0; i < destinationLines.length; i++) {
+            const parsed = this.parseTaskListLine(destinationLines[i], i);
+            if (parsed && this.normalizeSourceUrl(parsed.sourceUrl) === normalizedSource) {
+                if (movedEventIds.has(parsed.eventId)) {
+                    continue;
+                }
+            }
+            filteredDestinationLines.push(destinationLines[i]);
+        }
+
+        destinationState.lines = filteredDestinationLines;
+        const appendIndex = this.getTaskListInsertIndex(destinationState);
+        filteredDestinationLines.splice(appendIndex, 0, ...movedRows.map((row) => row.line));
+        this.sortTaskListSection(destinationState);
+        const normalizedDestinationContent = filteredDestinationLines.join("\n");
+        await this.app.vault.modify(destinationState.file, normalizedDestinationContent);
+
+        const normalizedOldContent = keptOldLines.join("\n");
+        await this.app.vault.modify(oldFile, normalizedOldContent);
+        this.taskListStateByPath.delete(normalizedOldPath);
+        this.taskListStateByPath.delete(normalizedNewPath);
+
+        return movedRows.length;
+    }
+
+    private async ensureTaskListState(taskListPath: string, heading: string | null | undefined, eventDate?: Date | null): Promise<TaskListState | null> {
         const normalizedPath = normalizePath(String(taskListPath || "").trim());
         if (!normalizedPath) return null;
 
         const cached = this.taskListStateByPath.get(normalizedPath);
         if (cached) return cached;
 
-        const file = await this.ensureTaskListFile(normalizedPath);
+        const file = await this.ensureTaskListFile(normalizedPath, eventDate ?? null);
         if (!file) return null;
 
         const content = await this.app.vault.cachedRead(file);
@@ -489,7 +605,15 @@ export class AutoCreateService {
         return state;
     }
 
-    private async ensureTaskListFile(path: string): Promise<TFile | null> {
+    private async ensureTaskListFile(path: string, eventDate: Date | null = null): Promise<TFile | null> {
+        if (eventDate instanceof Date && !Number.isNaN(eventDate.getTime())) {
+            const resolver = getDailyNoteResolver(this.app);
+            const expectedDailyPath = normalizePath(resolver.buildPath(eventDate, "md"));
+            if (normalizePath(path) === expectedDailyPath) {
+                return await ensureDailyNoteFile(this.app, eventDate);
+            }
+        }
+
         const existing = this.app.vault.getAbstractFileByPath(path);
         if (existing instanceof TFile) return existing;
         if (!path.toLowerCase().endsWith(".md")) return null;
@@ -498,14 +622,72 @@ export class AutoCreateService {
         if (slashIndex > 0) {
             await this.ensureFolder(path.slice(0, slashIndex));
         }
-        return await this.app.vault.create(path, "");
+        const initialContent = await this.buildTaskListFileInitialContent(path, eventDate);
+        const file = await this.app.vault.create(path, initialContent);
+        await this.runTemplaterOnFile(file);
+        return file;
+    }
+
+    private async buildTaskListFileInitialContent(path: string, eventDate: Date | null): Promise<string> {
+        const targetDate = eventDate instanceof Date && !Number.isNaN(eventDate.getTime()) ? eventDate : null;
+        if (!targetDate) return "";
+
+        const resolver = getDailyNoteResolver(this.app);
+        const expectedDailyPath = normalizePath(resolver.buildPath(targetDate, "md"));
+        if (normalizePath(path) !== expectedDailyPath) {
+            return "";
+        }
+
+        const templatePath = String(resolver.template || "").trim();
+        if (!templatePath) {
+            return "";
+        }
+
+        const templateFile = resolveTemplateFile(this.app, templatePath, {
+            allowBasenameMatchInTemplaterRoot: true,
+            warnOnAmbiguousBasename: true,
+        });
+        if (!(templateFile instanceof TFile)) {
+            return "";
+        }
+
+        try {
+            const raw = await this.app.vault.read(templateFile);
+            const basename = path.replace(/^.*\//, '').replace(/\.md$/i, '');
+            const folderPath = path.includes('/') ? path.replace(/\/[^/]+$/, '') : '';
+            const vars = buildTemplateVars(null, {
+                title: basename,
+                date: `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`,
+                time: '00:00:00',
+                datetime: new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0).toISOString(),
+                timestamp: String(new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0).getTime()),
+                file_name: `${basename}.md`,
+                file_basename: basename,
+                file_path: path,
+                file_folder: folderPath,
+            });
+            return applyTemplateVars(raw, vars);
+        } catch (error) {
+            logger.warn('[AutoCreateService] Failed building daily-note task-list template content', { path, template: templateFile.path, error });
+            return '';
+        }
+    }
+
+    private async runTemplaterOnFile(file: TFile): Promise<void> {
+        const templater = (this.app as any)?.plugins?.getPlugin?.('templater-obsidian');
+        if (!templater?.templater) return;
+        try {
+            await templater.templater.overwrite_file_commands(file, false);
+        } catch (error) {
+            logger.warn('[AutoCreateService] Templater failed during task-list daily note create', { file: file.path, error });
+        }
     }
 
     private rebuildTaskListIndex(state: TaskListState): void {
         state.itemsByEventId.clear();
         for (let lineNumber = 0; lineNumber < state.lines.length; lineNumber++) {
             const parsed = this.parseTaskListLine(state.lines[lineNumber], lineNumber);
-            if (parsed) {
+            if (parsed && !state.itemsByEventId.has(parsed.eventId)) {
                 state.itemsByEventId.set(parsed.eventId, parsed);
             }
         }
@@ -518,26 +700,58 @@ export class AutoCreateService {
         const eventId = this.extractInlineFieldValue(body, this.config.eventIdKey);
         if (!eventId) return null;
 
+        const sourceUrl = this.normalizeSourceUrl(this.extractInlineFieldValue(body, this.config.sourceUrlKey));
+        const scheduledValue = this.extractInlineFieldValue(body, this.config.startProperty);
+        const inlineProperties: Record<string, string> = {};
+        for (const match of body.matchAll(/\[([a-zA-Z0-9_-]+)::\s*([^\]]+)\]/g)) {
+            const key = String(match[1] || "").trim().toLowerCase();
+            const value = String(match[2] || "").trim();
+            if (!key || !value) continue;
+            inlineProperties[key] = value;
+        }
         return {
             eventId,
-            uid: this.extractInlineFieldValue(body, this.config.uidKey),
-            sourceUrl: this.normalizeSourceUrl(this.extractInlineFieldValue(body, this.config.sourceUrlKey)),
-            scheduledValue: this.extractInlineFieldValue(body, this.config.startProperty),
+            sourceUrl,
+            scheduledValue,
             title: this.stripInlineFields(body),
             lineNumber,
             line,
-            isCompleted: /^[xX]$/.test(checkboxMatch[1] || ""),
+            checkboxState: String(checkboxMatch[1] || ""),
+            isCompleted: /^[xX-]$/.test(checkboxMatch[1] || ""),
+            inlineProperties,
         };
     }
 
     private extractInlineFieldValue(text: string, key: string): string | null {
+        const semanticsApi = this.getGcmItemSemanticsApi();
+        if (semanticsApi?.extractInlineProperty) {
+            return semanticsApi.extractInlineProperty(text, key);
+        }
         const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const match = text.match(new RegExp(`\\[${escaped}::\\s*([^\\]]+)\\]`, "i"));
         return match?.[1] ? String(match[1]).trim() : null;
     }
 
     private stripInlineFields(text: string): string {
+        const semanticsApi = this.getGcmItemSemanticsApi();
+        if (semanticsApi?.stripInlineProperties) {
+            return semanticsApi.stripInlineProperties(text);
+        }
         return text.replace(/\s*\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, "").trim();
+    }
+
+    private touchTaskListItem(
+        state: TaskListState,
+        eventId: string,
+    ): void {
+        state.touchedEventIds.add(eventId);
+    }
+
+    private emitTaskLineUpdated(file: TFile, lineNumber: number | null): void {
+        (this.app.workspace as any)?.trigger?.("tps-task-line-updated", {
+            path: file.path,
+            lineNumber,
+        });
     }
 
     private formatTaskListScheduledValue(date: Date, isAllDay: boolean): string {
@@ -552,10 +766,26 @@ export class AutoCreateService {
         return `${year}-${month}-${day} ${hour}:${minute}`;
     }
 
-    private buildTaskListLine(event: ExternalCalendarEvent): string {
-        const checkbox = event.endDate.getTime() < Date.now() ? "x" : " ";
+    private buildTaskListLine(
+        event: ExternalCalendarEvent,
+        checkboxState: string = " ",
+        existingInlineProperties: Record<string, string> = {},
+    ): string {
+        const normalizedCheckboxState = String(checkboxState || "").trim();
+        const checkbox = normalizedCheckboxState.length > 0 ? normalizedCheckboxState : " ";
         const sourceUrl = this.normalizeSourceUrl(event.sourceUrl) || "";
         const durationMinutes = Math.max(5, Math.round((event.endDate.getTime() - event.startDate.getTime()) / 60000));
+        const reservedKeys = new Set([
+            this.config.eventIdKey.toLowerCase(),
+            this.config.uidKey.toLowerCase(),
+            this.config.sourceUrlKey.toLowerCase(),
+            this.config.startProperty.toLowerCase(),
+            this.config.endProperty.toLowerCase(),
+        ]);
+        const passthroughProperties = Object.entries(existingInlineProperties || {})
+            .filter(([key, value]) => !!String(key || "").trim() && !!String(value || "").trim())
+            .filter(([key]) => !reservedKeys.has(String(key || "").trim().toLowerCase()))
+            .map(([key, value]) => `[${key}:: ${String(value).trim()}]`);
         return [
             `- [${checkbox}] ${event.title.trim()}`,
             `[${this.config.eventIdKey}:: ${event.id}]`,
@@ -563,6 +793,7 @@ export class AutoCreateService {
             `[${this.config.sourceUrlKey}:: ${sourceUrl}]`,
             `[${this.config.startProperty}:: ${this.formatTaskListScheduledValue(event.startDate, event.isAllDay)}]`,
             `[${this.config.endProperty}:: ${durationMinutes}]`,
+            ...passthroughProperties,
         ].join(" ");
     }
 
@@ -605,13 +836,20 @@ export class AutoCreateService {
         rangeStart: Date,
         rangeEnd: Date,
     ): Promise<{ created: number; updated: number; deleted: number }> {
-        if (this.config.syncOnEventDelete === "nothing") {
+        if (this.config.orphanArchiveGraceCycles <= 0) {
             return { created: 0, updated: 0, deleted: 0 };
         }
 
         let deleted = 0;
         for (const state of this.taskListStateByPath.values()) {
-            const items = Array.from(state.itemsByEventId.values())
+            const uniqueItems = new Map<number, TaskListItemRecord>();
+            for (const item of state.itemsByEventId.values()) {
+                if (!uniqueItems.has(item.lineNumber)) {
+                    uniqueItems.set(item.lineNumber, item);
+                }
+            }
+
+            const items = Array.from(uniqueItems.values())
                 .filter((item) => !!item.sourceUrl)
                 .filter((item) => !state.touchedEventIds.has(item.eventId))
                 .filter((item) => successfulUrls.has(item.sourceUrl!))
@@ -634,10 +872,118 @@ export class AutoCreateService {
 
     private async flushTaskListStates(): Promise<void> {
         for (const state of this.taskListStateByPath.values()) {
-            if (!state.changed) continue;
-            await this.app.vault.modify(state.file, state.lines.join("\n"));
+            const resorted = this.sortTaskListSection(state);
+            if (!state.changed && !resorted) continue;
+
+            const desiredContent = state.lines.join("\n");
+            const editor = this.getEditorForFile(state.file);
+            if (editor) {
+                if (typeof editor.setValue === "function") {
+                    editor.setValue(desiredContent);
+                }
+            }
+            await this.app.vault.modify(state.file, desiredContent);
             state.changed = false;
         }
+    }
+
+    private getEditorForFile(file: TFile): any | null {
+        const leaves = (this.app as any).workspace?.getLeavesOfType?.('markdown');
+        if (!Array.isArray(leaves)) return null;
+        for (const leaf of leaves) {
+            const view = leaf?.view;
+            if (view?.file?.path === file.path && view?.editor) {
+                return view.editor;
+            }
+        }
+        return null;
+    }
+
+    private sortTaskListSection(state: TaskListState): boolean {
+        const sectionRange = this.getHeadingSectionRange(state);
+        if (!sectionRange) return false;
+
+        const [sectionStart, sectionEnd] = sectionRange;
+        const taskIndices: number[] = [];
+        for (let i = sectionStart; i < sectionEnd; i++) {
+            const parsed = this.parseTaskListLine(state.lines[i], i);
+            if (parsed) taskIndices.push(i);
+        }
+        if (taskIndices.length < 2) return false;
+
+        const parsedMap = new Map<number, TaskListItemRecord>();
+        for (const idx of taskIndices) {
+            const parsed = this.parseTaskListLine(state.lines[idx], idx);
+            if (parsed) parsedMap.set(idx, parsed);
+        }
+
+        const originalLines = taskIndices.map(i => state.lines[i]);
+        taskIndices.sort((a, b) => {
+            const itemA = parsedMap.get(a)!;
+            const itemB = parsedMap.get(b)!;
+
+            const dateA = this.parseScheduledDate(itemA.scheduledValue);
+            const dateB = this.parseScheduledDate(itemB.scheduledValue);
+            if (dateA !== null && dateB !== null) {
+                const dateDelta = dateA.getTime() - dateB.getTime();
+                if (dateDelta !== 0) return dateDelta;
+            } else if (dateA !== null) {
+                return -1;
+            } else if (dateB !== null) {
+                return 1;
+            }
+
+            const aDone = itemA.isCompleted ? 1 : 0;
+            const bDone = itemB.isCompleted ? 1 : 0;
+            if (aDone !== bDone) return aDone - bDone;
+
+            return itemA.title.localeCompare(itemB.title);
+        });
+
+        const sortedLines = taskIndices.map(i => state.lines[i]);
+        const reordered = sortedLines.some((line, idx) => line !== originalLines[idx]);
+        if (!reordered) {
+            return false;
+        }
+
+        let writeIdx = 0;
+        for (const origIdx of taskIndices) {
+            state.lines[origIdx] = sortedLines[writeIdx++];
+        }
+        this.rebuildTaskListIndex(state);
+        state.changed = true;
+        return true;
+    }
+
+    private getHeadingSectionRange(state: TaskListState): [number, number] | null {
+        if (!state.heading) {
+            const hasTasks = state.lines.some(l => this.parseTaskListLine(l, 0));
+            return hasTasks ? [0, state.lines.length] : null;
+        }
+
+        const normalizedHeading = state.heading.trim().toLowerCase();
+        let headingLine = -1;
+        for (let i = 0; i < state.lines.length; i++) {
+            const line = state.lines[i].trim();
+            if (!line.startsWith("#")) continue;
+            const text = line.replace(/^#+\s*/, "").trim().toLowerCase();
+            if (text === normalizedHeading) { headingLine = i; break; }
+        }
+        if (headingLine === -1) return null;
+
+        let end = headingLine + 1;
+        while (end < state.lines.length && !state.lines[end].trim().startsWith("#")) {
+            end++;
+        }
+        return end > headingLine + 1 ? [headingLine + 1, end] : null;
+    }
+
+    private parseScheduledDate(value: string | null): Date | null {
+        if (!value) return null;
+        const m = (window as any).moment;
+        if (!m) return null;
+        const parsed = m(value, ["YYYY-MM-DD HH:mm", "YYYY-MM-DD"], true);
+        return parsed.isValid() ? parsed.toDate() : null;
     }
 
     private async getScopedMarkdownFiles(): Promise<TFile[]> {
@@ -699,129 +1045,56 @@ export class AutoCreateService {
     private async processEvent(
         event: ExternalCalendarEvent,
         byEventId: Map<string, VaultNote>,
-        byUidStart: Map<string, VaultNote>,
-        byTitleDay: Map<string, VaultNote>,
         calendarInfo: CalendarAutoCreateConfig | null,
         filterTerms: string[],
         forceRegenerate: boolean
     ): Promise<{ action: 'created' | 'updated' | 'deleted' | 'none', file?: TFile }> {
-        if ((calendarInfo?.mode || "note") === "task-list") {
+        const comparison = this.buildEventComparison(event);
+        const vaultMatch = byEventId.get(event.id) || null;
+
+        // If a promoted note owns this event, treat it as note-mode regardless
+        // of calendar config so it continues receiving sync updates.
+        if (!vaultMatch && (calendarInfo?.mode || "note") === "task-list") {
             return this.processEventAsTaskList(event, calendarInfo, filterTerms);
         }
 
-        const normalizedSourceUrl = this.normalizeSourceUrl(event.sourceUrl);
-
-        // 1. Find match — primary by eventId, fallback by uid+start, tertiary by title+day
-        let match = byEventId.get(event.id) || null;
-        let repairedEventId = false;
-
-        if (!match) {
-            const uidStartKey = this.buildUidStartKey(event);
-            const fallback = byUidStart.get(uidStartKey);
-            if (fallback && !fallback.isArchived) {
-                // uid+start matched but eventId didn't — repair the identity binding
-                // instead of skipping. This fixes stale IDs from timezone jitter or
-                // ID format changes across parser updates.
-                logger.log(`[AutoCreateService] Repairing eventId for "${event.title}": ${fallback.eventId} -> ${event.id} (matched via uid+start)`);
-                match = fallback;
-                repairedEventId = true;
-            }
-        }
-
-        // Tertiary fallback: title+day (catches files whose event IDs changed format)
-        if (!match) {
-            const normTitle = event.title.trim().toLowerCase();
-            const s = event.startDate;
-            const tdKey = `${normTitle}|${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}-${String(s.getDate()).padStart(2, '0')}`;
-            const titleFallback = byTitleDay.get(tdKey);
-            if (titleFallback && !titleFallback.isArchived) {
-                logger.log(`[AutoCreateService] Matched by title+day for "${event.title}": ${titleFallback.file.path}`);
-                match = titleFallback;
-                repairedEventId = true;
-            }
-        }
-
         // 2. Existing note found — check for changes
-        if (match) {
-            if (match.isArchived) {
-                return { action: 'none', file: match.file };
+        if (vaultMatch) {
+            if (vaultMatch.isArchived) {
+                return { action: 'none', file: vaultMatch.file };
             }
 
             if (event.isCancelled) {
                 logger.log(`[AutoCreateService] Event CANCELLED: ${event.title}`);
-                const cancellationAction = await this.handleCancelledMatch(match.file);
-                return { action: cancellationAction, file: match.file };
+                const marked = await this.markCancelledWithoutDelete(vaultMatch.file);
+                return { action: marked ? 'updated' : 'none', file: vaultMatch.file };
             }
+
+            const legacyIdentityStripped = await this.stripLegacyIdentityFields(vaultMatch.file);
 
             // Compare stored values against remote event — string equality, no Date parsing
-            const expectedStart = formatDateTimeForFrontmatter(event.startDate);
-            const expectedEnd = this.config.useEndDuration
-                ? Math.round((event.endDate.getTime() - event.startDate.getTime()) / 60000)
-                : formatDateTimeForFrontmatter(event.endDate);
-
-            const startChanged = match.storedStart !== expectedStart;
-            const endChanged = match.storedEnd !== expectedEnd;
-            const titleMissing = !match.storedTitle && !!event.title;
-            const locationMissing = !match.storedLocation && !!event.location;
-            const sourceChanged = !!normalizedSourceUrl && match.sourceUrl !== normalizedSourceUrl;
+            const startChanged = vaultMatch.storedStart !== comparison.expectedStart;
+            const endChanged = vaultMatch.storedEnd !== comparison.expectedEnd;
+            const titleChanged = vaultMatch.storedTitle !== comparison.normalizedTitle;
+            const locationChanged = vaultMatch.storedLocation !== comparison.normalizedLocation;
 
             // Fast path: nothing changed and no identity repair needed — skip entirely, no file I/O
-            if (!startChanged && !endChanged && !titleMissing && !locationMissing && !sourceChanged && !repairedEventId && !forceRegenerate) {
-                return { action: 'none', file: match.file };
+            if (!startChanged && !endChanged && !titleChanged && !locationChanged && !forceRegenerate && !legacyIdentityStripped) {
+                return { action: 'none', file: vaultMatch.file };
             }
 
-            // Something changed — update only the changed fields
-            let didUpdate = false;
-
-            await this.processFrontmatterSafely(match.file, "update-existing-event", (fm) => {
-                if (repairedEventId) {
-                    fm[this.config.eventIdKey] = event.id;
-                    didUpdate = true;
-                }
-
-                if (titleMissing) {
-                    fm[this.config.titleKey] = event.title;
-                    didUpdate = true;
-                }
-
-                if (locationMissing) {
-                    fm["location"] = event.location;
-                    didUpdate = true;
-                }
-
-                if (sourceChanged && normalizedSourceUrl) {
-                    fm[this.config.sourceUrlKey] = normalizedSourceUrl;
-                    didUpdate = true;
-                }
-
-                if (startChanged) {
-                    logger.log(`[AutoCreateService] Start changed: '${match!.storedStart}' -> '${expectedStart}'`);
-                    fm[this.config.startProperty] = expectedStart;
-                    didUpdate = true;
-                }
-
-                if (endChanged) {
-                    logger.log(`[AutoCreateService] End/duration changed: '${match!.storedEnd}' -> '${expectedEnd}'`);
-                    fm[this.config.endProperty] = expectedEnd;
-                    didUpdate = true;
-                }
-            });
+            const didUpdate = await this.updateExistingEventViaCanonicalWriter(vaultMatch.file, event, comparison);
 
             if (didUpdate) {
-                logger.log(`[AutoCreateService] Updated: ${match.file.path}`);
-                // Update in-memory state so subsequent events in this cycle see current values
-                match.storedStart = expectedStart;
-                match.storedEnd = expectedEnd;
-                if (titleMissing) match.storedTitle = event.title;
-                if (locationMissing) match.storedLocation = event.location || "";
-                if (sourceChanged && normalizedSourceUrl) match.sourceUrl = normalizedSourceUrl;
-                if (repairedEventId) {
-                    match.eventId = event.id;
-                    byEventId.set(event.id, match);
-                }
+                await this.renameEventNoteIfNeeded(vaultMatch.file, event, calendarInfo);
+                logger.log(`[AutoCreateService] Updated: ${vaultMatch.file.path}`);
+                vaultMatch.storedStart = comparison.expectedStart;
+                vaultMatch.storedEnd = comparison.expectedEnd;
+                if (titleChanged) vaultMatch.storedTitle = comparison.normalizedTitle;
+                if (locationChanged) vaultMatch.storedLocation = comparison.normalizedLocation;
                 this.orphanDeletionTombstones.delete(event.id);
             }
-            return { action: didUpdate ? 'updated' : 'none', file: match.file };
+            return { action: didUpdate ? 'updated' : 'none', file: vaultMatch.file };
         }
 
         // 3. No match — create new note (if eligible)
@@ -840,17 +1113,14 @@ export class AutoCreateService {
         }
 
         // Check if there is an archived version of THIS EXACT INSTANCE (so we don't resurrect it).
-        // Strictly match by eventId — using uid would falsely block the entire recurring series
-        // if even a single past instance was archived.
+        // Match by eventId only.
         const archivedMatch = byEventId.get(event.id);
         if (archivedMatch?.isArchived) {
             logger.log(`[AutoCreateService] Skipping creation (archived version exists): ${archivedMatch.file.path}`);
             return { action: 'none' };
         }
 
-        logger.log(`[AutoCreateService] Creating new note for: ${event.title}`);
-
-        const resolvedFolder = calendarInfo?.typeFolder || calendarInfo?.folder || "";
+        const resolvedFolder = calendarInfo?.folder || calendarInfo?.typeFolder || "";
 
         // Hard protection: never auto-create at vault root or inside any _ folder.
         const folderSegments = resolvedFolder.split('/').filter(Boolean);
@@ -861,28 +1131,121 @@ export class AutoCreateService {
 
         const resolvedTemplate = calendarInfo?.template || null;
 
-        const file = await createMeetingNoteFromExternalEvent(
+        const createResult = await this.createOrReuseMeetingNote(
+            event,
+            resolvedTemplate,
+            resolvedFolder,
+            calendarInfo?.tag || null,
+        );
+
+        if (!createResult.file) {
+            return { action: 'none' };
+        }
+
+        if (createResult.reusedExisting) {
+            logger.log(`[AutoCreateService] Reused existing note for: ${event.title} -> ${createResult.file.path}`);
+        } else {
+            logger.log(`[AutoCreateService] Creating new note for: ${event.title}`);
+        }
+
+        return { action: createResult.reusedExisting ? 'none' : 'created', file: createResult.file };
+    }
+
+    private async updateExistingEventViaCanonicalWriter(
+        file: TFile,
+        event: ExternalCalendarEvent,
+        comparison: EventComparison,
+    ): Promise<boolean> {
+        const gcmApi = (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu')?.api;
+        const extraUpdates: Record<string, unknown> = {
+            [this.config.titleKey]: comparison.normalizedTitle,
+            location: comparison.normalizedLocation,
+        };
+
+        if (!gcmApi?.applyCalendarEventMutation) {
+            throw new Error('TPS Global Context Menu API unavailable for controller event mutation');
+        }
+        await gcmApi.applyCalendarEventMutation({
+            file,
+            start: comparison.expectedStart,
+            end: typeof comparison.expectedEnd === 'number'
+                ? formatDateTimeForFrontmatter(event.endDate)
+                : String(comparison.expectedEnd || ''),
+            allDay: event.isAllDay,
+            folderPath: file.parent?.path || '/',
+            updates: extraUpdates,
+            eventFields: {
+                dateField: this.config.scheduledDateProperty || null,
+                startField: this.config.scheduledStartProperty || this.config.startProperty,
+                endField: this.config.scheduledEndProperty || this.config.endProperty,
+                allDayField: "allDay",
+                useEndDuration: this.config.useEndDuration,
+            },
+        });
+        return true;
+    }
+
+    private async createOrReuseMeetingNote(
+        event: ExternalCalendarEvent,
+        resolvedTemplate: string | null,
+        resolvedFolder: string,
+        calendarTag: string | null,
+    ): Promise<NoteCreateResult> {
+        const createResult = await createMeetingNoteFromExternalEvent(
             this.app,
             event,
             resolvedTemplate,
             resolvedFolder,
             this.config.startProperty,
             this.config.endProperty,
+            this.config.scheduledDateProperty,
+            this.config.scheduledStartProperty,
+            this.config.scheduledEndProperty,
             this.config.useEndDuration,
-            calendarInfo?.tag || null,
+            calendarTag,
             undefined,
             undefined,
             undefined,
             {
                 eventIdKey: this.config.eventIdKey,
-                uidKey: this.config.uidKey,
-                sourceUrlKey: this.config.sourceUrlKey,
                 titleKey: this.config.titleKey,
-                statusKey: this.config.statusKey,
+                scheduledDateProperty: this.config.scheduledDateProperty,
+                scheduledStartProperty: this.config.scheduledStartProperty,
+                scheduledEndProperty: this.config.scheduledEndProperty,
             }
         );
+        return {
+            file: createResult.file,
+            reusedExisting: createResult.reusedExisting,
+        };
+    }
 
-        return file ? { action: 'created', file } : { action: 'none' };
+    private async renameEventNoteIfNeeded(
+        file: TFile,
+        event: ExternalCalendarEvent,
+        calendarInfo: CalendarAutoCreateConfig | null,
+    ): Promise<void> {
+        const resolvedFolder = normalizePath(calendarInfo?.folder || calendarInfo?.typeFolder || file.parent?.path || "");
+        if (!resolvedFolder) return;
+
+        const desiredBasename = buildExternalEventNoteBasename(this.app, event);
+        if (!desiredBasename || file.basename === desiredBasename) return;
+
+        const desiredPath = normalizePath(`${resolvedFolder}/${desiredBasename}.${file.extension}`);
+        if (normalizePath(file.path) === desiredPath) return;
+
+        const existingAtPath = this.app.vault.getAbstractFileByPath(desiredPath);
+        if (existingAtPath && existingAtPath !== file) {
+            logger.warn(`[AutoCreateService] Skipping rename; target already exists: ${desiredPath}`);
+            return;
+        }
+
+        try {
+            await this.app.vault.rename(file, desiredPath);
+            logger.log(`[AutoCreateService] Renamed event note: ${file.path} -> ${desiredPath}`);
+        } catch (error) {
+            logger.warn(`[AutoCreateService] Failed renaming event note to ${desiredPath}`, error);
+        }
     }
 
     private async processEventAsTaskList(
@@ -890,128 +1253,117 @@ export class AutoCreateService {
         calendarInfo: CalendarAutoCreateConfig | null,
         filterTerms: string[],
     ): Promise<{ action: 'created' | 'updated' | 'deleted' | 'none', file?: TFile }> {
-        const taskListPath = String(calendarInfo?.taskListPath || "").trim();
+        const taskListPath = this.resolveTaskListTargetPath(event, calendarInfo);
         if (!taskListPath) {
             logger.warn("[AutoCreateService] Task-list mode requires a target markdown file.", { event: event.title });
             return { action: "none" };
         }
 
-        const state = await this.ensureTaskListState(taskListPath, calendarInfo?.taskListHeading || null);
+        const state = await this.ensureTaskListState(taskListPath, calendarInfo?.taskListHeading || null, event.startDate);
         if (!state) return { action: "none" };
 
-        const existing = state.itemsByEventId.get(event.id);
+        const existing = state.itemsByEventId.get(event.id) || null;
         if (existing) {
-            state.touchedEventIds.add(event.id);
+            this.touchTaskListItem(state, event.id);
         }
 
         if (event.isCancelled) {
-            if (!existing || this.config.syncOnEventDelete === "nothing") {
-                return { action: "none", file: state.file };
-            }
+            if (!existing) return { action: "none", file: state.file };
+            this.touchTaskListItem(state, event.id);
+            const graceCycles = this.config.orphanArchiveGraceCycles;
+            if (graceCycles <= 0) return { action: "none", file: state.file };
             this.removeTaskListLine(state, existing.lineNumber);
+            this.emitTaskLineUpdated(state.file, existing.lineNumber);
             return { action: "deleted", file: state.file };
         }
 
-        if (filterTerms.some((t) => event.title.toLowerCase().includes(t))) return { action: "none" };
-        if (calendarInfo?.autoCreateEnabled === false) return { action: "none" };
+        if (calendarInfo?.autoCreateEnabled === false) {
+            if (existing) this.touchTaskListItem(state, event.id);
+            return { action: "none" };
+        }
 
-        const desiredLine = this.buildTaskListLine(event);
+        if (filterTerms.some((t) => event.title.toLowerCase().includes(t))) {
+            if (existing) this.touchTaskListItem(state, event.id);
+            return { action: "none" };
+        }
+
+        const desiredLine = this.buildTaskListLine(event, existing?.checkboxState || " ", existing?.inlineProperties || {});
         if (existing) {
+            this.touchTaskListItem(state, event.id);
             if (existing.line === desiredLine) {
                 return { action: "none", file: state.file };
             }
             state.lines[existing.lineNumber] = desiredLine;
             state.changed = true;
             this.rebuildTaskListIndex(state);
-            state.touchedEventIds.add(event.id);
+            this.touchTaskListItem(state, event.id);
+            this.emitTaskLineUpdated(state.file, existing.lineNumber);
             return { action: "updated", file: state.file };
         }
 
         const insertAt = this.getTaskListInsertIndex(state);
+
         state.lines.splice(insertAt, 0, desiredLine);
         state.changed = true;
         this.rebuildTaskListIndex(state);
-        state.touchedEventIds.add(event.id);
+        this.touchTaskListItem(state, event.id);
+        this.emitTaskLineUpdated(state.file, insertAt);
         return { action: "created", file: state.file };
+    }
+
+    private resolveTaskListTargetPath(event: ExternalCalendarEvent, calendarInfo: CalendarAutoCreateConfig | null): string {
+        const explicitPath = String(calendarInfo?.taskListPath || "").trim();
+        if (explicitPath) return explicitPath;
+
+        const resolver = getDailyNoteResolver(this.app);
+        const dailyPath = resolver.buildPath(event.startDate, "md");
+        return String(dailyPath || "").trim();
     }
 
     // ========================================================================
     // Helpers
     // ========================================================================
 
-    private async handleCancelledMatch(file: TFile): Promise<'deleted' | 'updated' | 'none'> {
-        if (!this.config.noLossSyncMode) {
-            return (await this.deleteOrArchive(file)) ? 'deleted' : 'none';
-        }
-
-        // No-Loss mode: never hard-delete. If delete/archive is requested, archive safely.
-        if (this.config.syncOnEventDelete === 'archive' || this.config.syncOnEventDelete === 'delete') {
-            const archived = await this.archiveFile(file);
-            if (archived) return 'deleted';
-
-            // If archival destination is unavailable, fall back to status mark instead of loss.
-            if (this.config.syncOnEventDelete === 'delete') {
-                logger.warn(`[AutoCreateService] No-Loss mode prevented hard delete for cancelled event: ${file.path}`);
-            }
-        }
-
-        return (await this.markCancelledWithoutDelete(file)) ? 'updated' : 'none';
-    }
-
     private async markCancelledWithoutDelete(file: TFile): Promise<boolean> {
         const cancelledStatus = this.normalizeIdentityValue(this.config.canceledStatusValue) || "cancelled";
         const cancelledAt = new Date().toISOString();
-        let didUpdate = false;
-
-        await this.processFrontmatterSafely(file, "mark-cancelled", (fm) => {
-            const currentStatus = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.statusKey));
-            const previousStatus = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.previousStatusKey));
-            const existingCancelledAt = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.cancelledAtKey));
-
-            if (currentStatus && currentStatus.toLowerCase() !== cancelledStatus.toLowerCase() && !previousStatus) {
-                fm[this.config.previousStatusKey] = currentStatus;
-                didUpdate = true;
-            }
-            if (currentStatus !== cancelledStatus) {
-                fm[this.config.statusKey] = cancelledStatus;
-                didUpdate = true;
-            }
-            if (!existingCancelledAt) {
-                fm[this.config.cancelledAtKey] = cancelledAt;
-                didUpdate = true;
-            }
-
-            didUpdate = this.deleteFrontmatterKeyIfPresent(fm, this.config.orphanCandidateAtKey) || didUpdate;
-            didUpdate = this.deleteFrontmatterKeyIfPresent(fm, this.config.orphanMissCountKey) || didUpdate;
-            didUpdate = this.deleteFrontmatterKeyIfPresent(fm, this.config.orphanReasonKey) || didUpdate;
-        });
-
-        return didUpdate;
+        const fm = await this.getFrontmatterForFile(file);
+        const currentStatus = this.normalizeIdentityValue(this.findKeyInsensitive(fm || {}, this.config.statusKey));
+        const previousStatus = this.normalizeIdentityValue(this.findKeyInsensitive(fm || {}, this.config.previousStatusKey));
+        const existingCancelledAt = this.normalizeIdentityValue(this.findKeyInsensitive(fm || {}, this.config.cancelledAtKey));
+        const updates: Record<string, unknown> = {
+            [this.config.statusKey]: cancelledStatus,
+        };
+        if (currentStatus && currentStatus.toLowerCase() !== cancelledStatus.toLowerCase() && !previousStatus) {
+            updates[this.config.previousStatusKey] = currentStatus;
+        }
+        if (!existingCancelledAt) {
+            updates[this.config.cancelledAtKey] = cancelledAt;
+        }
+        return await this.applyCanonicalFrontmatterMutation(file, updates, [
+            this.config.orphanCandidateAtKey,
+            this.config.orphanMissCountKey,
+            this.config.orphanReasonKey,
+        ]);
     }
 
-    private async markOrphanCandidate(note: VaultNote, missCount: number): Promise<boolean> {
+    private async markOrphanCandidate(note: VaultNote, missCount: number, orphanReason: string = "missing-from-source"): Promise<boolean> {
         const now = new Date().toISOString();
-        let didUpdate = false;
-
-        await this.processFrontmatterSafely(note.file, "mark-orphan-candidate", (fm) => {
-            const currentAt = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.orphanCandidateAtKey));
-            if (!currentAt) {
-                fm[this.config.orphanCandidateAtKey] = now;
-                didUpdate = true;
-            }
-
-            const currentMiss = this.findKeyInsensitive(fm, this.config.orphanMissCountKey);
-            if (Number(currentMiss) !== missCount) {
-                fm[this.config.orphanMissCountKey] = missCount;
-                didUpdate = true;
-            }
-
-            const reason = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.orphanReasonKey));
-            if (reason !== "missing-from-source") {
-                fm[this.config.orphanReasonKey] = "missing-from-source";
-                didUpdate = true;
-            }
-        });
+        const fm = await this.getFrontmatterForFile(note.file);
+        const currentAt = this.normalizeIdentityValue(this.findKeyInsensitive(fm || {}, this.config.orphanCandidateAtKey));
+        const currentMiss = this.findKeyInsensitive(fm || {}, this.config.orphanMissCountKey);
+        const currentReason = this.normalizeIdentityValue(this.findKeyInsensitive(fm || {}, this.config.orphanReasonKey));
+        const updates: Record<string, unknown> = {};
+        if (!currentAt) {
+            updates[this.config.orphanCandidateAtKey] = now;
+        }
+        if (Number(currentMiss) !== missCount) {
+            updates[this.config.orphanMissCountKey] = missCount;
+        }
+        if (currentReason !== orphanReason) {
+            updates[this.config.orphanReasonKey] = orphanReason;
+        }
+        const didUpdate = await this.applyCanonicalFrontmatterMutation(note.file, updates, []);
 
         if (didUpdate) {
             logger.warn(`[AutoCreateService] Quarantined orphan candidate: ${note.file.path}`);
@@ -1021,13 +1373,30 @@ export class AutoCreateService {
     }
 
     private async clearOrphanCandidate(file: TFile): Promise<boolean> {
-        let didUpdate = false;
-        await this.processFrontmatterSafely(file, "clear-orphan-candidate", (fm) => {
-            didUpdate = this.deleteFrontmatterKeyIfPresent(fm, this.config.orphanCandidateAtKey) || didUpdate;
-            didUpdate = this.deleteFrontmatterKeyIfPresent(fm, this.config.orphanMissCountKey) || didUpdate;
-            didUpdate = this.deleteFrontmatterKeyIfPresent(fm, this.config.orphanReasonKey) || didUpdate;
+        return await this.applyCanonicalFrontmatterMutation(file, {}, [
+            this.config.orphanCandidateAtKey,
+            this.config.orphanMissCountKey,
+            this.config.orphanReasonKey,
+        ]);
+    }
+
+    private async applyCanonicalFrontmatterMutation(
+        file: TFile,
+        updates: Record<string, unknown>,
+        deletes: string[],
+        userInitiated: boolean = false,
+    ): Promise<boolean> {
+        const gcmApi = (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu')?.api;
+        if (!gcmApi?.applyCalendarFrontmatterMutation) {
+            throw new Error('TPS Global Context Menu API unavailable for canonical frontmatter mutation');
+        }
+        return await gcmApi.applyCalendarFrontmatterMutation({
+            file,
+            updates,
+            deletes,
+            folderPath: file.parent?.path || '/',
+            userInitiated,
         });
-        return didUpdate;
     }
 
     public async getOrphanCandidateFiles(): Promise<TFile[]> {
@@ -1043,18 +1412,15 @@ export class AutoCreateService {
         return candidates;
     }
 
-    private async deleteOrArchive(file: TFile): Promise<boolean> {
-        try {
-            if (this.config.syncOnEventDelete === 'delete') {
-                await this.app.vault.delete(file);
-                return true;
-            } else if (this.config.syncOnEventDelete === 'archive') {
-                return this.archiveFile(file);
-            }
-        } catch (e) {
-            logger.error(`[AutoCreateService] Failed to delete/archive ${file.path}:`, e);
-        }
-        return false;
+    private readMissCountFromFrontmatter(note: VaultNote): number {
+        const cache = this.app.metadataCache.getFileCache(note.file);
+        const fm = cache?.frontmatter;
+        if (!fm) return this.orphanMissCount.get(note.file.path) || 0;
+        const key = this.config.orphanMissCountKey;
+        const missKey = Object.keys(fm).find(k => k.toLowerCase() === key.toLowerCase());
+        const missVal = missKey ? fm[missKey] : undefined;
+        if (typeof missVal === 'number' && missVal > 0) return missVal;
+        return this.orphanMissCount.get(note.file.path) || 0;
     }
 
     private async archiveFile(file: TFile): Promise<boolean> {
@@ -1071,7 +1437,37 @@ export class AutoCreateService {
         }
 
         await this.app.vault.rename(file, newPath);
+        await this.appendArchiveNoteEntry(file, newPath);
         return true;
+    }
+
+    private async appendArchiveNoteEntry(file: TFile, archivedPath: string): Promise<void> {
+        const archiveNote = await this.ensureArchiveNote();
+        if (!archiveNote) return;
+
+        const archivedLinkPath = normalizePath(String(archivedPath || "").trim()).replace(/\.md$/i, "");
+        const timestamp = new Date().toISOString();
+        const entry = `- [[${archivedLinkPath}]] - ${file.basename} (${timestamp})`;
+        const existing = await this.app.vault.cachedRead(archiveNote);
+        const spacer = existing.trim().length > 0 && !existing.endsWith("\n\n") ? "\n" : "";
+        const next = `${existing}${spacer}${entry}\n`;
+        await this.app.vault.modify(archiveNote, next);
+    }
+
+    private async ensureArchiveNote(): Promise<TFile | null> {
+        const notePath = normalizePath(String(this.config.archiveNotePath || "").trim());
+        if (!notePath) return null;
+
+        const existing = this.app.vault.getAbstractFileByPath(notePath);
+        if (existing instanceof TFile) return existing;
+
+        const slashIndex = notePath.lastIndexOf("/");
+        if (slashIndex > 0) {
+            await this.ensureFolder(notePath.slice(0, slashIndex));
+        }
+
+        const file = await this.app.vault.create(notePath, `# Archive\n\n`);
+        return file;
     }
 
     private async ensureFolder(folderPath: string) {
@@ -1091,135 +1487,34 @@ export class AutoCreateService {
     }
 
     private async getFrontmatterForFile(file: TFile): Promise<Record<string, any> | null> {
-        const cache = this.app.metadataCache.getFileCache(file);
-        return cache?.frontmatter || null;
-    }
+        for (let attempt = 0; attempt < 5; attempt++) {
+            const cache = this.app.metadataCache.getFileCache(file);
+            if (cache?.frontmatter) return cache.frontmatter;
+            await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        }
 
-    private async processFrontmatterSafely(
-        file: TFile,
-        reason: string,
-        mutate: (fm: Record<string, any>) => void,
-    ): Promise<boolean> {
-        const safety = await this.canMutateFrontmatterSafely(file);
-        if (!safety.safe) {
-            if (!this.malformedFrontmatterWarnedPaths.has(file.path)) {
-                this.malformedFrontmatterWarnedPaths.add(file.path);
-                new Notice(`Skipped frontmatter update for "${file.basename}" (${safety.reason}).`);
+        try {
+            const raw = await this.app.vault.cachedRead(file);
+            const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+            if (!fmMatch) return null;
+            const fm: Record<string, any> = {};
+            for (const line of fmMatch[1].split('\n')) {
+                const sep = line.indexOf(':');
+                if (sep <= 0) continue;
+                const key = line.slice(0, sep).trim();
+                let val: any = line.slice(sep + 1).trim();
+                if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+                    val = val.slice(1, -1);
+                }
+                if (val === 'true') val = true;
+                else if (val === 'false') val = false;
+                else if (/^-?\d+$/.test(val)) val = parseInt(val, 10);
+                fm[key] = val;
             }
-            logger.warn(`[AutoCreateService] Skipping frontmatter mutation (${reason})`, {
-                file: file.path,
-                reason: safety.reason,
-            });
-            return false;
-        }
-
-        try {
-            await this.app.fileManager.processFrontMatter(file, (fm) => {
-                mutate((fm ?? {}) as Record<string, any>);
-            });
-            return true;
-        } catch (error) {
-            logger.warn(`[AutoCreateService] Frontmatter mutation failed (${reason})`, {
-                file: file.path,
-                error,
-            });
-            return false;
-        }
-    }
-
-    private async canMutateFrontmatterSafely(
-        file: TFile,
-    ): Promise<{ safe: boolean; reason?: string }> {
-        const normalizedLeading = await this.normalizeDuplicateLeadingFrontmatter(file);
-        if (normalizedLeading) {
-            return { safe: true };
-        }
-
-        let content = "";
-        try {
-            content = await this.app.vault.cachedRead(file);
-        } catch (error) {
-            logger.warn("[AutoCreateService] Failed reading file for frontmatter safety check", {
-                file: file.path,
-                error,
-            });
-            return { safe: false, reason: "file read failed" };
-        }
-
-        const normalized = content.replace(/\r\n/g, "\n");
-        const bomOffset = normalized.startsWith("\uFEFF") ? 1 : 0;
-        if (!normalized.startsWith("---\n", bomOffset)) {
-            return { safe: true };
-        }
-
-        const firstClose = normalized.indexOf("\n---\n", bomOffset + 4);
-        if (firstClose === -1) {
-            return { safe: false, reason: "missing frontmatter closing delimiter" };
-        }
-
-        const afterFirst = normalized.slice(firstClose + "\n---\n".length);
-        const trimmedAfterFirst = afterFirst.replace(/^\s*/, "");
-        if (!trimmedAfterFirst.startsWith("---\n")) {
-            return { safe: true };
-        }
-
-        const secondClose = trimmedAfterFirst.indexOf("\n---\n", 4);
-        if (secondClose === -1) {
-            return { safe: true };
-        }
-
-        const secondBody = trimmedAfterFirst.slice(4, secondClose);
-        const hasYamlLikeEntry = secondBody
-            .split("\n")
-            .some((line) => /^[A-Za-z0-9_"'.-]+\s*:/.test(line.trim()));
-
-        if (!hasYamlLikeEntry) {
-            return { safe: true };
-        }
-
-        return { safe: false, reason: "duplicate leading frontmatter blocks detected" };
-    }
-
-    private async normalizeDuplicateLeadingFrontmatter(file: TFile): Promise<boolean> {
-        let content = "";
-        try {
-            content = await this.app.vault.cachedRead(file);
+            return Object.keys(fm).length > 0 ? fm : null;
         } catch {
-            return false;
+            return null;
         }
-
-        const normalized = content.replace(/\r\n/g, "\n");
-        const bom = normalized.startsWith("\uFEFF") ? "\uFEFF" : "";
-        const body = bom ? normalized.slice(1) : normalized;
-        if (!body.startsWith("---\n")) return false;
-
-        const firstClose = body.indexOf("\n---\n", 3);
-        if (firstClose === -1) return false;
-
-        const afterFirst = body.slice(firstClose + "\n---\n".length);
-        const trimmedAfterFirst = afterFirst.replace(/^\s*/, "");
-        if (!trimmedAfterFirst.startsWith("---\n")) return false;
-
-        const secondClose = trimmedAfterFirst.indexOf("\n---\n", 4);
-        if (secondClose === -1) return false;
-
-        const secondBody = trimmedAfterFirst.slice(4, secondClose);
-        const hasYamlLikeEntry = secondBody
-            .split("\n")
-            .some((line) => /^[A-Za-z0-9_"'.-]+\s*:/.test(line.trim()));
-        if (!hasYamlLikeEntry) return false;
-
-        const firstBody = body.slice(4, firstClose);
-        const trailing = trimmedAfterFirst.slice(secondClose + "\n---\n".length).replace(/^\n+/, "");
-        const mergedBody = [firstBody.trimEnd(), secondBody.trim()].filter(Boolean).join("\n");
-        const merged = `${bom}---\n${mergedBody}\n---\n${trailing}`;
-
-        if (merged === normalized) return false;
-
-        await this.app.vault.modify(file, merged);
-        this.malformedFrontmatterWarnedPaths.delete(file.path);
-        logger.log("[AutoCreateService] Consolidated duplicate leading frontmatter blocks", { file: file.path });
-        return true;
     }
 
     private findKeyInsensitive(obj: Record<string, any>, key: string): any {
@@ -1243,46 +1538,6 @@ export class AutoCreateService {
         return file.path === norm || file.path.startsWith(`${norm}/`);
     }
 
-    /**
-     * Extract the base UID from a composite event ID like "uid-20240226T093000".
-     * Looks for the LAST segment that matches a date/timestamp pattern and strips it.
-     * This is more robust than the old regex which would truncate hyphenated UIDs.
-     */
-    private extractUid(id: string): string | null {
-        // Match known suffix patterns appended by the iCal parser:
-        // - Stable string: "20240226T093000"
-        // - Legacy millisecond: pure digits (13+ chars)
-        // - Duplicate marker: "dup-20240226T093000" or "dup-1234567890000"
-        const suffixPattern = /[-_](?:dup[-_])?(?:\d{4}\d{2}\d{2}T\d{2}\d{2}\d{2}|\d{13,})$/;
-        const match = id.match(suffixPattern);
-        if (match && match.index && match.index > 0) {
-            return id.substring(0, match.index);
-        }
-        return null;
-    }
-
-    private getRecurrenceDateFromId(id: string): Date | null {
-        // Match the stable string format "YYYYMMDDTHHmmss" at the end of the ID
-        const stableMatch = id.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
-        if (stableMatch) {
-            return new Date(+stableMatch[1], +stableMatch[2] - 1, +stableMatch[3], +stableMatch[4], +stableMatch[5], +stableMatch[6]);
-        }
-        // Legacy: pure millisecond timestamp
-        const msMatch = id.match(/[-_](\d{13,})$/);
-        if (msMatch) {
-            return new Date(parseInt(msMatch[1], 10));
-        }
-        return null;
-    }
-
-    private buildUidStartKey(event: ExternalCalendarEvent): string {
-        const uid = (event.uid || this.extractUid(event.id) || event.id || "").trim();
-        const ts = Number.isFinite(event.startDate?.getTime?.())
-            ? Math.round(event.startDate.getTime() / 60000) * 60000
-            : 0;
-        return `${uid}|${ts}`;
-    }
-
     private normalizeIdentityValue(value: any): string | null {
         if (typeof value !== "string") return null;
         const normalized = value.trim();
@@ -1298,6 +1553,21 @@ export class AutoCreateService {
         if (typeof value !== "string") return null;
         const normalized = normalizeCalendarUrl(value);
         return normalized || null;
+    }
+
+    private buildEventComparison(event: ExternalCalendarEvent): EventComparison {
+        return {
+            normalizedTitle: String(event.title || "").replace(/\s+/g, " ").trim(),
+            normalizedLocation: String(event.location || "").replace(/\s+/g, " ").trim(),
+            expectedStart: formatDateTimeForFrontmatter(event.startDate),
+            expectedEnd: this.config.useEndDuration
+                ? Math.round((event.endDate.getTime() - event.startDate.getTime()) / 60000)
+                : formatDateTimeForFrontmatter(event.endDate),
+        };
+    }
+
+    private buildSourceScopedKey(sourceUrl: string, identity: string): string {
+        return `${sourceUrl}::${identity}`;
     }
 
     private pruneOrphanDeletionTombstones(now: number = Date.now()): void {
@@ -1330,26 +1600,53 @@ export class AutoCreateService {
         successfulUrls: Set<string>,
         failedUrls: Set<string>
     ): boolean {
-        // Without source mapping, only evaluate when every configured calendar fetch succeeded.
-        if (!note.sourceUrl) {
-            if (configuredUrlSet.size === 0) return false;
-            return successfulUrls.size === configuredUrlSet.size && failedUrls.size === 0;
-        }
+        void note;
+        void configuredUrlSet;
+        void successfulUrls;
+        void failedUrls;
+        return false;
+    }
 
-        // Notes from calendars no longer configured should not be auto-deleted by orphan logic.
-        if (!configuredUrlSet.has(note.sourceUrl)) {
-            return false;
-        }
-
-        // Safe to evaluate only when this note's source calendar succeeded in this cycle.
-        if (successfulUrls.has(note.sourceUrl)) {
+    private async hasProtectedBodyContent(file: TFile): Promise<boolean> {
+        try {
+            const content = await this.app.vault.cachedRead(file);
+            const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n)?/, "");
+            return body.trim().length > 0;
+        } catch (error) {
+            logger.warn(`[AutoCreateService] Failed to inspect body content for ${file.path}; treating as protected.`, error);
             return true;
         }
+    }
 
-        // Source failed or is otherwise unknown this cycle -> defer deletion.
-        if (failedUrls.has(note.sourceUrl)) {
+    private async stripLegacyIdentityFields(file: TFile): Promise<boolean> {
+        try {
+            const fm = await this.getFrontmatterForFile(file);
+            if (!fm) return false;
+
+            const deletes: string[] = [];
+            const uidKey = this.config.uidKey;
+            if (uidKey && Object.keys(fm).some((key) => key.trim().toLowerCase() === uidKey.trim().toLowerCase())) {
+                deletes.push(uidKey);
+            }
+
+            const sourceUrlKey = "tpsCalendarSourceUrl";
+            if (Object.keys(fm).some((key) => key.trim().toLowerCase() === sourceUrlKey.toLowerCase())) {
+                deletes.push(sourceUrlKey);
+            }
+
+            if (deletes.length === 0) return false;
+            const deleted = await this.applyCanonicalFrontmatterMutation(file, {}, deletes);
+            if (deleted) {
+                logger.warn(`[AutoCreateService] Removed legacy identity fields from ${file.path}: ${deletes.join(", ")}`);
+            }
+            return deleted;
+        } catch (error) {
+            logger.warn(`[AutoCreateService] Failed to strip legacy identity fields from ${file.path}`, error);
             return false;
         }
-        return false;
+    }
+
+    private async pauseBetweenEvents(): Promise<void> {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 75));
     }
 }

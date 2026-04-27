@@ -22,6 +22,16 @@ export function buildParentLinkValue(
   return `[${displayName}](${encodeLinkTarget(target)})`;
 }
 
+export function buildBaseCompatibleParentLinkValue(
+  app: App,
+  targetFile: TFile,
+  sourcePath: string,
+): string {
+  const displayName = resolveDisplayNameForTarget(app, targetFile);
+  const target = resolveLinkTargetForSource(app, targetFile, sourcePath);
+  return `[[${target}|${displayName}]]`;
+}
+
 export function resolveLinkValueToFile(app: App, value: any, sourcePath: string): TFile | null {
   const target = extractLinkTarget(value);
   if (!target) return null;

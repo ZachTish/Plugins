@@ -9,8 +9,24 @@ import {
 } from "../types";
 
 export type NormalizedViewMode = "reading" | "preview" | "source" | "live";
+type ViewLikeState = Record<string, any>;
 
 export class ViewModeService {
+  getViewLikeState(viewOrState: ViewLikeState): ViewLikeState {
+    const candidate = viewOrState as Record<string, any> | null | undefined;
+    if (candidate && typeof candidate.getState === "function") {
+      try {
+        const state = candidate.getState();
+        if (state && typeof state === "object") {
+          return state as ViewLikeState;
+        }
+      } catch {
+        // Fall through to structural inspection below.
+      }
+    }
+    return (candidate ?? {}) as ViewLikeState;
+  }
+
   normalizeMode(value: unknown): NormalizedViewMode | null {
     const normalized = String(value ?? "").trim().toLowerCase();
     if (normalized === "reading" || normalized === "preview" || normalized === "source" || normalized === "live") {
@@ -274,41 +290,86 @@ export class ViewModeService {
     return Number.isNaN(nativeDate.getTime()) ? null : nativeDate;
   }
 
-  matchesMode(state: ReturnType<WorkspaceLeaf["getViewState"]>, targetMode: NormalizedViewMode): boolean {
+  private getModeFields(state: ViewLikeState): { mode?: unknown; source?: unknown } {
+    const nested = state?.state;
+    if (nested && typeof nested === "object" && ("mode" in nested || "source" in nested)) {
+      return {
+        mode: (nested as Record<string, unknown>).mode,
+        source: (nested as Record<string, unknown>).source,
+      };
+    }
+    return {
+      mode: state?.mode,
+      source: state?.source,
+    };
+  }
+
+  private setModeFields(state: ViewLikeState, mode: "preview" | "source", source?: boolean): ViewLikeState {
+    const next = state;
+    const nested = next?.state;
+    if (nested && typeof nested === "object" && ("mode" in nested || "source" in nested)) {
+      (nested as Record<string, unknown>).mode = mode;
+      if (source === undefined) {
+        delete (nested as Record<string, unknown>).source;
+      } else {
+        (nested as Record<string, unknown>).source = source;
+      }
+      return next;
+    }
+
+    next.mode = mode;
+    if (source === undefined) {
+      delete next.source;
+    } else {
+      next.source = source;
+    }
+    return next;
+  }
+
+  matchesMode(state: ViewLikeState, targetMode: NormalizedViewMode): boolean {
+    const fields = this.getModeFields(this.getViewLikeState(state));
     if (targetMode === "reading" || targetMode === "preview") {
-      return state.state.mode === "preview";
+      return fields.mode === "preview";
     }
     if (targetMode === "source") {
-      return state.state.mode === "source" && state.state.source === true;
+      return fields.mode === "source" && fields.source === true;
     }
-    return state.state.mode === "source" && state.state.source === false;
+    return fields.mode === "source" && fields.source === false;
+  }
+
+  getCurrentMode(state: ViewLikeState): NormalizedViewMode | null {
+    const fields = this.getModeFields(this.getViewLikeState(state));
+    if (fields.mode === "preview") return "preview";
+    if (fields.mode === "source" && fields.source === true) return "source";
+    if (fields.mode === "source" && fields.source === false) return "live";
+    return null;
   }
 
   applyModeToState(
-    state: ReturnType<WorkspaceLeaf["getViewState"]>,
+    state: ViewLikeState,
     targetMode: NormalizedViewMode
-  ): { state: ReturnType<WorkspaceLeaf["getViewState"]>; needsUpdate: boolean } {
+  ): { state: ViewLikeState; needsUpdate: boolean } {
+    const nextState = this.getViewLikeState(state);
     let needsUpdate = false;
+    const fields = this.getModeFields(nextState);
     if (targetMode === "reading" || targetMode === "preview") {
-      if (state.state.mode !== "preview") {
-        state.state.mode = "preview";
+      if (fields.mode !== "preview") {
+        this.setModeFields(nextState, "preview");
         needsUpdate = true;
       }
-      return { state, needsUpdate };
+      return { state: nextState, needsUpdate };
     }
     if (targetMode === "source") {
-      if (state.state.mode !== "source" || state.state.source !== true) {
-        state.state.mode = "source";
-        state.state.source = true;
+      if (fields.mode !== "source" || fields.source !== true) {
+        this.setModeFields(nextState, "source", true);
         needsUpdate = true;
       }
-      return { state, needsUpdate };
+      return { state: nextState, needsUpdate };
     }
-    if (state.state.mode !== "source" || state.state.source !== false) {
-      state.state.mode = "source";
-      state.state.source = false;
+    if (fields.mode !== "source" || fields.source !== false) {
+      this.setModeFields(nextState, "source", false);
       needsUpdate = true;
     }
-    return { state, needsUpdate };
+    return { state: nextState, needsUpdate };
   }
 }

@@ -1,7 +1,11 @@
-import { App, PluginSettingTab, Setting, debounce } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, debounce } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from './main';
-import type { AppearanceSettingKey, LinkedSubitemCheckboxMapping, ViewModeConditionOperator, ViewModeConditionType, ViewModeRule, ViewModeRuleCondition } from './types';
+import type { AppearanceSettingKey, ArchiveFolderMode, LinkedSubitemCheckboxMapping, ViewModeConditionOperator, ViewModeConditionType, ViewModeRule, ViewModeRuleCondition } from './types';
 import { PropertyProfilesModal } from './modals/property-profile-modal';
+import type { HideRule, IconColorRule, SmartSortSettings } from '../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
+import { NotebookNavigatorRuleBuilder } from './settings/notebook-navigator-rule-builder';
+import { NotebookNavigatorSmartSortBuilder } from './settings/notebook-navigator-smart-sort-builder';
+import { NotebookNavigatorHideBuilder } from './settings/notebook-navigator-hide-builder';
 
 const createCollapsibleSection = (
   parent: HTMLElement,
@@ -135,7 +139,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     containerEl.createEl('h2', { text: `TPS Global Context Menu (${TPSGlobalContextMenuSettingTab.SETTINGS_BUILD_STAMP})` });
 
     containerEl.createEl('p', {
-      text: 'Define a single context menu that can be reused throughout the vault. Menu items accept JSON definitions to keep the configuration portable and extendable.',
+      text: 'Configure GCM by feature: note properties, inline menus, task behavior, links, view rules, Notebook Navigator integration, and layout styling.',
     });
 
     if (hasController || hasCompanion) {
@@ -154,23 +158,23 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
     }
 
-    coreCategory = createMainCategory('Core');
-    menusCategory = createMainCategory('Menus');
-    automationCategory = createMainCategory('Automation');
-    rulesCategory = createMainCategory('Rules');
-    appearanceCategory = createMainCategory('Appearance');
+    coreCategory = createMainCategory('Workspace & Scope');
+    menusCategory = createMainCategory('Menus & Surfaces');
+    automationCategory = createMainCategory('Note Automation');
+    rulesCategory = createMainCategory('Properties & Rules');
+    appearanceCategory = createMainCategory('Layout & Styling');
 
     // --- General Settings ---
     const general = createSection(
       coreCategory,
-      'Defaults & Scope',
-      'Vault-wide defaults, menu placement, archive basics, and view coverage.',
+      'Creation Defaults & Coverage',
+      'Default creation paths plus where GCM should appear and how it should integrate across the workspace.',
       false
     );
 
     const archiveAutomation = createSection(
       coreCategory,
-      'Archive Automation',
+      'Archive Feature',
       hasController
         ? 'Advanced. Prefer TPS Controller for archive ownership so the suite has one source of truth.'
         : 'Advanced archive automation for tag-based moves.'
@@ -215,13 +219,17 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         );
 
       new Setting(archiveAutomation)
-        .setName('Use daily archive folders')
-        .setDesc('When enabled, archived files will be placed in a daily subfolder (YYYY-MM-DD) within the archive folder instead of directly in the archive folder.')
-        .addToggle((toggle) =>
-          toggle
-            .setValue(this.plugin.settings.archiveUseDailyFolder)
+        .setName('Archive bucket')
+        .setDesc('Choose a daily, weekly, or monthly bucket under the archive folder. Archived files keep their original folder path underneath that bucket.')
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOption('none', 'No bucket')
+            .addOption('daily', 'Daily (YYYY-MM-DD)')
+            .addOption('weekly', 'Weekly (ISO week)')
+            .addOption('monthly', 'Monthly (YYYY-MM)')
+            .setValue(this.plugin.settings.archiveFolderMode || 'none')
             .onChange(async (value) => {
-              this.plugin.settings.archiveUseDailyFolder = value;
+              this.plugin.settings.archiveFolderMode = value as ArchiveFolderMode;
               await this.plugin.saveSettings();
             })
         );
@@ -333,33 +341,14 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.enableInSidePanels)
         .onChange(async v => { this.plugin.settings.enableInSidePanels = v; await this.plugin.saveSettings(); }));
 
-    const canvasBases = createSection(
+    const surfaceBehavior = createSection(
       menusCategory,
-      'Canvas & Bases',
-      'How GCM behaves around Canvas and Bases interactions.',
+      'Surface Behavior',
+      'Configure the persistent inline UI plus Canvas/Bases note-opening behavior.',
       false
     );
 
-    new Setting(canvasBases)
-      .setName('Open notes in split tab (Desktop only)')
-      .setDesc('When you click a note card in a Canvas or a row in a Bases view, open it in a vertical split tab to the right instead of replacing the current tab. Keeps the canvas/base visible while you work in the note.')
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.enableCanvasBaseSplit).onChange(async (value) => {
-          this.plugin.settings.enableCanvasBaseSplit = value;
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    const inlineUi = createSection(
-      menusCategory,
-      'Inline Surfaces',
-      'Controls for the persistent inline menu, title icon, and top parent navigation.',
-      false
-    );
-
-
-
-    new Setting(inlineUi)
+    new Setting(surfaceBehavior)
       .setName('Show inline context menu')
       .setDesc('Master toggle for the persistent inline UI. Turn this off to hide the inline bar, title icon, and top parent nav.')
       .addToggle((toggle) =>
@@ -370,25 +359,25 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }),
       );
 
-    if (this.plugin.settings.enableInlinePersistentMenus) {
-      new Setting(inlineUi)
-        .setName('Inline menu only')
-        .setDesc('Disable TPS additions in native/right-click menus and keep the plugin limited to inline persistent surfaces.')
-        .addToggle((toggle) =>
-          toggle.setValue(this.plugin.settings.inlineMenuOnly).onChange(async (value) => {
-            this.plugin.settings.inlineMenuOnly = value;
-            await this.plugin.saveSettings();
-          }),
-        );
-    } else {
-      inlineUi.createEl('p', {
+    new Setting(surfaceBehavior)
+      .setName('Open notes in split tab (Desktop only)')
+      .setDesc('When you click a note card in a Canvas or a row in a Bases view, open it in a vertical split tab to the right instead of replacing the current tab. Keeps the canvas/base visible while you work in the note.')
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.enableCanvasBaseSplit).onChange(async (value) => {
+          this.plugin.settings.enableCanvasBaseSplit = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    if (!this.plugin.settings.enableInlinePersistentMenus) {
+      surfaceBehavior.createEl('p', {
         text: 'Inline UI is disabled. Enable the master toggle to configure the inline bar, title icon, and top parent navigation.',
         cls: 'setting-item-description',
       });
     }
 
     // --- Appearance Settings ---
-    const appearance = createSection(appearanceCategory, 'Appearance');
+    const appearance = createSection(appearanceCategory, 'Global Layout Controls');
     appearance.createEl('p', {
       text: 'Use the cloud/monitor button on each row to switch between synced and this-device-only behavior.',
       cls: 'setting-item-description',
@@ -628,8 +617,8 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     // --- Custom Property Configuration ---
     const propertyConfig = createSection(
       rulesCategory,
-      'Custom Property Configuration',
-      'Define editable frontmatter fields and per-property behavior. Placement toggles live under Features > Menu Configuration.',
+      'Property Definitions',
+      'Define the editable frontmatter properties GCM understands. Visibility toggles live under Menus & Surfaces.',
       false
     );
 
@@ -647,59 +636,167 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         this.display();
       }));
 
+    const notebookNavigatorRules = createSection(
+      rulesCategory,
+      'Notebook Navigator Visual Rules',
+      'Central authority for Notebook Navigator icon, color, hide-tag, sort, and Bases helper field behavior.',
+      false,
+    );
+
+    const createNotebookNavigatorGroup = (title: string, description?: string): HTMLElement => {
+      const group = notebookNavigatorRules.createDiv({ cls: 'tps-gcm-settings-block' });
+      group.createEl('h4', { text: title });
+      if (description) {
+        group.createEl('p', { text: description, cls: 'setting-item-description' });
+      }
+      return group;
+    };
+
+    const notebookNavigatorFields = createNotebookNavigatorGroup(
+      'Field Targets',
+      'Where Notebook Navigator writes icon, color, and Bases helper output.',
+    );
+
+    new Setting(notebookNavigatorFields)
+      .setName('Icon field')
+      .setDesc('Frontmatter key used to store Notebook Navigator icon output.')
+      .addText((text) => text
+        .setValue(this.plugin.settings.notebookNavigatorIconField || 'icon')
+        .onChange(async (value) => {
+          this.plugin.settings.notebookNavigatorIconField = value.trim() || 'icon';
+          await this.plugin.saveSettings();
+          await this.refreshCompanionRuleConsumers();
+        }));
+
+    new Setting(notebookNavigatorFields)
+      .setName('Color field')
+      .setDesc('Frontmatter key used to store Notebook Navigator color output.')
+      .addText((text) => text
+        .setValue(this.plugin.settings.notebookNavigatorColorField || 'color')
+        .onChange(async (value) => {
+          this.plugin.settings.notebookNavigatorColorField = value.trim() || 'color';
+          await this.plugin.saveSettings();
+          await this.refreshCompanionRuleConsumers();
+        }));
+
+    const notebookNavigatorBehavior = createNotebookNavigatorGroup(
+      'Behavior',
+      'Shared behavior for generated visual metadata and write exclusions.',
+    );
+
+    new Setting(notebookNavigatorBehavior)
+      .setName('Write Bases icon helper fields')
+      .setDesc('Generate markdown/data-URI helper fields for Bases display.')
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.notebookNavigatorWriteBasesIconFields === true)
+        .onChange(async (value) => {
+          this.plugin.settings.notebookNavigatorWriteBasesIconFields = value;
+          await this.plugin.saveSettings();
+          this.display();
+          await this.refreshCompanionRuleConsumers();
+        }));
+
+    if (this.plugin.settings.notebookNavigatorWriteBasesIconFields) {
+      new Setting(notebookNavigatorFields)
+        .setName('Bases markdown field')
+        .setDesc('Frontmatter key for markdown image output.')
+        .addText((text) => text
+          .setValue(this.plugin.settings.notebookNavigatorBasesIconMarkdownField || 'iconDisplay')
+          .onChange(async (value) => {
+            this.plugin.settings.notebookNavigatorBasesIconMarkdownField = value.trim() || 'iconDisplay';
+            await this.plugin.saveSettings();
+            await this.refreshCompanionRuleConsumers();
+          }));
+
+      new Setting(notebookNavigatorFields)
+        .setName('Bases URI field')
+        .setDesc('Frontmatter key for raw SVG data URI output.')
+        .addText((text) => text
+          .setValue(this.plugin.settings.notebookNavigatorBasesIconUriField || 'iconDisplayUri')
+          .onChange(async (value) => {
+            this.plugin.settings.notebookNavigatorBasesIconUriField = value.trim() || 'iconDisplayUri';
+            await this.plugin.saveSettings();
+            await this.refreshCompanionRuleConsumers();
+          }));
+    }
+
+    new Setting(notebookNavigatorBehavior)
+      .setName('Checkbox icon color override')
+      .setDesc('Optional override for Notebook Navigator unfinished-task icon color.')
+      .addText((text) => text
+        .setValue(this.plugin.settings.notebookNavigatorNoteCheckboxIconColor || '')
+        .setPlaceholder('#4caf50 or var(--interactive-accent)')
+        .onChange(async (value) => {
+          this.plugin.settings.notebookNavigatorNoteCheckboxIconColor = value.trim();
+          await this.plugin.saveSettings();
+          await this.refreshCompanionRuleConsumers();
+        }));
+
+    new Setting(notebookNavigatorBehavior)
+      .setName('Frontmatter write exclusions')
+      .setDesc('One pattern per line. Supports exact paths, folder prefixes, wildcards, name:, and re:.')
+      .addTextArea((text) => text
+        .setValue(this.plugin.settings.notebookNavigatorFrontmatterWriteExclusions || '')
+        .setPlaceholder('System/Templates/\nSystem/*\nname:daily-template\nre:^System/')
+        .onChange(async (value) => {
+          this.plugin.settings.notebookNavigatorFrontmatterWriteExclusions = value;
+          await this.plugin.saveSettings();
+          await this.refreshCompanionRuleConsumers();
+        }));
+
+    const notebookNavigatorRuleBuilder = createNotebookNavigatorGroup(
+      'Icon and Color Rules',
+      'Create first-match visual rules without editing JSON. Includes a searchable icon picker with scrollable Lucide icons.',
+    );
+    new NotebookNavigatorRuleBuilder({
+      app: this.app,
+      plugin: this.plugin,
+      containerEl: notebookNavigatorRuleBuilder,
+      onStructureChange: () => this.display(),
+      onRefreshConsumers: () => this.refreshCompanionRuleConsumers(),
+    }).render();
+
+    const notebookNavigatorSmartSort = createNotebookNavigatorGroup(
+      'Smart Sort',
+      'Configure the generated sort key and define first-match sort buckets visually.',
+    );
+    new NotebookNavigatorSmartSortBuilder({
+      app: this.app,
+      plugin: this.plugin,
+      containerEl: notebookNavigatorSmartSort,
+      onStructureChange: () => this.display(),
+      onRefreshConsumers: () => this.refreshCompanionRuleConsumers(),
+    }).render();
+
+    const notebookNavigatorHideRules = createNotebookNavigatorGroup(
+      'Apply/remove tags based on rules',
+      'Add or remove tags using the same condition builder instead of raw JSON.',
+    );
+    new NotebookNavigatorHideBuilder({
+      app: this.app,
+      plugin: this.plugin,
+      containerEl: notebookNavigatorHideRules,
+      onStructureChange: () => this.display(),
+      onRefreshConsumers: () => this.refreshCompanionRuleConsumers(),
+    }).render();
+
     // --- View Mode Settings ---
     const viewMode = createSection(
       rulesCategory,
-      'View Mode Configuration',
-      'Frontmatter key, ignored folders, and automatic rules. Master toggles live under Features > Automation & Features.',
+      'View Mode Rules',
+      'Configure automatic Source / Live / Reading switching with condition-based rules.',
       false
     );
 
     if (!this.plugin.settings.enableViewModeSwitching) {
       viewMode.createEl('p', {
-        text: 'Automatic view mode switching is off. Re-enable it under Features > Automation & Features to edit the frontmatter key, ignored folders, and rules.',
+        text: 'Automatic view mode switching is off. Re-enable it under Features > Automation & Features to edit the rules.',
         cls: 'setting-item-description',
       });
     }
 
     const viewModeConfigContainer = viewMode.createDiv();
-    let viewRulesPopout: HTMLElement = viewModeConfigContainer;
-
-    if (this.plugin.settings.enableViewModeSwitching) {
-      new Setting(viewModeConfigContainer)
-        .setName('Frontmatter Key')
-        .setDesc('The frontmatter property used to determine view mode (e.g. "viewmode")')
-        .addText((text) =>
-          text
-            .setValue(this.plugin.settings.viewModeFrontmatterKey)
-            .setPlaceholder('viewmode')
-            .onChange(async (value) => {
-              this.plugin.settings.viewModeFrontmatterKey = value || 'viewmode';
-              await this.plugin.saveSettings();
-            })
-        );
-
-      new Setting(viewModeConfigContainer)
-        .setName('Ignored Folders')
-        .setDesc('One path per line. Files in these folders will generally keep their current view mode.')
-        .addTextArea((text) => {
-          text
-            .setPlaceholder('Bases\nAtlas/Views')
-            .setValue(this.plugin.settings.viewModeIgnoredFolders || '')
-            .onChange(async (value) => {
-              this.plugin.settings.viewModeIgnoredFolders = value;
-              await this.plugin.saveSettings();
-            });
-          text.inputEl.rows = 3;
-          text.inputEl.cols = 30;
-        });
-
-      viewRulesPopout = createSection(
-        viewModeConfigContainer,
-        'View Mode Rules',
-        'Define condition rules with AND/OR matching (path contains, scheduled past, daily-note date rules, etc).'
-      );
-    }
+    const viewRulesPopout: HTMLElement = viewModeConfigContainer;
 
     const ensureViewModeRules = (): ViewModeRule[] => {
       if (!Array.isArray(this.plugin.settings.viewModeRules)) {
@@ -1019,9 +1116,14 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     }
 
     // --- Overlay Ignore Rules ---
-    const overlayIgnore = createSection(rulesCategory, 'Overlay Ignore Rules');
+    const overlayIgnore = createSection(
+      rulesCategory,
+      'Surface Visibility Rules',
+      'Define rules to hide the inline context menu for matching notes.',
+      false
+    );
     overlayIgnore.createEl('p', {
-      text: 'Define rules to hide the context menu/subitems overlay for notes that match certain conditions.',
+      text: 'Use these rules to suppress inline surfaces when a note matches certain conditions.',
       cls: 'setting-item-description'
     });
 
@@ -1162,114 +1264,33 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       });
     };
 
-    const subitemIgnorePopout = createSection(
-      overlayIgnore,
-      'Subitems Overlay Ignore Rules',
-      'Rules to hide the subitems section for matching notes'
-    );
-    if (!Array.isArray(this.plugin.settings.subitems_IgnoreRules)) {
-      this.plugin.settings.subitems_IgnoreRules = [];
-    }
-    createIgnoreRulesUI(subitemIgnorePopout, this.plugin.settings.subitems_IgnoreRules as ViewModeRule[]);
-
-    const inlineMenuIgnorePopout = createSection(
-      overlayIgnore,
-      'Inline Menu Overlay Ignore Rules',
-      'Rules to hide the inline context menu for matching notes'
-    );
     if (!Array.isArray(this.plugin.settings.inlineMenu_IgnoreRules)) {
       this.plugin.settings.inlineMenu_IgnoreRules = [];
     }
-    createIgnoreRulesUI(inlineMenuIgnorePopout, this.plugin.settings.inlineMenu_IgnoreRules as ViewModeRule[]);
+    createIgnoreRulesUI(overlayIgnore, this.plugin.settings.inlineMenu_IgnoreRules as ViewModeRule[]);
 
     // --- Menu Configuration (Consolidated) ---
-    const menuConfig = createSection(
+    const propertyVisibility = createSection(
       menusCategory,
-      'Property Display',
-      'Controls for how custom properties and colored tags appear in the menu surfaces.',
+      'Property Visibility',
+      'Property definitions live under Properties & Rules. Per-property toggles control where each one appears.',
       false
     );
-    const propertiesPopout = createSection(
-      menuConfig,
-      'Custom Properties',
-      'Feature toggles only. Define labels, keys, types, options, and per-property placement under Rules > Custom Property Configuration.'
-    );
 
-    propertiesPopout.createEl('p', {
+    propertyVisibility.createEl('p', {
       text: `${(this.plugin.settings.properties || []).length} properties configured in Rules > Custom Property Configuration.`,
       cls: 'setting-item-description',
     });
 
-    new Setting(propertiesPopout)
-      .setName('Show custom properties in inline UI')
-      .setDesc('Display configured custom properties in the inline header/context strip.')
-      .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.showCustomPropertiesInInlineUi !== false)
-        .onChange(async (value) => {
-          this.plugin.settings.showCustomPropertiesInInlineUi = value;
-          await this.plugin.saveSettings();
-        }));
-
-    new Setting(propertiesPopout)
-      .setName('Show custom properties in context menu')
-      .setDesc('Display configured custom properties in the right-click context menu.')
-      .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.showCustomPropertiesInContextMenu !== false)
-        .onChange(async (value) => {
-          this.plugin.settings.showCustomPropertiesInContextMenu = value;
-          await this.plugin.saveSettings();
-        }));
-
-    new Setting(propertiesPopout)
-      .setName('Inherit Notebook Navigator tag colors')
-      .setDesc('When enabled, tag chips in the inline menu adopt Notebook Navigator tag colors if available.')
-      .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.inheritNotebookNavigatorTagColors !== false)
-        .onChange(async (value) => {
-          this.plugin.settings.inheritNotebookNavigatorTagColors = value;
-          await this.plugin.saveSettings();
-        }));
-
-    // --- Automation Features (Consolidated) ---
-    const automation = createSection(
+    const taskBehavior = createSection(
       automationCategory,
-      'Note Automation',
-      'Task, relationship, recurrence, navigation, and metadata automation that still belongs in GCM.',
+      'Task & Linked Subitems',
+      'Task completion prompts, checkbox/status mappings, linked subitem rendering, and auto-embed behavior.',
       false
     );
-
-    automation.createEl('p', {
-      text: 'Keep these focused on note interaction. Higher-impact automation stays under the advanced subsections below.',
-      cls: 'setting-item-description'
-    });
-
-    const taskAutomation = createSection(automationCategory, 'Checklists & Task State');
-    new Setting(taskAutomation).setName('Check pending items').setDesc('Warn on completion if items unchecked').addToggle(t => t.setValue(this.plugin.settings.checkOpenChecklistItems).onChange(async v => { this.plugin.settings.checkOpenChecklistItems = v; await this.plugin.saveSettings(); }));
-    new Setting(taskAutomation).setName('Check parent-linked notes').setDesc('Warn when completing if any notes with parent links are still open').addToggle(t => t.setValue(this.plugin.settings.checkParentLinkStatuses).onChange(async v => { this.plugin.settings.checkParentLinkStatuses = v; await this.plugin.saveSettings(); }));
-    new Setting(taskAutomation)
-      .setName('Checklist completion property')
-      .setDesc('When enabled, automatically writes a boolean frontmatter property that is true only when every checklist item is checked [x] or canceled [-]. Unchecked [ ] and question-mark [?] items keep it false.')
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.enableChecklistCompletionProperty).onChange(async (v) => {
-          this.plugin.settings.enableChecklistCompletionProperty = v;
-          await this.plugin.saveSettings();
-        })
-      );
-    if (this.plugin.settings.enableChecklistCompletionProperty) {
-      new Setting(taskAutomation)
-        .setName('Completion property key')
-        .setDesc('Frontmatter key used for the checklist completion boolean (e.g. "allChecked").')
-        .addText((t) =>
-          t
-            .setPlaceholder('allChecked')
-            .setValue(this.plugin.settings.checklistCompletionPropertyKey || 'allChecked')
-            .onChange(async (v) => {
-              this.plugin.settings.checklistCompletionPropertyKey = v.trim() || 'allChecked';
-              await this.plugin.saveSettings();
-            })
-        );
-    }
-    new Setting(taskAutomation)
+    new Setting(taskBehavior).setName('Check pending items').setDesc('Warn on completion if items unchecked').addToggle(t => t.setValue(this.plugin.settings.checkOpenChecklistItems).onChange(async v => { this.plugin.settings.checkOpenChecklistItems = v; await this.plugin.saveSettings(); }));
+    new Setting(taskBehavior).setName('Check parent-linked notes').setDesc('Warn when completing if any notes with parent links are still open').addToggle(t => t.setValue(this.plugin.settings.checkParentLinkStatuses).onChange(async v => { this.plugin.settings.checkParentLinkStatuses = v; await this.plugin.saveSettings(); }));
+    new Setting(taskBehavior)
       .setName('Final checklist prompt statuses')
       .setDesc('When the last open checkbox is resolved, prompt to set one of these statuses (comma-separated).')
       .addText((t) =>
@@ -1281,8 +1302,22 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           })
       );
 
-    const linkedSubitems = createSection(automationCategory, 'Linked Subitem Checkboxes');
-    new Setting(linkedSubitems)
+    new Setting(taskBehavior)
+      .setName('Checkbox → Status mappings')
+      .setDesc('One mapping per line: "[ ]: todo => complete". The toggle target (after =>) is the status to cycle to when clicked. These statuses are what reminder rules match against.')
+      .addTextArea((t) => {
+        t
+          .setPlaceholder('[ ]: todo => complete\n[x]: complete => todo\n[/]: working => complete\n[?]: holding => todo\n[-]: wont-do => todo')
+          .setValue(this.serializeLinkedSubitemMappings(this.plugin.settings.linkedSubitemCheckboxMappings || []))
+          .onChange(async (v) => {
+            const parsed = this.parseLinkedSubitemMappings(v);
+          this.plugin.settings.linkedSubitemCheckboxMappings = parsed.length > 0 ? parsed : this.parseLinkedSubitemMappings('[ ]: todo => complete\n[x]: complete => todo\n[/]: working => complete\n[?]: holding => todo\n[-]: wont-do => todo');
+          await this.plugin.saveSettings();
+        });
+        t.inputEl.rows = 6;
+      });
+
+    new Setting(taskBehavior)
       .setName('Enable linked subitem checkboxes')
       .setDesc('Converted subitem links stay rendered as checkboxes and sync their state from the child note status.')
       .addToggle((t) =>
@@ -1291,7 +1326,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
       );
-    new Setting(linkedSubitems)
+    new Setting(taskBehavior)
       .setName('Checkbox style')
       .setDesc('Visual treatment for linked subitem checkbox lines.')
       .addDropdown((d) =>
@@ -1305,7 +1340,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(linkedSubitems)
+    new Setting(taskBehavior)
       .setName('Default open checkbox state')
       .setDesc('Fallback checkbox token used when no mapping matches a note status.')
       .addText((t) =>
@@ -1315,20 +1350,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(linkedSubitems)
-      .setName('Checkbox mappings')
-      .setDesc('One mapping per line: "[ ]: todo => complete". The toggle target is optional.')
-      .addTextArea((t) =>
-        t
-          .setPlaceholder('[ ]: todo => complete\n[x]: complete => todo\n[\\\\]: working => complete\n[?]: holding => todo\n[-]: wont-do => todo')
-          .setValue(this.serializeLinkedSubitemMappings(this.plugin.settings.linkedSubitemCheckboxMappings || []))
-          .onChange(async (v) => {
-            const parsed = this.parseLinkedSubitemMappings(v);
-            this.plugin.settings.linkedSubitemCheckboxMappings = parsed.length > 0 ? parsed : this.parseLinkedSubitemMappings('[ ]: todo => complete\n[x]: complete => todo\n[\\\\]: working => complete\n[?]: holding => todo\n[-]: wont-do => todo');
-            await this.plugin.saveSettings();
-          })
-      );
-    new Setting(linkedSubitems)
+    new Setting(taskBehavior)
       .setName('Auto-embed ignore folders')
       .setDesc('Comma-separated list of folders to exclude from auto-embedding subitem links. Files in these folders will not automatically get body links inserted.')
       .addText((t) =>
@@ -1340,7 +1362,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(linkedSubitems)
+    new Setting(taskBehavior)
       .setName('Auto-embed ignore tags')
       .setDesc('Comma-separated list of tags to exclude from auto-embedding subitem links. Files with these tags will not automatically get body links inserted.')
       .addText((t) =>
@@ -1352,7 +1374,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(linkedSubitems)
+    new Setting(taskBehavior)
       .setName('Auto-insert blank line on note open')
       .setDesc('When opening a note in live preview mode, if the first line is not empty, insert a blank line at the beginning and position the cursor on the first line. This ensures context pills and checkboxes have room to render.')
       .addToggle((t) =>
@@ -1364,9 +1386,14 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           })
       );
 
-    const relationshipAutomation = createSection(automationCategory, 'Parent / Child Links');
-    new Setting(relationshipAutomation).setName('Parent frontmatter key').setDesc('Canonical child-side parent list key. Markdown parents are derived from body links; base parents live only here.').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'childOf'; await this.plugin.saveSettings(); }));
-    new Setting(relationshipAutomation)
+    const noteStructure = createSection(
+      automationCategory,
+      'Relationships, Navigation & Workspace',
+      'Parent/child linking, top-of-note navigation, daily note controls, and workspace ribbon/backlinks settings.',
+      false
+    );
+    new Setting(noteStructure).setName('Parent frontmatter key').setDesc('Canonical child-side parent list key. Markdown parents are derived from body links; base parents live only here.').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'childOf'; await this.plugin.saveSettings(); }));
+    new Setting(noteStructure)
       .setName('Auto self-link parent in parent key')
       .setDesc('When enabled, parent notes keep a self-reference in the parent key (for example childOf: [[This Note]]).')
       .addToggle((t) =>
@@ -1375,9 +1402,9 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
       );
-    new Setting(relationshipAutomation)
+    new Setting(noteStructure)
       .setName('Parent link format')
-      .setDesc('Store parent links as wikilinks or markdown links with explicit note-title display names.')
+      .setDesc('Controls markdown link rendering outside the canonical parent key. Parent-key frontmatter is always stored as a Base-compatible wikilink.')
       .addDropdown((dropdown) =>
         dropdown
           .addOption('wikilink', 'Wikilink ([[path|Title]])')
@@ -1388,7 +1415,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(relationshipAutomation)
+    new Setting(noteStructure)
       .setName('Tag parent when child linked')
       .setDesc('Applied to parent notes when linking children. Use # or plain tag. Leave empty to disable.')
       .addText((text) =>
@@ -1400,8 +1427,8 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(relationshipAutomation).setName('Top page connections navigation').setDesc('Show a navigation button displaying all incoming and outgoing links at the top of the page above the title').addToggle(t => t.setValue(this.plugin.settings.enableTopParentNav).onChange(async v => { this.plugin.settings.enableTopParentNav = v; await this.plugin.saveSettings(); this.plugin.persistentMenuManager.ensureMenus(); }));
-    new Setting(relationshipAutomation)
+    new Setting(noteStructure).setName('Top page connections navigation').setDesc('Show a navigation button displaying all incoming and outgoing links at the top of the page above the title').addToggle(t => t.setValue(this.plugin.settings.enableTopParentNav).onChange(async v => { this.plugin.settings.enableTopParentNav = v; await this.plugin.saveSettings(); this.plugin.persistentMenuManager.ensureMenus(); }));
+    new Setting(noteStructure)
       .setName('Ignore embedded children in top links')
       .setDesc('When enabled, links created by embedded children and promoted checklist children are hidden from the top Links button.')
       .addToggle((t) =>
@@ -1411,7 +1438,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           this.plugin.persistentMenuManager.ensureMenus();
         })
       );
-    new Setting(relationshipAutomation)
+    new Setting(noteStructure)
       .setName('Ignored subitem tags')
       .setDesc('Comma-separated tags to exclude from the Subitems panel population, such as hide, dailynote, or project.')
       .addText((t) =>
@@ -1421,10 +1448,46 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(relationshipAutomation).setName('Completion statuses').setDesc('Statuses treated as complete for parent-linked notes').addText(t => t.setValue((this.plugin.settings.parentCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.parentCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
+    new Setting(noteStructure).setName('Completion statuses').setDesc('Statuses treated as complete for parent-linked notes').addText(t => t.setValue((this.plugin.settings.parentCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.parentCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
+    new Setting(noteStructure)
+      .setName('Enable Daily Note Navigation')
+      .setDesc('Show hovering Previous/Today/Next controls on daily notes.')
+      .addToggle(t => t.setValue(this.plugin.settings.enableDailyNoteNav).onChange(async v => {
+        this.plugin.settings.enableDailyNoteNav = v;
+        await this.plugin.saveSettings();
+        if ((this.plugin as any).dailyNoteNavManager) {
+          (this.plugin as any).dailyNoteNavManager.refresh();
+        }
+      }));
 
-    const workspaceFeatures = createSection(automationCategory, 'Workspace & Backlinks');
-    new Setting(workspaceFeatures)
+    new Setting(noteStructure)
+      .setName('Show "Today" button')
+      .setDesc('Show a Today shortcut between the prev/next arrows. Disable to show only the arrows.')
+      .addToggle(t => t.setValue(this.plugin.settings.dailyNavShowToday !== false).onChange(async v => {
+        this.plugin.settings.dailyNavShowToday = v;
+        await this.plugin.saveSettings();
+        if ((this.plugin as any).dailyNoteNavManager) {
+          (this.plugin as any).dailyNoteNavManager.refresh();
+        }
+      }));
+
+    new Setting(noteStructure)
+      .setName('Auto-Populate Scheduled Items')
+      .setDesc('When opening a Daily Note, automatically scan the vault and insert links to subitems scheduled for that date into the note body.')
+      .addToggle(t => t.setValue(this.plugin.settings.enableAutoPopulateDailyNotes !== false).onChange(async v => {
+        this.plugin.settings.enableAutoPopulateDailyNotes = v;
+        await this.plugin.saveSettings();
+      }));
+
+    new Setting(noteStructure)
+      .setName('Keep accurate daily scheduled date')
+      .setDesc('Ensure daily notes keep a `scheduled` value that matches the note date, even if templates or later mutations leave it blank, invalid, or mismatched.')
+      .addToggle(t => t.setValue(this.plugin.settings.enableDailyNoteScheduledNormalization !== false).onChange(async v => {
+        this.plugin.settings.enableDailyNoteScheduledNormalization = v;
+        await this.plugin.saveSettings();
+      }));
+
+    new Setting(noteStructure)
       .setName('Workspace ribbon buttons')
       .setDesc(
         'Add a ribbon icon for each saved workspace in the core Workspaces plugin. ' +
@@ -1443,7 +1506,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
 
     if (this.plugin.settings.workspaceRibbonButtons) {
-      const workspaceIconSettings = workspaceFeatures.createDiv({ cls: 'tps-gcm-sub-settings' });
+      const workspaceIconSettings = noteStructure.createDiv({ cls: 'tps-gcm-sub-settings' });
       workspaceIconSettings.style.paddingLeft = '15px';
       workspaceIconSettings.style.borderLeft = '2px solid var(--background-modifier-border)';
 
@@ -1491,7 +1554,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       }
     }
 
-    new Setting(workspaceFeatures)
+    new Setting(noteStructure)
       .setName('Ignored frontmatter keys')
       .setDesc('Comma-separated list of frontmatter keys to hide from the Frontmatter section in the Backlinks panel (e.g. "dateModified, dateCreated").')
       .addText(t => t
@@ -1503,8 +1566,8 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }));
 
     const advancedAutomation = createSection(
-      automation,
-      'Advanced Automation',
+      automationCategory,
+      'Recurrence & File Sync Feature',
       [
         hasController ? 'Prefer TPS Controller for recurring/archive orchestration.' : '',
         hasCompanion ? 'Prefer Companion for icon/color/sort ownership.' : '',
@@ -1522,6 +1585,10 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     }
 
     new Setting(advancedAutomation).setName('Auto-Rename Files').setDesc('Rename based on title/date criteria').addToggle(t => t.setValue(this.plugin.settings.enableAutoRename).onChange(async v => { this.plugin.settings.enableAutoRename = v; await this.plugin.saveSettings(); }));
+    new Setting(advancedAutomation)
+      .setName('Date suffix format')
+      .setDesc('Moment.js format used when appending the scheduled date to filenames (e.g. "YYYY-MM-DD", "ddd, MMM D YYYY"). Leave blank to use the daily note format.')
+      .addText(t => t.setPlaceholder('YYYY-MM-DD').setValue(this.plugin.settings.dateSuffixFormat || '').onChange(async v => { this.plugin.settings.dateSuffixFormat = v.trim(); await this.plugin.saveSettings(); }));
     new Setting(advancedAutomation)
       .setName('Auto-sync title from filename')
       .setDesc('Keep frontmatter `title` aligned to the current filename on open/rename. Disabled by default to avoid surprise metadata writes.')
@@ -1547,9 +1614,9 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }));
 
     const viewModeFeatures = createSection(
-      automation,
-      'View Mode Switching',
-      'Feature toggles only. Rule/frontmatter configuration lives under Rules > View Mode Configuration.'
+      automationCategory,
+      'View Mode Switching Feature',
+      'Feature toggles only. Rule/frontmatter configuration lives under Properties & Rules > View Mode Rules.'
     );
     new Setting(viewModeFeatures)
       .setName('Enable automatic view mode switching')
@@ -1576,41 +1643,10 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           })
       );
 
-    const navigationAutomation = createSection(automationCategory, 'Daily Note Navigation');
-    new Setting(navigationAutomation)
-      .setName('Enable Daily Note Navigation')
-      .setDesc('Show hovering Previous/Today/Next controls on daily notes.')
-      .addToggle(t => t.setValue(this.plugin.settings.enableDailyNoteNav).onChange(async v => {
-        this.plugin.settings.enableDailyNoteNav = v;
-        await this.plugin.saveSettings();
-        if ((this.plugin as any).dailyNoteNavManager) {
-          (this.plugin as any).dailyNoteNavManager.refresh();
-        }
-      }));
-
-    new Setting(navigationAutomation)
-      .setName('Show "Today" button')
-      .setDesc('Show a Today shortcut between the prev/next arrows. Disable to show only the arrows.')
-      .addToggle(t => t.setValue(this.plugin.settings.dailyNavShowToday !== false).onChange(async v => {
-        this.plugin.settings.dailyNavShowToday = v;
-        await this.plugin.saveSettings();
-        if ((this.plugin as any).dailyNoteNavManager) {
-          (this.plugin as any).dailyNoteNavManager.refresh();
-        }
-      }));
-
-    new Setting(navigationAutomation)
-      .setName('Auto-Populate Scheduled Items')
-      .setDesc('When opening a Daily Note, automatically scan the vault and insert links to subitems scheduled for that date into the note body.')
-      .addToggle(t => t.setValue(this.plugin.settings.enableAutoPopulateDailyNotes !== false).onChange(async v => {
-        this.plugin.settings.enableAutoPopulateDailyNotes = v;
-        await this.plugin.saveSettings();
-      }));
-
     const diagnostics = createSection(
       coreCategory,
-      'Diagnostics',
-      'Low-frequency troubleshooting settings.',
+      'Diagnostics & Troubleshooting',
+      'Low-frequency troubleshooting settings and logging controls.',
       false
     );
 
@@ -1868,6 +1904,30 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         };
       })
       .filter((entry): entry is LinkedSubitemCheckboxMapping => entry !== null);
+  }
+
+  private stringifyJson(value: unknown): string {
+    return JSON.stringify(value, null, 2);
+  }
+
+  private tryParseJson<T>(raw: string, label: string): T | null {
+    try {
+      return JSON.parse(raw) as T;
+    } catch (error: any) {
+      new Notice(`${label} is not valid JSON: ${String(error?.message || error)}`);
+      return null;
+    }
+  }
+
+  private async refreshCompanionRuleConsumers(): Promise<void> {
+    const companion: any = (this.app as any)?.plugins?.getPlugin?.('tps-notebook-navigator-companion')
+      ?? (this.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
+    try {
+      companion?.styleService?.applyNavigatorSystemIconColorOverride?.();
+      await companion?.applyRulesToActiveFile?.(false);
+    } catch {
+      // Best-effort refresh only.
+    }
   }
 
 }

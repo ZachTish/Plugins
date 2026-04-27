@@ -1,4 +1,4 @@
-import { Component, MarkdownView, TFile, WorkspaceLeaf, debounce } from "obsidian";
+import { Component, MarkdownView, TFile, WorkspaceLeaf } from "obsidian";
 import TPSGlobalContextMenuPlugin from "../main";
 import * as logger from "../logger";
 import { NormalizedViewMode, ViewModeService } from "../services/view-mode-service";
@@ -9,6 +9,8 @@ export class ViewModeManager extends Component {
     private service = new ViewModeService();
     private applyingLeaves = new WeakSet<WorkspaceLeaf>();
     private lastDecisions = new WeakMap<WorkspaceLeaf, { filePath: string; mode: NormalizedViewMode; ts: number }>();
+    private manualOverrides = new WeakMap<WorkspaceLeaf, { filePath: string; mode: NormalizedViewMode; ts: number }>();
+    private pendingLeafChecks = new Map<WorkspaceLeaf, number>();
     private invalidModeWarnings = new Map<string, number>();
 
     constructor(plugin: TPSGlobalContextMenuPlugin) {
@@ -17,21 +19,21 @@ export class ViewModeManager extends Component {
     }
 
     onload() {
-        // Debounce the event handler to prevent rapid firing when switching modes triggers updates
-        const debouncedHandler = debounce(this.handleActiveLeafable.bind(this), 200, false);
-        this.registerEvent(this.plugin.app.workspace.on('active-leaf-change', debouncedHandler));
-
-        // Listen to metadata changes (handling race conditions where cache isn't ready on open)
-        // Use longer debounce to prevent lag during typing
-        const metadataDebouncedHandler = debounce((file: TFile) => {
-            const leaf = this.plugin.app.workspace.activeLeaf;
-            if (leaf && leaf.view instanceof MarkdownView && leaf.view.file === file) {
-                debouncedHandler(leaf);
-            }
-        }, 350, false);
+        this.registerEvent(this.plugin.app.workspace.on('active-leaf-change', () => {
+            this.scheduleActiveLeafableCheck(this.plugin.app.workspace.activeLeaf, 0);
+        }));
+        this.registerEvent(this.plugin.app.workspace.on('file-open', () => {
+            this.scheduleActiveLeafableCheck(this.plugin.app.workspace.activeLeaf, 0);
+        }));
+        this.registerEvent(this.plugin.app.workspace.on('layout-change', () => {
+            this.scheduleActiveLeafableCheck(this.plugin.app.workspace.activeLeaf, 60);
+        }));
 
         this.plugin.registerEvent(this.plugin.app.metadataCache.on('changed', (file) => {
-            metadataDebouncedHandler(file);
+            const leaf = this.plugin.app.workspace.activeLeaf;
+            if (leaf && leaf.view instanceof MarkdownView && leaf.view.file === file) {
+                this.scheduleActiveLeafableCheck(leaf, 80);
+            }
         }));
 
         this.plugin.addCommand({
@@ -42,6 +44,23 @@ export class ViewModeManager extends Component {
                 this.handleActiveLeafable(leaf ?? null);
             }
         });
+
+        this.plugin.app.workspace.onLayoutReady(() => {
+            this.scheduleActiveLeafableCheck(this.plugin.app.workspace.activeLeaf, 0);
+        });
+    }
+
+    private scheduleActiveLeafableCheck(leaf: WorkspaceLeaf | null, delayMs: number): void {
+        if (!leaf) return;
+        const existing = this.pendingLeafChecks.get(leaf);
+        if (existing !== undefined) {
+            window.clearTimeout(existing);
+        }
+        const timerId = window.setTimeout(() => {
+            this.pendingLeafChecks.delete(leaf);
+            void this.handleActiveLeafable(leaf);
+        }, Math.max(0, delayMs));
+        this.pendingLeafChecks.set(leaf, timerId);
     }
 
     async handleActiveLeafable(leaf: WorkspaceLeaf | null) {
@@ -96,48 +115,154 @@ export class ViewModeManager extends Component {
         const targetMode = resolved.mode;
 
         if (!targetMode) return;
+        if (await this.hasLinkedSubitems(file)) {
+            logger.log(`[TPS GCM] Preserving current mode for ${file.basename} because linked subitems are present.`);
+            logger.log('[TPS GCM] [ModeTrace] preserve-current-mode', {
+                file: file.path,
+                currentMode: String((leaf.getViewState() as any)?.state?.mode || ''),
+                currentSourceFlag: Boolean((leaf.getViewState() as any)?.state?.source),
+                targetMode,
+                reason: 'linked-subitems-present',
+            });
+            this.schedulePostModeUiRefresh(file, targetMode);
+            return;
+        }
+        const effectiveTargetMode = targetMode;
 
         // Normalize mode
         // obsidian uses 'source' (which can be live preview or actual source) and 'preview' (reading)
 
-        const state = leaf.getViewState();
+        const state = this.service.getViewLikeState(view);
+        const currentMode = this.service.getCurrentMode(state);
+        const existingOverride = this.manualOverrides.get(leaf);
+        if (existingOverride && existingOverride.filePath !== file.path) {
+            this.manualOverrides.delete(leaf);
+        }
+
         let needsUpdate = false;
         const currentDecision = this.lastDecisions.get(leaf);
+        const manualOverride = this.manualOverrides.get(leaf);
+        if (manualOverride && manualOverride.filePath === file.path) {
+            if (currentMode && currentMode !== manualOverride.mode) {
+                this.manualOverrides.set(leaf, { filePath: file.path, mode: currentMode, ts: Date.now() });
+            }
+            logger.log('[TPS GCM] [ModeTrace] honoring-manual-override', {
+                file: file.path,
+                targetMode: effectiveTargetMode,
+                currentMode,
+                overrideMode: this.manualOverrides.get(leaf)?.mode ?? null,
+            });
+            return;
+        }
+
+        if (
+            !this.applyingLeaves.has(leaf) &&
+            currentMode &&
+            currentMode !== effectiveTargetMode &&
+            currentDecision?.filePath === file.path &&
+            currentDecision.mode === effectiveTargetMode
+        ) {
+            this.manualOverrides.set(leaf, { filePath: file.path, mode: currentMode, ts: Date.now() });
+            logger.log('[TPS GCM] [ModeTrace] recorded-manual-override', {
+                file: file.path,
+                targetMode: effectiveTargetMode,
+                currentMode,
+            });
+            return;
+        }
+
         if (
             currentDecision &&
             currentDecision.filePath === file.path &&
-            currentDecision.mode === targetMode &&
+            currentDecision.mode === effectiveTargetMode &&
             Date.now() - currentDecision.ts < 1000 &&
-            this.service.matchesMode(state, targetMode)
+            this.service.matchesMode(state, effectiveTargetMode)
         ) {
             return;
         }
 
-        logger.log(`[TPS GCM] Current State for ${file.basename}: mode=${state.state.mode}, source=${state.state.source}`);
-        logger.log(`[TPS GCM] Target Mode: ${targetMode}`);
+        logger.log(`[TPS GCM] Current State for ${file.basename}: mode=${String((state as any).mode ?? (state as any)?.state?.mode ?? '')}, source=${String((state as any).source ?? (state as any)?.state?.source ?? '')}`);
+        logger.log(`[TPS GCM] Target Mode: ${effectiveTargetMode}`);
 
-        const applied = this.service.applyModeToState(state, targetMode);
+        const applied = this.service.applyModeToState(state, effectiveTargetMode);
         needsUpdate = applied.needsUpdate;
 
         if (needsUpdate) {
             if (this.applyingLeaves.has(leaf)) return;
-            logger.log(`[TPS GCM] Switching view mode for ${file.basename} to ${targetMode}`);
+            logger.log(`[TPS GCM] Switching view mode for ${file.basename} to ${effectiveTargetMode}`);
             try {
                 this.applyingLeaves.add(leaf);
                 // specific hack for the error "RangeError: Field is not present in this state"
                 // which happens when setViewState interrupts a view that is trying to save history
                 // We clone the state and ensure we are attending to the latest leaf version
                 const newState = JSON.parse(JSON.stringify(applied.state));
-                await leaf.setViewState(newState);
-                this.lastDecisions.set(leaf, { filePath: file.path, mode: targetMode, ts: Date.now() });
+                await (view as any).setState(newState, { history: false });
+                this.lastDecisions.set(leaf, { filePath: file.path, mode: effectiveTargetMode, ts: Date.now() });
+                this.schedulePostModeUiRefresh(file, effectiveTargetMode);
             } catch (err) {
                 logger.error(`[TPS GCM] Failed to set view state for ${file.basename}`, err);
             } finally {
                 this.applyingLeaves.delete(leaf);
             }
         } else {
-            this.lastDecisions.set(leaf, { filePath: file.path, mode: targetMode, ts: Date.now() });
+            this.lastDecisions.set(leaf, { filePath: file.path, mode: effectiveTargetMode, ts: Date.now() });
+            this.schedulePostModeUiRefresh(file, effectiveTargetMode);
             logger.log(`[TPS GCM] No update needed.`);
+        }
+    }
+
+    private schedulePostModeUiRefresh(file: TFile, mode: NormalizedViewMode): void {
+        const run = (delayMs: number) => {
+            const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+            if (!(activeView instanceof MarkdownView)) {
+                logger.log('[TPS GCM] [ModeTrace] post-mode-refresh skipped', {
+                    file: file.path,
+                    targetMode: mode,
+                    delayMs,
+                    reason: 'no-active-markdown-view',
+                });
+                return;
+            }
+            if (activeView.file?.path !== file.path) {
+                logger.log('[TPS GCM] [ModeTrace] post-mode-refresh skipped', {
+                    file: file.path,
+                    activeFile: activeView.file?.path ?? null,
+                    targetMode: mode,
+                    delayMs,
+                    reason: 'active-view-file-mismatch',
+                });
+                return;
+            }
+            logger.log('[TPS GCM] [ModeTrace] post-mode-refresh running', {
+                file: file.path,
+                activeFile: activeView.file?.path ?? null,
+                targetMode: mode,
+                delayMs,
+                activeMode: String((activeView.leaf.getViewState() as any)?.state?.mode || ''),
+                activeSourceFlag: Boolean((activeView.leaf.getViewState() as any)?.state?.source),
+            });
+            this.plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
+            this.plugin.linkedSubitemCheckboxService?.refreshLivePreviewEditors();
+        };
+
+        window.setTimeout(() => run(0), 0);
+        window.setTimeout(() => run(120), 120);
+    }
+
+    private async hasLinkedSubitems(file: TFile): Promise<boolean> {
+        if (!this.plugin.settings.enableLinkedSubitemCheckboxes) return false;
+        try {
+            const text = await this.plugin.subitemRelationshipSyncService?.readMarkdownText(file);
+            if (!text) return false;
+            const matches = this.plugin.bodySubitemLinkService.scanText(file, text);
+            logger.log('[TPS GCM] [ModeTrace] linked-subitem-scan', {
+                file: file.path,
+                matchCount: matches.length,
+            });
+            return matches.length > 0;
+        } catch (error) {
+            logger.warn(`[TPS GCM] Failed to evaluate linked subitems for mode preservation on ${file.path}`, error);
+            return false;
         }
     }
 
@@ -157,9 +282,14 @@ export class ViewModeManager extends Component {
             return;
         }
 
-        window.setTimeout(() => {
-            void this.handleActiveLeafable(activeLeaf);
-        }, 30);
+        this.scheduleActiveLeafableCheck(activeLeaf, 30);
+    }
+
+    onunload(): void {
+        for (const timerId of this.pendingLeafChecks.values()) {
+            window.clearTimeout(timerId);
+        }
+        this.pendingLeafChecks.clear();
     }
 
     private ruleTouchesUpdatedKeys(rule: ViewModeRule, touchedKeys: Set<string>): boolean {

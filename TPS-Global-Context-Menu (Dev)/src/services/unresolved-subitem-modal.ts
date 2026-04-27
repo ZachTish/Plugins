@@ -5,6 +5,7 @@
  */
 import { App, Modal, TFile, Setting } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from '../main';
+import { resolveLinkTargetToFile } from './link-target-service';
 
 export interface UnresolvedSubitem {
   /** The line text from the body */
@@ -118,21 +119,26 @@ export async function checkAndPromptForUnresolvedSubitems(
   parentFile: TFile,
 ): Promise<boolean> {
   const raw = await plugin.subitemRelationshipSyncService.readMarkdownText(parentFile);
-  const links = plugin.bodySubitemLinkService.scanText(parentFile, raw);
+  const lines = String(raw || '').split('\n');
 
   const unresolved: UnresolvedSubitem[] = [];
 
-  for (const link of links) {
-    if (!link.childFile) {
-      // Link target couldn't be resolved
-      const isDeleted = plugin.app.vault.getAbstractFileByPath(link.childPath) === null;
-      unresolved.push({
-        rawLine: link.rawLine,
-        line: link.line,
-        linkTarget: link.childPath,
-        isDeleted,
-      });
-    }
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index] || '';
+    const parsed = plugin.bodySubitemLinkService.parseLine(rawLine);
+    if (!parsed) continue;
+    const resolved = resolveLinkTargetToFile(plugin.app, parsed.linkTarget, parentFile.path);
+    if (resolved instanceof TFile) continue;
+
+    const normalizedTarget = parsed.linkTarget.replace(/^\/+/, '').replace(/\.md$/i, '').trim().toLowerCase();
+    const matchesExistingBasename = plugin.app.vault.getMarkdownFiles().some((file) => file.basename.trim().toLowerCase() === normalizedTarget);
+
+    unresolved.push({
+      rawLine,
+      line: index,
+      linkTarget: parsed.linkTarget,
+      isDeleted: !matchesExistingBasename,
+    });
   }
 
   if (unresolved.length === 0) {

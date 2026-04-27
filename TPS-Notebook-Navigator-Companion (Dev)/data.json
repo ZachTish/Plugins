@@ -7,6 +7,13 @@
   "metadataDebounceMs": 350,
   "syncTitleFromFilename": false,
   "syncFilenameFromTitle": false,
+  "statusClickFlow": [],
+  "tagPageFolder": "",
+  "tagPageFileType": "canvas",
+  "createTagPageOnOpen": true,
+  "propertyPageFolder": "",
+  "propertyPageFileType": "canvas",
+  "createPropertyPageOnOpen": false,
   "frontmatterIconField": "icon",
   "frontmatterColorField": "color",
   "writeBasesIconFields": false,
@@ -21,8 +28,28 @@
   "clearIconWhenNoMatch": true,
   "clearColorWhenNoMatch": true,
   "autoRemoveHiddenWhenNoMatch": true,
-  "debugLogging": true,
+  "debugLogging": false,
   "rules": [
+    {
+      "id": "rule-test-untitled-icon",
+      "name": "test untitled icon",
+      "enabled": true,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide:flask-conical",
+      "color": "#ff0066",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "name",
+          "field": "",
+          "operator": "contains",
+          "value": "Untitled"
+        }
+      ]
+    },
     {
       "id": "rule-1773960936109-2u3nvty",
       "name": "dark red",
@@ -298,8 +325,8 @@
           "value": "dailynote"
         },
         {
-          "source": "name",
-          "field": "",
+          "source": "frontmatter",
+          "field": "scheduled",
           "operator": "is-today",
           "value": ""
         }
@@ -324,8 +351,8 @@
           "value": "dailynote"
         },
         {
-          "source": "name",
-          "field": "",
+          "source": "frontmatter",
+          "field": "scheduled",
           "operator": "!is-today",
           "value": ""
         }
@@ -2240,8 +2267,8 @@
           "value": "dailynote"
         },
         {
-          "source": "name",
-          "field": "",
+          "source": "frontmatter",
+          "field": "scheduled",
           "operator": "!is-today",
           "value": ""
         },
@@ -2368,6 +2395,22 @@
           "field": "childOf",
           "operator": "exists",
           "value": ""
+        }
+      ],
+      "mode": "add",
+      "tagName": "hide"
+    },
+    {
+      "id": "hide-rule-1775149385927",
+      "name": "New Hide Rule",
+      "enabled": true,
+      "match": "all",
+      "conditions": [
+        {
+          "source": "tag",
+          "field": "",
+          "operator": "contains",
+          "value": "template"
         }
       ],
       "mode": "add",

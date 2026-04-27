@@ -354,10 +354,10 @@ export class PropertyRowService {
   /**
    * Opens a submenu for status selection (used by chips)
    */
-  openStatusSubmenu(anchor: HTMLElement, entries: any[], onUpdate?: (newVal: string) => void, overrideOptions?: string[], onAfterUpdate?: (files: any[]) => Promise<void>): void {
+  openStatusSubmenu(anchor: HTMLElement, entries: any[], onUpdate?: (newVal: string) => void, overrideOptions?: string[], onAfterUpdate?: (files: any[]) => Promise<void>, currentValueOverride?: string): void {
     const menu = new Menu();
     const fm = entries[0].frontmatter;
-    const currentStatus = typeof fm.status === 'string' ? fm.status.trim() : '';
+    const currentStatus = currentValueOverride || (typeof fm.status === 'string' ? fm.status.trim() : '');
     const allWithoutKey = entries.every((entry: any) => !this.hasKeyCaseInsensitive(entry.frontmatter, 'status'));
     const allEmpty = !allWithoutKey && entries.every((entry: any) => {
       const value = this.getValueCaseInsensitive(entry.frontmatter, 'status');
@@ -370,7 +370,7 @@ export class PropertyRowService {
         .setTitle('(none)')
         .setChecked(allWithoutKey)
         .onClick(async () => {
-          const updatedCount = await this.plugin.bulkEditService.removeFrontmatterKey(files, 'status');
+          const updatedCount = await this.plugin.bulkEditService.removeFrontmatterKey(files, 'status', { userInitiated: true });
           if (updatedCount >= 0) {
             entries.forEach((entry: any) => {
               if (!entry.frontmatter || typeof entry.frontmatter !== 'object') return;
@@ -386,7 +386,7 @@ export class PropertyRowService {
         .setTitle('(empty)')
         .setChecked(allEmpty)
         .onClick(async () => {
-          const updatedCount = await this.plugin.bulkEditService.updateFrontmatter(files, { status: '' });
+          const updatedCount = await this.plugin.bulkEditService.updateFrontmatter(files, { status: '' }, { userInitiated: true });
           if (updatedCount > 0) {
             entries.forEach((entry: any) => {
               if (!entry.frontmatter || typeof entry.frontmatter !== 'object') entry.frontmatter = {};
@@ -406,7 +406,7 @@ export class PropertyRowService {
           .setTitle(status)
           .setChecked(currentStatus === status)
           .onClick(async () => {
-            const updatedCount = await this.plugin.bulkEditService.setStatus(files, status);
+            const updatedCount = await this.plugin.bulkEditService.setStatus(files, status, { userInitiated: true });
             if (updatedCount > 0) {
               entries.forEach((entry: any) => {
                 if (!entry.frontmatter || typeof entry.frontmatter !== 'object') entry.frontmatter = {};
@@ -425,10 +425,10 @@ export class PropertyRowService {
   /**
    * Opens a submenu for priority selection (used by chips)
    */
-  openPrioritySubmenu(anchor: HTMLElement, entries: any[], onUpdate?: (newVal: string) => void, overrideOptions?: string[]): void {
+  openPrioritySubmenu(anchor: HTMLElement, entries: any[], onUpdate?: (newVal: string) => void, overrideOptions?: string[], currentValueOverride?: string): void {
     const menu = new Menu();
     const fm = entries[0].frontmatter;
-    const currentPrio = typeof fm.priority === 'string' ? fm.priority.trim() : '';
+    const currentPrio = currentValueOverride || (typeof fm.priority === 'string' ? fm.priority.trim() : '');
     const allWithoutKey = entries.every((entry: any) => !this.hasKeyCaseInsensitive(entry.frontmatter, 'priority'));
     const allEmpty = !allWithoutKey && entries.every((entry: any) => {
       const value = this.getValueCaseInsensitive(entry.frontmatter, 'priority');
@@ -441,7 +441,7 @@ export class PropertyRowService {
         .setTitle('(none)')
         .setChecked(allWithoutKey)
         .onClick(async () => {
-          await this.plugin.bulkEditService.removeFrontmatterKey(files, 'priority');
+          await this.plugin.bulkEditService.removeFrontmatterKey(files, 'priority', { userInitiated: true });
           entries.forEach((entry: any) => {
             if (!entry.frontmatter || typeof entry.frontmatter !== 'object') return;
             delete entry.frontmatter.priority;
@@ -454,7 +454,7 @@ export class PropertyRowService {
         .setTitle('(empty)')
         .setChecked(allEmpty)
         .onClick(async () => {
-          await this.plugin.bulkEditService.updateFrontmatter(files, { priority: '' });
+          await this.plugin.bulkEditService.updateFrontmatter(files, { priority: '' }, { userInitiated: true });
           entries.forEach((entry: any) => {
             if (!entry.frontmatter || typeof entry.frontmatter !== 'object') entry.frontmatter = {};
             entry.frontmatter.priority = '';
@@ -476,7 +476,7 @@ export class PropertyRowService {
               entry.frontmatter.priority = priority;
             });
             if (onUpdate) onUpdate(priority);
-            await this.plugin.bulkEditService.updateFrontmatter(files, { priority });
+            await this.plugin.bulkEditService.updateFrontmatter(files, { priority }, { userInitiated: true });
           });
       });
     });

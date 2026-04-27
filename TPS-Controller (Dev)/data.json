@@ -1,9 +1,9 @@
 {
   "syncIntervalMinutes": 5,
-  "noLossSyncMode": true,
-  "syncOnEventDelete": "archive",
   "archiveFolder": "Archive",
+  "archiveNotePath": "Archive/Archive.md",
   "canceledStatusValue": "wont-do",
+  "orphanArchiveGraceCycles": 5,
   "externalCalendarFilter": "Canceled",
   "externalCalendars": [
     {
@@ -12,12 +12,12 @@
       "color": "#a24439",
       "enabled": true,
       "autoCreateEnabled": true,
-      "autoCreateTypeFolder": "Action Items",
-      "autoCreateFolder": "Markdown/Action Items",
+      "autoCreateTypeFolder": "",
+      "autoCreateFolder": "02 Events",
       "autoCreateTag": "hca",
-      "autoCreateTemplate": "Markdown/Action Items/_templates/Action Item Template.md",
-      "autoCreateMode": "note",
-      "autoCreateTaskListPath": "Markdown/Action Items/Hca-Outlook.md"
+      "autoCreateTemplate": "",
+      "autoCreateMode": "task-list",
+      "autoCreateTaskListPath": "02 Lists/Hca Calendar.md"
     },
     {
       "id": "calendar-1770138596600-4208",
@@ -25,58 +25,29 @@
       "color": "#477657",
       "enabled": true,
       "autoCreateEnabled": true,
-      "autoCreateTypeFolder": "Action Items",
-      "autoCreateFolder": "Markdown/Action Items",
+      "autoCreateTypeFolder": "",
+      "autoCreateFolder": "02 Events",
       "autoCreateTag": "exercise",
-      "autoCreateTemplate": "Markdown/Action Items/_templates/Action Item Template.md",
-      "autoCreateMode": "note",
-      "autoCreateTaskListPath": "Markdown/Action Items/Workouts.md"
+      "autoCreateTemplate": "",
+      "autoCreateMode": "task-list",
+      "autoCreateTaskListPath": "02 Lists/Workouts.md"
     }
   ],
+  "syncBackfillDays": 5,
   "eventIdKey": "externalEventId",
   "uidKey": "tpsCalendarUid",
   "titleKey": "title",
   "statusKey": "status",
   "previousStatusKey": "tpsCalendarPrevStatus",
+  "scheduledDateProperty": "",
+  "scheduledStartProperty": "",
+  "scheduledEndProperty": "",
   "startProperty": "scheduled",
   "endProperty": "timeEstimate",
   "pollMinutes": 0.5,
   "enableReminders": true,
+  "notificationPresentationMode": "sidebar",
   "reminders": [
-    {
-      "id": "reminder-1765736094027",
-      "property": "scheduled",
-      "enabled": true,
-      "offsetMinutes": -45,
-      "repeatUntilComplete": false,
-      "repeatIntervalMinutes": 2,
-      "maxRepeats": -1,
-      "stopConditions": [
-        "status: complete",
-        "status: wont-do"
-      ],
-      "title": "In 45 Minutes: {filename}",
-      "body": "At {time} ",
-      "ignorePaths": [
-        "*/Archive/*",
-        "*/Notes/*",
-        "*/Daily Notes/*"
-      ],
-      "ignoreTags": [
-        "archive"
-      ],
-      "ignoreStatuses": [
-        "wont-do",
-        "working",
-        "complete"
-      ],
-      "useSmartOffset": false,
-      "smartOffsetOperator": "subtract",
-      "requiredStatuses": [],
-      "allDayFilter": "false",
-      "label": "intra 45 minutes before ping",
-      "requiredPaths": []
-    },
     {
       "id": "reminder-1765736113126",
       "property": "scheduled",
@@ -110,7 +81,7 @@
       "requiredStatuses": [
         "open"
       ],
-      "label": "All day morning reminder",
+      "label": "All day 9am",
       "requiredPaths": []
     },
     {
@@ -142,14 +113,46 @@
       ],
       "allDayFilter": "true",
       "allDayBaseTime": "17:00",
-      "label": "5:00 working all day notice",
+      "label": "all day - 5pm",
       "useSmartOffset": false,
       "smartOffsetOperator": "add",
       "smartOffsetProperty": "timeEstimate",
       "requiredPaths": [],
-      "requiredStatuses": [
-        "working"
-      ]
+      "requiredStatuses": []
+    },
+    {
+      "id": "reminder-1765736094027",
+      "property": "scheduled",
+      "enabled": true,
+      "offsetMinutes": -45,
+      "repeatUntilComplete": false,
+      "repeatIntervalMinutes": 2,
+      "maxRepeats": -1,
+      "stopConditions": [
+        "status: complete",
+        "status: wont-do"
+      ],
+      "title": "In 45 Minutes: {filename}",
+      "body": "At {time} ",
+      "ignorePaths": [
+        "*/Archive/*",
+        "*/Notes/*",
+        "*/Daily Notes/*"
+      ],
+      "ignoreTags": [
+        "archive"
+      ],
+      "ignoreStatuses": [
+        "wont-do",
+        "working",
+        "complete"
+      ],
+      "useSmartOffset": false,
+      "smartOffsetOperator": "subtract",
+      "requiredStatuses": [],
+      "allDayFilter": "false",
+      "label": "scheduled - 45 min out",
+      "requiredPaths": []
     },
     {
       "id": "reminder-1767981253430",
@@ -182,11 +185,12 @@
       "useSmartOffset": false,
       "smartOffsetOperator": "add",
       "smartOffsetProperty": "timeEstimate",
-      "label": "15 min after working notice",
+      "label": "scheduled - working - 15 min after done notice",
       "requiredPaths": [],
       "requiredStatuses": [
         "working"
-      ]
+      ],
+      "triggerAtEnd": true
     },
     {
       "id": "reminder-1769724442364",
@@ -220,7 +224,7 @@
       ],
       "mode": "timeblock",
       "allDayFilter": "false",
-      "label": "single ping 5 min before working",
+      "label": "scheduled - working - 5 min before",
       "requiredPaths": []
     },
     {
@@ -259,9 +263,11 @@
   ],
   "alertState": {},
   "batchNotifications": true,
+  "editorDropLinkEnabled": true,
+  "editorDropLinkHeadingLevel": 2,
+  "editorDropLinkTemplate": "{{heading}} {{wikilink}}",
   "globalIgnorePaths": [
-    "Notes",
-    "Dailynotes",
+    "*/02 Notes/*",
     "re:(^|/)_[^/]*($|/|$)",
     "re: ^[^/]+\\.md$"
   ],
@@ -301,7 +307,7 @@
   },
   "snoozeOptions": [
     {
-      "label": "15 min",
+      "label": "5 min",
       "minutes": 5
     },
     {
@@ -322,5 +328,7 @@
   "companionUpstreamPropagation": true,
   "enableLogging": false,
   "_migratedFromPlugins": true,
+  "noLossSyncMode": true,
+  "syncOnEventDelete": "archive",
   "autoCreateConfigs": {}
 }

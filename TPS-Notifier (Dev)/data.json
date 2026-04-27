@@ -1,8 +1,10 @@
 {
+  "enabled": false,
+  "enableManualComposer": true,
   "ntfyServer": "https://ntfy.sh",
   "ntfyTopic": "obsidian_alerts",
   "ntfyPriority": 3,
-  "enableLogging": false,
+  "enableLogging": true,
   "snoozeProperty": "reminderSnooze",
   "snoozeOptions": [
     {

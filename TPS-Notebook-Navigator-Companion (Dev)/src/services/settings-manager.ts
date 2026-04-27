@@ -84,6 +84,13 @@ export class SettingsManager {
       metadataDebounceMs: asNumber(record.metadataDebounceMs, DEFAULT_SETTINGS.metadataDebounceMs, 0, 5000),
       syncTitleFromFilename: asBoolean(record.syncTitleFromFilename, DEFAULT_SETTINGS.syncTitleFromFilename),
       syncFilenameFromTitle: asBoolean(record.syncFilenameFromTitle, DEFAULT_SETTINGS.syncFilenameFromTitle),
+      statusClickFlow: normalizeStringsArray(record.statusClickFlow, DEFAULT_SETTINGS.statusClickFlow),
+      tagPageFolder: normalizeOptionalString(record.tagPageFolder),
+      tagPageFileType: this.normalizeTagPageFileType(record.tagPageFileType, DEFAULT_SETTINGS.tagPageFileType),
+      createTagPageOnOpen: asBoolean(record.createTagPageOnOpen, DEFAULT_SETTINGS.createTagPageOnOpen),
+      propertyPageFolder: normalizeOptionalString(record.propertyPageFolder),
+      propertyPageFileType: this.normalizeTagPageFileType(record.propertyPageFileType, DEFAULT_SETTINGS.propertyPageFileType),
+      createPropertyPageOnOpen: asBoolean(record.createPropertyPageOnOpen, DEFAULT_SETTINGS.createPropertyPageOnOpen),
       frontmatterIconField: this.normalizeSafeFrontmatterField(
         record.frontmatterIconField,
         DEFAULT_SETTINGS.frontmatterIconField
@@ -237,6 +244,17 @@ export class SettingsManager {
       requested: normalized,
       fallback
     });
+    return fallback;
+  }
+
+  private normalizeTagPageFileType(
+    value: unknown,
+    fallback: "canvas" | "markdown" | "base",
+  ): "canvas" | "markdown" | "base" {
+    const normalized = normalizeString(value, fallback).trim().toLowerCase();
+    if (normalized === "canvas") return "canvas";
+    if (normalized === "base") return "base";
+    if (normalized === "markdown" || normalized === "md") return "markdown";
     return fallback;
   }
 

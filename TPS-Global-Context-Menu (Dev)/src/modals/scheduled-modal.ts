@@ -40,8 +40,16 @@ export class ScheduledModal extends Modal {
 
         // Normalize date for datetime-local (YYYY-MM-DDTHH:mm)
         let initialDate = this.currentDate;
-        if (initialDate && !initialDate.includes('T')) {
-            initialDate = `${initialDate}T00:00`;
+        if (initialDate) {
+            // Handle space-separated format: "YYYY-MM-DD HH:mm:ss" → "YYYY-MM-DDTHH:mm"
+            const spaceMatch = initialDate.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
+            if (spaceMatch) {
+                initialDate = `${spaceMatch[1]}T${spaceMatch[2]}`;
+            } else if (!initialDate.includes('T')) {
+                initialDate = `${initialDate}T00:00`;
+            }
+            // Strip trailing seconds if present: "YYYY-MM-DDTHH:mm:ss" → "YYYY-MM-DDTHH:mm"
+            initialDate = initialDate.replace(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}):\d{2}$/, '$1');
         }
 
         // 1. Scheduled Date Input

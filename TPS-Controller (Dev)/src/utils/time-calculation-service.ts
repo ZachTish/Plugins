@@ -32,7 +32,9 @@ export function parseDate(input: any): number | null {
     }
 
     const formats = [
+        'YYYY-MM-DD HH:mm:ss',
         'YYYY-MM-DD HH:mm',
+        'YYYY-MM-DD H:mm:ss',
         'YYYY-MM-DD H:mm',
         'YYYY-MM-DD HH:mm A',
         'YYYY-MM-DD h:mm A',
@@ -241,10 +243,9 @@ export function shouldIgnoreForReminder(
     reminder: PropertyReminder,
     globalIgnorePaths: string[],
     globalIgnoreTags: string[],
-    globalIgnoreStatuses: string[]
+    globalIgnoreStatuses: string[],
+    options?: { skipPathIgnore?: boolean; skipTagIgnore?: boolean }
 ): boolean {
-    // Always merge global paths with per-reminder paths so global protections
-    // (vault root, _ folders, etc.) apply even when a reminder overrides the list.
     const globalPaths = Array.isArray(globalIgnorePaths) ? globalIgnorePaths : [];
     const ignorePaths = Array.isArray(reminder.ignorePaths)
         ? [...new Set([...reminder.ignorePaths, ...globalPaths])]
@@ -261,13 +262,12 @@ export function shouldIgnoreForReminder(
     const normPath = normalizeComparablePath(file.path);
     const normBase = normalizeComparablePath(file.basename);
 
-    if (ignorePaths.some(p => p && matchesExclusionPattern(normPath, normBase, p))) {
+    if (!options?.skipPathIgnore && ignorePaths.some(p => p && matchesExclusionPattern(normPath, normBase, p))) {
         return true;
     }
 
-    // Required paths: if specified, file must be inside at least one of these folders.
     const requiredPaths = Array.isArray(reminder.requiredPaths) ? reminder.requiredPaths.filter(Boolean) : [];
-    if (requiredPaths.length > 0 && !requiredPaths.some(p => matchesRequiredPath(file.path, p))) {
+    if (!options?.skipPathIgnore && requiredPaths.length > 0 && !requiredPaths.some(p => matchesRequiredPath(file.path, p))) {
         return true;
     }
 
@@ -277,17 +277,19 @@ export function shouldIgnoreForReminder(
         return true;
     }
 
-    const tags = (cache ? getAllTags(cache) : []) || [];
-    const hasIgnoredTag = tags.some(tag => {
-        const pureTag = tag.replace('#', '').toLowerCase();
-        return ignoreTags.some(ignored => {
-            const cleanIgnored = String(ignored).toLowerCase().replace('#', '').trim();
-            if (!cleanIgnored) return false;
-            return pureTag === cleanIgnored || pureTag.startsWith(cleanIgnored + '/');
+    if (!options?.skipTagIgnore) {
+        const tags = (cache ? getAllTags(cache) : []) || [];
+        const hasIgnoredTag = tags.some(tag => {
+            const pureTag = tag.replace('#', '').toLowerCase();
+            return ignoreTags.some(ignored => {
+                const cleanIgnored = String(ignored).toLowerCase().replace('#', '').trim();
+                if (!cleanIgnored) return false;
+                return pureTag === cleanIgnored || pureTag.startsWith(cleanIgnored + '/');
+            });
         });
-    });
-    if (hasIgnoredTag) {
-        return true;
+        if (hasIgnoredTag) {
+            return true;
+        }
     }
 
     return false;
