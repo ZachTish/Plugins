@@ -15,6 +15,13 @@ import { MenuController, addSafeClickListener } from './menu-controller';
 import { MenuInstances } from '../types';
 import * as logger from '../logger';
 import { normalizeTagValue, parseTagInput } from '../utils/tag-utils';
+import {
+  buildRuleContext,
+  evaluateIconColorRules,
+  isRuleWriteExcluded,
+  isValidCssColor,
+} from '../utils/rule-resolver';
+import type { ProjectedTimeBlock } from '../services/time-tracking-service';
 // scroll-direction hide/reveal is handled inline â€” no gesture-handler import needed.
 
 // Get the LIVE mode constant if available
@@ -1003,7 +1010,7 @@ export class PersistentMenuManager {
   }
 
   private resolveTitleIconColor(frontmatter: Record<string, any>, file?: TFile): string {
-    // First, prefer explicit frontmatter color values.
+    // Frontmatter is source of truth for color
     const colorKeys = ['iconColor', 'color', 'accentColor', 'accent'];
     for (const key of colorKeys) {
       const raw = this.getFrontmatterValueCaseInsensitive(frontmatter, key);
@@ -1016,109 +1023,56 @@ export class PersistentMenuManager {
       }
     }
 
-    // Fall back to Notebook Navigator rule-derived color only when the file
-    // is not excluded from companion frontmatter writes.
-    if (file && !this.isCompanionWriteExcluded(file)) {
-      const companionColor = this.resolveCompanionRuleColor(file, frontmatter);
-      if (companionColor) {
-        return companionColor;
+    // Fall back to rule-derived color when no frontmatter color exists
+    if (file && !this.isRuleWriteExcludedForFile(file)) {
+      const ruleColor = this.resolveRuleColor(file, frontmatter);
+      if (ruleColor) {
+        return ruleColor;
       }
     }
     return '';
   }
 
-  private isCompanionWriteExcluded(file: TFile): boolean {
-    const pluginsApi: any = (this.plugin.app as any)?.plugins;
-    const companion: any =
-      pluginsApi?.plugins?.['tps-notebook-navigator-companion']
-      ?? pluginsApi?.plugins?.['TPS-Notebook-Navigator-Companion (Dev)'];
-    const exclusionService: any = companion?.exclusionService;
-    if (!exclusionService || typeof exclusionService.shouldIgnore !== 'function') return false;
-    try {
-      return !!exclusionService.shouldIgnore(file, { bypassCreationGrace: true });
-    } catch {
-      return false;
-    }
+  private isRuleWriteExcludedForFile(file: TFile): boolean {
+    return isRuleWriteExcluded(this.plugin.app, file, this.plugin.settings.notebookNavigatorFrontmatterWriteExclusions);
   }
 
-  private resolveCompanionRuleColor(file: TFile, frontmatter: Record<string, any>): string {
-    const pluginsApi: any = (this.plugin.app as any)?.plugins;
-    const companion: any = pluginsApi?.plugins?.['tps-notebook-navigator-companion'];
-    const ruleEngine: any = companion?.ruleEngine;
-    if (companion?.settings?.enabled && ruleEngine?.resolveVisualOutputs) {
-      try {
-        const cache = this.plugin.app.metadataCache.getFileCache(file) as any;
-        const cacheTags = parseTagInput([...(getAllTags(cache) || []), frontmatter?.tags, frontmatter?.tag]);
-        const visual = ruleEngine.resolveVisualOutputs(companion.settings.rules || [], {
-          file: {
-            path: file.path,
-            name: file.name,
-            basename: file.basename,
-            extension: file.extension,
-          },
-          frontmatter,
-          tags: Array.from(new Set(cacheTags.map((tag) => normalizeTagValue(tag)).filter(Boolean))),
-        });
-        const colorValue = String(visual?.color?.value || '').trim();
-        if (colorValue) {
-          if (colorValue.startsWith('var(')) return colorValue;
-          if (typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', colorValue)) {
-            return colorValue;
-          }
-        }
-      } catch (error) {
-        logger.warn('[TPS GCM] Failed resolving companion color for inline title:', file.path, error);
-      }
-    }
-    return '';
+  private resolveRuleColor(file: TFile, frontmatter: Record<string, any>): string {
+    const rules = this.plugin.settings.notebookNavigatorRules;
+    if (!rules || rules.length === 0) return '';
+
+    const context = buildRuleContext(this.plugin.app, file, frontmatter);
+    const visual = evaluateIconColorRules(this.plugin.app, rules, context);
+    const colorValue = String(visual?.color?.value || '').trim();
+    return (colorValue && isValidCssColor(colorValue)) ? colorValue : '';
   }
 
   private resolveInlineTitleIconValue(file: TFile, frontmatter: Record<string, any>): string {
     const pickString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
-    // First, check the icon field
+    // Frontmatter is source of truth for icon
     const fromIconField = pickString(frontmatter?.icon);
     if (fromIconField) return fromIconField;
 
-    // Then, check Notebook Navigator configured icon field and rules
-    const pluginsApi: any = (this.plugin.app as any)?.plugins;
-    const companion: any = pluginsApi?.plugins?.['tps-notebook-navigator-companion'];
     const configuredIconField = pickString(this.plugin.settings.notebookNavigatorIconField);
     if (configuredIconField) {
       const configuredValue = pickString(this.getFrontmatterValueCaseInsensitive(frontmatter, configuredIconField));
       if (configuredValue) return configuredValue;
     }
 
-    // Finally, check Notebook Navigator rules if enabled and the file is not
-    // excluded from companion writes.
-    if (this.isCompanionWriteExcluded(file)) {
+    // Skip rule evaluation if file is excluded from rule writes
+    if (this.isRuleWriteExcludedForFile(file)) {
       return '';
     }
 
-    // Notebook Navigator rule-derived icon fallback
-    const ruleEngine: any = companion?.ruleEngine;
-    if (companion?.settings?.enabled && ruleEngine?.resolveVisualOutputs) {
-      try {
-        const cache = this.plugin.app.metadataCache.getFileCache(file) as any;
-        const cacheTags = parseTagInput([...(getAllTags(cache) || []), frontmatter?.tags, frontmatter?.tag]);
-        const visual = ruleEngine.resolveVisualOutputs(this.plugin.settings.notebookNavigatorRules || [], {
-          file: {
-            path: file.path,
-            name: file.name,
-            basename: file.basename,
-            extension: file.extension,
-          },
-          frontmatter,
-          tags: Array.from(new Set(cacheTags.map((tag) => normalizeTagValue(tag)).filter(Boolean))),
-        });
-        const ruleIcon = pickString(visual?.icon?.value);
-        if (ruleIcon) return ruleIcon;
-      } catch (error) {
-        logger.warn('[TPS GCM] Failed resolving companion icon for inline title:', file.path, error);
-      }
-    }
+    // Fall back to rule-derived icon when no frontmatter icon exists
+    const localRules = this.plugin.settings.notebookNavigatorRules;
+    if (!localRules || localRules.length === 0) return '';
 
-    return '';
+    const context = buildRuleContext(this.plugin.app, file, frontmatter);
+    const visual = evaluateIconColorRules(this.plugin.app, localRules, context);
+    const ruleIcon = pickString(visual?.icon?.value);
+    return ruleIcon;
   }
 
   private renderInlineTitleIcon(iconEl: HTMLElement, iconValue: string, file: TFile): void {
@@ -1800,7 +1754,7 @@ export class PersistentMenuManager {
       }
     };
 
-    appendSection('Outgoing mentions', outgoing, 'outgoing');
+    appendSection('Incoming mentions', incoming, 'incoming');
     if (outgoing.length > 0 && incoming.length > 0) {
       const separator = document.createElement('div');
       separator.style.height = '1px';
@@ -1808,7 +1762,7 @@ export class PersistentMenuManager {
       separator.style.background = 'var(--background-modifier-border)';
       popover.appendChild(separator);
     }
-    appendSection('Incoming mentions', incoming, 'incoming');
+    appendSection('Outgoing mentions', outgoing, 'outgoing');
 
     document.body.appendChild(popover);
     this.topLinksPopoverEl = popover;
@@ -1871,24 +1825,37 @@ export class PersistentMenuManager {
     }
 
     const parentFiles = this.resolveParentFiles(file);
-    const relationshipPaths = this.getParentChildRelationshipPaths(file, parentFiles);
-    const embeddedTargets = this.getEmbeddedMarkdownTargetPaths(file);
-    const promotedChecklistTargets = this.plugin.settings.ignoreEmbeddedChildrenInTopLinks
-      ? this.getPromotedChecklistLinkedTargetPaths(file)
-      : null;
-
     const { incoming: rawIncoming, outgoing: rawOutgoing } = this.getDirectLinks(file);
-    const incoming = rawIncoming.filter((linkFile) => !relationshipPaths.has(linkFile.path));
-    const outgoing = rawOutgoing.filter((linkFile) => {
-      if (relationshipPaths.has(linkFile.path)) return false;
-      if (embeddedTargets?.has(linkFile.path)) return false;
-      if (promotedChecklistTargets?.has(linkFile.path)) return false;
-      return true;
-    });
+    const { incoming, outgoing } = this.getFilteredTopMentionLinks(file, rawIncoming, rawOutgoing, parentFiles);
     const totalLinks = incoming.length + outgoing.length;
     const showParentButton = parentFiles.length > 0;
+    const projections = this.plugin.timeTrackingService
+      ? [] as ProjectedTimeBlock[]
+      : [];
 
-    if (totalLinks === 0 && !showParentButton) {
+    void this.plugin.timeTrackingService.getProjectedTimeBlocksForFile(file).then((projectedBlocks) => {
+      const latestView = getCompatibleMarkdownViewFromLeaf(view.leaf) || view;
+      if (latestView !== view && latestView.file?.path !== file.path) return;
+      this.renderTopNavForFile(view, file, titleEl, incoming, outgoing, parentFiles, projectedBlocks);
+    });
+  }
+
+  private renderTopNavForFile(
+    view: MarkdownView,
+    file: TFile,
+    titleEl: HTMLElement,
+    incoming: TFile[],
+    outgoing: TFile[],
+    parentFiles: TFile[],
+    projectedBlocks: ProjectedTimeBlock[],
+  ): void {
+    const totalLinks = incoming.length + outgoing.length;
+    const showParentButton = parentFiles.length > 0;
+    const externalBlocks = projectedBlocks.filter((entry) => entry.isExternal);
+    const runningBlocks = externalBlocks.filter((entry) => entry.status === 'working');
+    const completedBlocks = externalBlocks.filter((entry) => entry.status !== 'working');
+
+    if (totalLinks === 0 && !showParentButton && externalBlocks.length === 0) {
       this.removeTopParentNav(view);
       return;
     }
@@ -1913,19 +1880,13 @@ export class PersistentMenuManager {
 
       addSafeClickListener(linksButton, () => {
         const latestParents = this.resolveParentFiles(file);
-        const latestRelationshipPaths = this.getParentChildRelationshipPaths(file, latestParents);
-        const latestEmbeddedTargets = this.getEmbeddedMarkdownTargetPaths(file);
-        const latestPromotedChecklistTargets = this.plugin.settings.ignoreEmbeddedChildrenInTopLinks
-          ? this.getPromotedChecklistLinkedTargetPaths(file)
-          : null;
         const { incoming: refreshedIncoming, outgoing: refreshedOutgoing } = this.getDirectLinks(file);
-        const currentIncoming = refreshedIncoming.filter((linkFile) => !latestRelationshipPaths.has(linkFile.path));
-        const currentOutgoing = refreshedOutgoing.filter((linkFile) => {
-          if (latestRelationshipPaths.has(linkFile.path)) return false;
-          if (latestEmbeddedTargets?.has(linkFile.path)) return false;
-          if (latestPromotedChecklistTargets?.has(linkFile.path)) return false;
-          return true;
-        });
+        const { incoming: currentIncoming, outgoing: currentOutgoing } = this.getFilteredTopMentionLinks(
+          file,
+          refreshedIncoming,
+          refreshedOutgoing,
+          latestParents,
+        );
         this.toggleTopLinksPopover(linksButton, file, currentOutgoing, currentIncoming);
       });
 
@@ -1973,8 +1934,211 @@ export class PersistentMenuManager {
       container.appendChild(parentButton);
     }
 
+    if (runningBlocks.length > 0) {
+      const runningBlocksButton = document.createElement('button');
+      runningBlocksButton.type = 'button';
+      runningBlocksButton.className = 'tps-gcm-parent-nav-button tps-gcm-parent-nav-button--top';
+      runningBlocksButton.title = runningBlocks.length === 1
+        ? 'Show running linked checkbox line'
+        : 'Show running linked checkbox lines';
+      setIcon(runningBlocksButton, 'timer');
+
+      const runningBlocksLabel = document.createElement('span');
+      runningBlocksLabel.className = 'tps-gcm-parent-nav-label';
+      if (runningBlocks.length === 1) {
+        this.bindRunningProjectedBlocksLabel(runningBlocksLabel, runningBlocks[0]);
+      } else {
+        runningBlocksLabel.textContent = `${runningBlocks.length} Running Checkboxes`;
+      }
+      runningBlocksButton.appendChild(runningBlocksLabel);
+
+      addSafeClickListener(runningBlocksButton, () => {
+        if (runningBlocks.length === 1) {
+          void this.openProjectedTimeBlock(runningBlocks[0]);
+          return;
+        }
+
+        const menu = new Menu();
+        for (const block of runningBlocks) {
+          menu.addItem((item) => {
+            item
+              .setTitle(this.getProjectedTimeBlockLabel(block))
+              .setIcon('timer')
+              .onClick(() => {
+                void this.openProjectedTimeBlock(block);
+              });
+          });
+        }
+        const rect = runningBlocksButton.getBoundingClientRect();
+        menu.showAtPosition({ x: rect.left, y: rect.bottom });
+      });
+
+      container.appendChild(runningBlocksButton);
+    }
+
+    if (completedBlocks.length > 0) {
+      const linkedCheckboxesButton = document.createElement('button');
+      linkedCheckboxesButton.type = 'button';
+      linkedCheckboxesButton.className = 'tps-gcm-parent-nav-button tps-gcm-parent-nav-button--top';
+      linkedCheckboxesButton.title = completedBlocks.length === 1
+        ? 'Open linked checkbox item'
+        : 'Open linked checkbox items';
+      setIcon(linkedCheckboxesButton, 'check-square');
+
+      const linkedCheckboxesLabel = document.createElement('span');
+      linkedCheckboxesLabel.className = 'tps-gcm-parent-nav-label';
+      linkedCheckboxesLabel.textContent = completedBlocks.length === 1
+        ? '1 Linked Checkbox'
+        : `${completedBlocks.length} Linked Checkboxes`;
+      linkedCheckboxesButton.appendChild(linkedCheckboxesLabel);
+
+      addSafeClickListener(linkedCheckboxesButton, () => {
+        if (completedBlocks.length === 1) {
+          void this.openProjectedTimeBlock(completedBlocks[0]);
+          return;
+        }
+
+        const menu = new Menu();
+        for (const block of completedBlocks) {
+          menu.addItem((item) => {
+            item
+              .setTitle(this.getProjectedTimeBlockLabel(block))
+              .setIcon('check-square')
+              .onClick(() => {
+                void this.openProjectedTimeBlock(block);
+              });
+          });
+        }
+        const rect = linkedCheckboxesButton.getBoundingClientRect();
+        menu.showAtPosition({ x: rect.left, y: rect.bottom });
+      });
+
+      container.appendChild(linkedCheckboxesButton);
+    }
+
     titleEl.parentElement?.insertBefore(container, titleEl);
     this.topParentNavs.set(view, container);
+  }
+
+  private getProjectedTimeBlockLabel(block: ProjectedTimeBlock): string {
+    const itemLabel = String(block.label || block.sourceFile.basename || '').trim() || block.sourceFile.basename;
+    if (block.status === 'working') {
+      const elapsedMs = Math.max(0, Date.now() - block.start.getTime());
+      return `${itemLabel} ${this.formatElapsedForTopNav(elapsedMs)}`;
+    }
+    if (block.minutes !== null && Number.isFinite(block.minutes)) {
+      return `${itemLabel} ${block.minutes}m`;
+    }
+    const when = block.start.toLocaleString();
+    return `${itemLabel} - ${when}`;
+  }
+
+  private formatElapsedForTopNav(elapsedMs: number): string {
+    const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  }
+
+  private bindRunningProjectedBlocksLabel(labelEl: HTMLElement, block: ProjectedTimeBlock): void {
+    const itemLabel = String(block.label || block.sourceFile.basename || '').trim() || block.sourceFile.basename;
+    const update = () => {
+      if (!labelEl.isConnected) return false;
+      const elapsedMs = Math.max(0, Date.now() - block.start.getTime());
+      labelEl.textContent = `${itemLabel} ${this.formatElapsedForTopNav(elapsedMs)}`;
+      return true;
+    };
+
+    if (!update()) return;
+    const intervalId = window.setInterval(() => {
+      if (!update()) {
+        window.clearInterval(intervalId);
+      }
+    }, 1000);
+  }
+
+  private async openProjectedTimeBlock(block: ProjectedTimeBlock): Promise<void> {
+    await this.plugin.openFileInLeaf(block.sourceFile, false, () => this.plugin.app.workspace.getLeaf(false), {
+      revealLeaf: true,
+      ignoreCanvasDragGuard: true,
+    });
+
+    window.setTimeout(() => {
+      const leaf = this.plugin.app.workspace.getLeavesOfType('markdown')
+        .find((candidate: any) => candidate?.view?.file?.path === block.sourceFile.path);
+      const view = leaf?.view as MarkdownView | undefined;
+      if (!(view instanceof MarkdownView)) return;
+
+      const viewState = (view as any).getState?.() || {};
+      const isReading = viewState.mode === 'preview';
+      if (isReading) {
+        this.scrollProjectedTimeBlockInReadingMode(view, block.lineNumber, block.label);
+      } else {
+        this.scrollProjectedTimeBlockInEditorMode(view, block.lineNumber);
+      }
+    }, 80);
+  }
+
+  private scrollProjectedTimeBlockInEditorMode(view: MarkdownView, lineIndex: number): void {
+    const editor = view.editor;
+    if (!editor || typeof editor.setCursor !== 'function') return;
+
+    editor.setCursor({ line: lineIndex, ch: 0 });
+    if (typeof editor.scrollIntoView === 'function') {
+      editor.scrollIntoView(
+        { from: { line: lineIndex, ch: 0 }, to: { line: lineIndex + 1, ch: 0 } },
+        true,
+      );
+    }
+
+    window.setTimeout(() => {
+      try {
+        const cmEditor = (editor as any)?.cm;
+        if (!cmEditor) return;
+        const lineInfo = cmEditor.state?.doc?.line(lineIndex + 1);
+        if (!lineInfo) return;
+
+        const domResult = cmEditor.domAtPos?.(lineInfo.from);
+        if (!domResult) return;
+        const node = domResult.node;
+        const lineEl = node instanceof HTMLElement
+          ? (node.closest('.cm-line') || node)
+          : node?.parentElement?.closest?.('.cm-line');
+
+        if (lineEl instanceof HTMLElement) {
+          lineEl.classList.add('tps-gcm-line-highlight');
+          window.setTimeout(() => lineEl.classList.remove('tps-gcm-line-highlight'), 1500);
+        }
+      } catch {
+        // Highlight is cosmetic only.
+      }
+    }, 80);
+  }
+
+  private scrollProjectedTimeBlockInReadingMode(view: MarkdownView, lineIndex: number, itemText: string): void {
+    const previewEl = (view as any).previewMode?.containerEl
+      || view.containerEl?.querySelector('.markdown-preview-view');
+    if (!previewEl) return;
+
+    const taskItems = previewEl.querySelectorAll('li.task-list-item') as NodeListOf<HTMLElement>;
+    const normalizedTarget = String(itemText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+    let matchedEl: HTMLElement | null = null;
+    for (const li of Array.from(taskItems)) {
+      const liText = (li.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (normalizedTarget && liText.includes(normalizedTarget)) {
+        matchedEl = li;
+        break;
+      }
+    }
+
+    if (!matchedEl) return;
+
+    matchedEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    matchedEl.classList.add('tps-gcm-line-highlight');
+    window.setTimeout(() => matchedEl?.classList.remove('tps-gcm-line-highlight'), 1500);
   }
 
   private removeTopParentNav(view: MarkdownView): void {
@@ -2009,7 +2173,7 @@ export class PersistentMenuManager {
     return relationshipPaths;
   }
 
-  private getEmbeddedMarkdownTargetPaths(file: TFile): Set<string> {
+  private getEmbeddedTargetPaths(file: TFile): Set<string> {
     const result = new Set<string>();
     const cache = this.plugin.app.metadataCache.getFileCache(file);
     const embeds = cache?.embeds || [];
@@ -2017,11 +2181,36 @@ export class PersistentMenuManager {
       const linkPath = String((embed as any)?.link || '').trim();
       if (!linkPath) continue;
       const resolved = this.plugin.app.metadataCache.getFirstLinkpathDest(linkPath, file.path);
-      if (resolved instanceof TFile && resolved.extension?.toLowerCase() === 'md') {
+      if (resolved instanceof TFile) {
         result.add(resolved.path);
       }
     }
     return result;
+  }
+
+  private getFilteredTopMentionLinks(
+    file: TFile,
+    rawIncoming: TFile[],
+    rawOutgoing: TFile[],
+    knownParents?: TFile[],
+  ): { incoming: TFile[]; outgoing: TFile[] } {
+    const relationshipPaths = this.getParentChildRelationshipPaths(file, knownParents);
+    const embeddedTargets = this.getEmbeddedTargetPaths(file);
+    const promotedChecklistTargets = this.plugin.settings.ignoreEmbeddedChildrenInTopLinks
+      ? this.getPromotedChecklistLinkedTargetPaths(file)
+      : null;
+
+    const shouldExclude = (linkFile: TFile): boolean => {
+      if (relationshipPaths.has(linkFile.path)) return true;
+      if (embeddedTargets.has(linkFile.path)) return true;
+      if (promotedChecklistTargets?.has(linkFile.path)) return true;
+      return false;
+    };
+
+    return {
+      incoming: rawIncoming.filter((linkFile) => !shouldExclude(linkFile)),
+      outgoing: rawOutgoing.filter((linkFile) => !shouldExclude(linkFile)),
+    };
   }
 
   private getPromotedChecklistLinkedTargetPaths(file: TFile): Set<string> {

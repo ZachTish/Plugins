@@ -370,34 +370,29 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     new Setting(viewBehaviorSection)
-      .setName("Secondary event date field")
-      .setDesc("Fallback field when the primary field is missing. Leave blank to disable.")
+      .setName("Additional event date fields")
+      .setDesc("Comma-separated fallback fields checked after the primary date field. Use this for point-in-time dates like due or completedDate.")
       .addText((text) =>
         text
-          .setPlaceholder("due")
-          .setValue(this.plugin.settings.secondaryStartProperty ?? "")
+          .setPlaceholder("due, completedDate")
+          .setValue((this.plugin.settings.additionalDateProperties ?? []).join(", "))
           .onChange(async (value) => {
-            this.plugin.settings.secondaryStartProperty = value.trim();
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(viewBehaviorSection)
-      .setName("Tertiary event date field")
-      .setDesc("Second fallback field when primary/secondary are missing. Leave blank to disable.")
-      .addText((text) =>
-        text
-          .setPlaceholder("completed")
-          .setValue(this.plugin.settings.tertiaryStartProperty ?? "")
-          .onChange(async (value) => {
-            this.plugin.settings.tertiaryStartProperty = value.trim();
+            const parsed = value
+              .split(",")
+              .map((field) => field.trim())
+              .filter(Boolean);
+            this.plugin.settings.additionalDateProperties = parsed.filter(
+              (field, index) =>
+                parsed.findIndex((candidate) => candidate.toLowerCase() === field.toLowerCase()) === index &&
+                field.toLowerCase() !== (this.plugin.settings.startProperty ?? "scheduled").trim().toLowerCase(),
+            );
             await this.plugin.saveSettings();
           }),
       );
 
     viewBehaviorSection.createEl("p", {
       text:
-        "Per-base controls: open each Calendar Base view options to toggle primary/secondary/tertiary date sources and optional per-source durations. If a source duration is left blank, events use the minimum time slot.",
+        "Per-base controls: open each Calendar Base view options to choose which date sources are active for that base. Additional date fields act as fallback point-in-time dates after the primary field.",
     }).addClass("setting-item-description");
 
     new Setting(viewBehaviorSection)

@@ -31,6 +31,22 @@ const createCollapsibleSection = (
   return details.createDiv({ cls: 'tps-collapsible-section-content' });
 };
 
+const createRootGroup = (
+  parent: HTMLElement,
+  title: string,
+  description?: string,
+): HTMLElement => {
+  const group = parent.createDiv({ cls: 'tps-gcm-settings-block' });
+  group.createEl('h4', { text: title });
+  if (description) {
+    group.createEl('p', {
+      text: description,
+      cls: 'setting-item-description',
+    });
+  }
+  return group;
+};
+
 /**
  * Settings tab for the plugin
  */
@@ -1270,27 +1286,15 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     createIgnoreRulesUI(overlayIgnore, this.plugin.settings.inlineMenu_IgnoreRules as ViewModeRule[]);
 
     // --- Menu Configuration (Consolidated) ---
-    const propertyVisibility = createSection(
-      menusCategory,
-      'Property Visibility',
-      'Property definitions live under Properties & Rules. Per-property toggles control where each one appears.',
-      false
-    );
-
-    propertyVisibility.createEl('p', {
-      text: `${(this.plugin.settings.properties || []).length} properties configured in Rules > Custom Property Configuration.`,
-      cls: 'setting-item-description',
-    });
-
-    const taskBehavior = createSection(
+    const taskCompletion = createSection(
       automationCategory,
-      'Task & Linked Subitems',
-      'Task completion prompts, checkbox/status mappings, linked subitem rendering, and auto-embed behavior.',
+      'Task Completion',
+      'Completion prompts and checkbox-to-status behavior for tasks and linked notes.',
       false
     );
-    new Setting(taskBehavior).setName('Check pending items').setDesc('Warn on completion if items unchecked').addToggle(t => t.setValue(this.plugin.settings.checkOpenChecklistItems).onChange(async v => { this.plugin.settings.checkOpenChecklistItems = v; await this.plugin.saveSettings(); }));
-    new Setting(taskBehavior).setName('Check parent-linked notes').setDesc('Warn when completing if any notes with parent links are still open').addToggle(t => t.setValue(this.plugin.settings.checkParentLinkStatuses).onChange(async v => { this.plugin.settings.checkParentLinkStatuses = v; await this.plugin.saveSettings(); }));
-    new Setting(taskBehavior)
+    new Setting(taskCompletion).setName('Warn if checklist items remain open').setDesc('Prompt before completion when checklist items are still unchecked.').addToggle(t => t.setValue(this.plugin.settings.checkOpenChecklistItems).onChange(async v => { this.plugin.settings.checkOpenChecklistItems = v; await this.plugin.saveSettings(); }));
+    new Setting(taskCompletion).setName('Warn if linked notes remain open').setDesc('Prompt before completion when notes with parent links are still open.').addToggle(t => t.setValue(this.plugin.settings.checkParentLinkStatuses).onChange(async v => { this.plugin.settings.checkParentLinkStatuses = v; await this.plugin.saveSettings(); }));
+    new Setting(taskCompletion)
       .setName('Final checklist prompt statuses')
       .setDesc('When the last open checkbox is resolved, prompt to set one of these statuses (comma-separated).')
       .addText((t) =>
@@ -1302,7 +1306,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(taskBehavior)
+    new Setting(taskCompletion)
       .setName('Checkbox → Status mappings')
       .setDesc('One mapping per line: "[ ]: todo => complete". The toggle target (after =>) is the status to cycle to when clicked. These statuses are what reminder rules match against.')
       .addTextArea((t) => {
@@ -1317,7 +1321,14 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         t.inputEl.rows = 6;
       });
 
-    new Setting(taskBehavior)
+    const linkedSubitems = createSection(
+      automationCategory,
+      'Linked Subitems & Auto-Embed',
+      'Rendering, styling, and auto-embed behavior for converted subitem links.',
+      false
+    );
+
+    new Setting(linkedSubitems)
       .setName('Enable linked subitem checkboxes')
       .setDesc('Converted subitem links stay rendered as checkboxes and sync their state from the child note status.')
       .addToggle((t) =>
@@ -1326,7 +1337,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
       );
-    new Setting(taskBehavior)
+    new Setting(linkedSubitems)
       .setName('Checkbox style')
       .setDesc('Visual treatment for linked subitem checkbox lines.')
       .addDropdown((d) =>
@@ -1340,7 +1351,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(taskBehavior)
+    new Setting(linkedSubitems)
       .setName('Default open checkbox state')
       .setDesc('Fallback checkbox token used when no mapping matches a note status.')
       .addText((t) =>
@@ -1350,7 +1361,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(taskBehavior)
+    new Setting(linkedSubitems)
       .setName('Auto-embed ignore folders')
       .setDesc('Comma-separated list of folders to exclude from auto-embedding subitem links. Files in these folders will not automatically get body links inserted.')
       .addText((t) =>
@@ -1362,7 +1373,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(taskBehavior)
+    new Setting(linkedSubitems)
       .setName('Auto-embed ignore tags')
       .setDesc('Comma-separated list of tags to exclude from auto-embedding subitem links. Files with these tags will not automatically get body links inserted.')
       .addText((t) =>
@@ -1374,8 +1385,8 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(taskBehavior)
-      .setName('Auto-insert blank line on note open')
+    new Setting(linkedSubitems)
+      .setName('Auto-insert a blank line on note open')
       .setDesc('When opening a note in live preview mode, if the first line is not empty, insert a blank line at the beginning and position the cursor on the first line. This ensures context pills and checkboxes have room to render.')
       .addToggle((t) =>
         t
@@ -1386,14 +1397,14 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           })
       );
 
-    const noteStructure = createSection(
+    const relationshipsSection = createSection(
       automationCategory,
-      'Relationships, Navigation & Workspace',
-      'Parent/child linking, top-of-note navigation, daily note controls, and workspace ribbon/backlinks settings.',
+      'Relationships & Navigation',
+      'Parent/child linking, top-of-note navigation, and linked-note completion behavior.',
       false
     );
-    new Setting(noteStructure).setName('Parent frontmatter key').setDesc('Canonical child-side parent list key. Markdown parents are derived from body links; base parents live only here.').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'childOf'; await this.plugin.saveSettings(); }));
-    new Setting(noteStructure)
+    new Setting(relationshipsSection).setName('Parent frontmatter key').setDesc('Canonical child-side parent list key. Markdown parents are derived from body links; base parents live only here.').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'childOf'; await this.plugin.saveSettings(); }));
+    new Setting(relationshipsSection)
       .setName('Auto self-link parent in parent key')
       .setDesc('When enabled, parent notes keep a self-reference in the parent key (for example childOf: [[This Note]]).')
       .addToggle((t) =>
@@ -1402,7 +1413,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
       );
-    new Setting(noteStructure)
+    new Setting(relationshipsSection)
       .setName('Parent link format')
       .setDesc('Controls markdown link rendering outside the canonical parent key. Parent-key frontmatter is always stored as a Base-compatible wikilink.')
       .addDropdown((dropdown) =>
@@ -1415,7 +1426,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(noteStructure)
+    new Setting(relationshipsSection)
       .setName('Tag parent when child linked')
       .setDesc('Applied to parent notes when linking children. Use # or plain tag. Leave empty to disable.')
       .addText((text) =>
@@ -1427,8 +1438,8 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(noteStructure).setName('Top page connections navigation').setDesc('Show a navigation button displaying all incoming and outgoing links at the top of the page above the title').addToggle(t => t.setValue(this.plugin.settings.enableTopParentNav).onChange(async v => { this.plugin.settings.enableTopParentNav = v; await this.plugin.saveSettings(); this.plugin.persistentMenuManager.ensureMenus(); }));
-    new Setting(noteStructure)
+    new Setting(relationshipsSection).setName('Show top links navigation').setDesc('Show a button above the title with incoming and outgoing links for the current note.').addToggle(t => t.setValue(this.plugin.settings.enableTopParentNav).onChange(async v => { this.plugin.settings.enableTopParentNav = v; await this.plugin.saveSettings(); this.plugin.persistentMenuManager.ensureMenus(); }));
+    new Setting(relationshipsSection)
       .setName('Ignore embedded children in top links')
       .setDesc('When enabled, links created by embedded children and promoted checklist children are hidden from the top Links button.')
       .addToggle((t) =>
@@ -1438,7 +1449,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           this.plugin.persistentMenuManager.ensureMenus();
         })
       );
-    new Setting(noteStructure)
+    new Setting(relationshipsSection)
       .setName('Ignored subitem tags')
       .setDesc('Comma-separated tags to exclude from the Subitems panel population, such as hide, dailynote, or project.')
       .addText((t) =>
@@ -1448,9 +1459,17 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    new Setting(noteStructure).setName('Completion statuses').setDesc('Statuses treated as complete for parent-linked notes').addText(t => t.setValue((this.plugin.settings.parentCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.parentCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
-    new Setting(noteStructure)
-      .setName('Enable Daily Note Navigation')
+    new Setting(relationshipsSection).setName('Completion statuses').setDesc('Statuses treated as complete for parent-linked notes').addText(t => t.setValue((this.plugin.settings.parentCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.parentCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
+
+    const dailyNotesSection = createSection(
+      automationCategory,
+      'Daily Notes',
+      'Navigation and auto-maintenance behavior for daily notes.',
+      false
+    );
+
+    new Setting(dailyNotesSection)
+      .setName('Enable daily note navigation')
       .setDesc('Show hovering Previous/Today/Next controls on daily notes.')
       .addToggle(t => t.setValue(this.plugin.settings.enableDailyNoteNav).onChange(async v => {
         this.plugin.settings.enableDailyNoteNav = v;
@@ -1460,7 +1479,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }
       }));
 
-    new Setting(noteStructure)
+    new Setting(dailyNotesSection)
       .setName('Show "Today" button')
       .setDesc('Show a Today shortcut between the prev/next arrows. Disable to show only the arrows.')
       .addToggle(t => t.setValue(this.plugin.settings.dailyNavShowToday !== false).onChange(async v => {
@@ -1471,23 +1490,30 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
         }
       }));
 
-    new Setting(noteStructure)
-      .setName('Auto-Populate Scheduled Items')
+    new Setting(dailyNotesSection)
+      .setName('Auto-populate scheduled items')
       .setDesc('When opening a Daily Note, automatically scan the vault and insert links to subitems scheduled for that date into the note body.')
       .addToggle(t => t.setValue(this.plugin.settings.enableAutoPopulateDailyNotes !== false).onChange(async v => {
         this.plugin.settings.enableAutoPopulateDailyNotes = v;
         await this.plugin.saveSettings();
       }));
 
-    new Setting(noteStructure)
-      .setName('Keep accurate daily scheduled date')
+    new Setting(dailyNotesSection)
+      .setName('Keep daily scheduled date in sync')
       .setDesc('Ensure daily notes keep a `scheduled` value that matches the note date, even if templates or later mutations leave it blank, invalid, or mismatched.')
       .addToggle(t => t.setValue(this.plugin.settings.enableDailyNoteScheduledNormalization !== false).onChange(async v => {
         this.plugin.settings.enableDailyNoteScheduledNormalization = v;
         await this.plugin.saveSettings();
       }));
 
-    new Setting(noteStructure)
+    const workspaceSection = createSection(
+      automationCategory,
+      'Workspace Shortcuts & Backlinks',
+      'Workspace ribbon shortcuts and Backlinks-panel frontmatter filtering.',
+      false
+    );
+
+    new Setting(workspaceSection)
       .setName('Workspace ribbon buttons')
       .setDesc(
         'Add a ribbon icon for each saved workspace in the core Workspaces plugin. ' +
@@ -1506,7 +1532,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
 
     if (this.plugin.settings.workspaceRibbonButtons) {
-      const workspaceIconSettings = noteStructure.createDiv({ cls: 'tps-gcm-sub-settings' });
+      const workspaceIconSettings = workspaceSection.createDiv({ cls: 'tps-gcm-sub-settings' });
       workspaceIconSettings.style.paddingLeft = '15px';
       workspaceIconSettings.style.borderLeft = '2px solid var(--background-modifier-border)';
 
@@ -1554,7 +1580,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       }
     }
 
-    new Setting(noteStructure)
+    new Setting(workspaceSection)
       .setName('Ignored frontmatter keys')
       .setDesc('Comma-separated list of frontmatter keys to hide from the Frontmatter section in the Backlinks panel (e.g. "dateModified, dateCreated").')
       .addText(t => t
@@ -1567,24 +1593,49 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
 
     const advancedAutomation = createSection(
       automationCategory,
-      'Recurrence & File Sync Feature',
+      'Automation & File Behavior',
       [
         hasController ? 'Prefer TPS Controller for recurring/archive orchestration.' : '',
         hasCompanion ? 'Prefer Companion for icon/color/sort ownership.' : '',
       ].filter(Boolean).join(' ')
     );
-    new Setting(advancedAutomation).setName('Task Recurrence').setDesc('Auto-create next recurring task').addToggle(t => t.setValue(this.plugin.settings.enableRecurrence).onChange(async v => { this.plugin.settings.enableRecurrence = v; await this.plugin.saveSettings(); }));
+    new Setting(advancedAutomation)
+      .setName('Enable automatic view mode switching')
+      .setDesc('Automatically switch between Source, Live Preview, and Reading modes based on frontmatter and configured rules.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableViewModeSwitching)
+          .onChange(async (value) => {
+            this.plugin.settings.enableViewModeSwitching = value;
+            await this.plugin.saveSettings();
+            this.display();
+          })
+      );
+
+    new Setting(advancedAutomation)
+      .setName('Show inline manual view mode controls')
+      .setDesc('Show Reading / Live / Source buttons in the inline menu panel only.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableInlineManualViewMode)
+          .onChange(async (value) => {
+            this.plugin.settings.enableInlineManualViewMode = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(advancedAutomation).setName('Enable task recurrence').setDesc('Automatically create the next recurring task when one is completed.').addToggle(t => t.setValue(this.plugin.settings.enableRecurrence).onChange(async v => { this.plugin.settings.enableRecurrence = v; await this.plugin.saveSettings(); }));
 
     if (this.plugin.settings.enableRecurrence) {
       const sub = advancedAutomation.createDiv({ cls: 'tps-gcm-sub-settings' });
       sub.style.paddingLeft = '15px';
       sub.style.borderLeft = '2px solid var(--background-modifier-border)';
-      new Setting(sub).setName('Completion Triggers').setDesc('Statuses that trigger recurrence').addText(t => t.setValue((this.plugin.settings.recurrenceCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.recurrenceCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
-      new Setting(sub).setName('Prompt on Edit').setDesc('Ask to update future instances').addToggle(t => t.setValue(this.plugin.settings.promptOnRecurrenceEdit).onChange(async v => { this.plugin.settings.promptOnRecurrenceEdit = v; await this.plugin.saveSettings(); }));
-      new Setting(sub).setName('Template Folder').setDesc('Folder for recurring event templates (copied when recurrence first set). Leave blank to disable.').addText(t => t.setPlaceholder('e.g. Recurring Templates').setValue(this.plugin.settings.recurringTemplateFolder || '').onChange(async v => { this.plugin.settings.recurringTemplateFolder = v.trim(); await this.plugin.saveSettings(); }));
+      new Setting(sub).setName('Completion statuses').setDesc('Statuses that should trigger recurrence.').addText(t => t.setValue((this.plugin.settings.recurrenceCompletionStatuses || []).join(', ')).onChange(async v => { this.plugin.settings.recurrenceCompletionStatuses = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
+      new Setting(sub).setName('Prompt when editing recurring items').setDesc('Ask whether future instances should also be updated.').addToggle(t => t.setValue(this.plugin.settings.promptOnRecurrenceEdit).onChange(async v => { this.plugin.settings.promptOnRecurrenceEdit = v; await this.plugin.saveSettings(); }));
+      new Setting(sub).setName('Recurrence template folder').setDesc('Folder for recurring item templates copied when recurrence is first set. Leave blank to disable.').addText(t => t.setPlaceholder('e.g. Recurring Templates').setValue(this.plugin.settings.recurringTemplateFolder || '').onChange(async v => { this.plugin.settings.recurringTemplateFolder = v.trim(); await this.plugin.saveSettings(); }));
     }
 
-    new Setting(advancedAutomation).setName('Auto-Rename Files').setDesc('Rename based on title/date criteria').addToggle(t => t.setValue(this.plugin.settings.enableAutoRename).onChange(async v => { this.plugin.settings.enableAutoRename = v; await this.plugin.saveSettings(); }));
+    new Setting(advancedAutomation).setName('Auto-rename files').setDesc('Rename files automatically based on title and date criteria.').addToggle(t => t.setValue(this.plugin.settings.enableAutoRename).onChange(async v => { this.plugin.settings.enableAutoRename = v; await this.plugin.saveSettings(); }));
     new Setting(advancedAutomation)
       .setName('Date suffix format')
       .setDesc('Moment.js format used when appending the scheduled date to filenames (e.g. "YYYY-MM-DD", "ddd, MMM D YYYY"). Leave blank to use the daily note format.')
@@ -1593,7 +1644,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       .setName('Auto-sync title from filename')
       .setDesc('Keep frontmatter `title` aligned to the current filename on open/rename. Disabled by default to avoid surprise metadata writes.')
       .addToggle(t => t.setValue(this.plugin.settings.autoSyncTitleFromFilename).onChange(async v => { this.plugin.settings.autoSyncTitleFromFilename = v; await this.plugin.saveSettings(); }));
-    new Setting(advancedAutomation).setName('Auto-Save Folder').setDesc('Save path to frontmatter').addToggle(t => t.setValue(this.plugin.settings.autoSaveFolderPath).onChange(async v => { this.plugin.settings.autoSaveFolderPath = v; await this.plugin.saveSettings(); }));
+    new Setting(advancedAutomation).setName('Save folder path to frontmatter').setDesc('Write the current folder path into frontmatter automatically.').addToggle(t => t.setValue(this.plugin.settings.autoSaveFolderPath).onChange(async v => { this.plugin.settings.autoSaveFolderPath = v; await this.plugin.saveSettings(); }));
     new Setting(advancedAutomation)
       .setName('Seed new subitem visual metadata')
       .setDesc('When creating child notes, copy inferred icon/color defaults into frontmatter. Disabled by default so GCM does not claim visual field ownership.')
@@ -1612,36 +1663,6 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
           this.plugin.settings.frontmatterAutoWriteExclusions = v;
           await this.plugin.saveSettings();
         }));
-
-    const viewModeFeatures = createSection(
-      automationCategory,
-      'View Mode Switching Feature',
-      'Feature toggles only. Rule/frontmatter configuration lives under Properties & Rules > View Mode Rules.'
-    );
-    new Setting(viewModeFeatures)
-      .setName('Enable automatic view mode switching')
-      .setDesc('Automatically switch between Source, Live Preview, and Reading modes based on frontmatter and configured rules.')
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.enableViewModeSwitching)
-          .onChange(async (value) => {
-            this.plugin.settings.enableViewModeSwitching = value;
-            await this.plugin.saveSettings();
-            this.display();
-          })
-      );
-
-    new Setting(viewModeFeatures)
-      .setName('Show inline manual view mode controls')
-      .setDesc('Show Reading / Live / Source buttons in the inline menu panel only.')
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.enableInlineManualViewMode)
-          .onChange(async (value) => {
-            this.plugin.settings.enableInlineManualViewMode = value;
-            await this.plugin.saveSettings();
-          })
-      );
 
     const diagnostics = createSection(
       coreCategory,

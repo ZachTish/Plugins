@@ -128,7 +128,17 @@ export default class ObsidianCalendarPlugin
     if (typeof this.settings.defaultTaskTargetFile !== "string") {
       this.settings.defaultTaskTargetFile = "";
     }
+    const shouldPruneLegacyDateSettings = Boolean(
+      stored && (
+        Object.prototype.hasOwnProperty.call(stored, "secondaryStartProperty") ||
+        Object.prototype.hasOwnProperty.call(stored, "tertiaryStartProperty") ||
+        !Object.prototype.hasOwnProperty.call(stored, "additionalDateProperties")
+      ),
+    );
     logger.setLoggingEnabled(this.settings.enableLogging);
+    if (shouldPruneLegacyDateSettings) {
+      await this.saveData(this.settings);
+    }
   }
 
 

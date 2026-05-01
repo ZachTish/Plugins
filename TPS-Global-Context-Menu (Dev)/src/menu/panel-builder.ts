@@ -15,12 +15,13 @@ import { resolveCustomProperties } from '../resolve-profiles';
 import { ViewModeService } from '../services/view-mode-service';
 import { CheckboxPatterns, type CheckboxStateChar, statusForCheckboxState } from '../core';
 import { parseLinksFromFrontmatterValue, resolveLinkTargetToFile } from '../services/link-target-service';
-import { applyCompanionRulesToFile, createSubitemForParentWithTitle, getDefaultSubitemFolderPath, promptAndCreateSubitemForParent } from '../services/subitem-creation-service';
+import { applyRulesToNewFile, createSubitemForParentWithTitle, getDefaultSubitemFolderPath, promptAndCreateSubitemForParent } from '../services/subitem-creation-service';
 import { resolveLinkValueToFile } from '../handlers/parent-link-format';
 import { PanelActionService } from './panel-action-service';
 import { SubitemMetadataService, SubitemRelationEntry, SubitemRelationKind } from './subitem-metadata-service';
 import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
 import { generateSubitemId, SUBITEM_ID_KEY } from '../utils/subitem-id';
+import type { ProjectedTimeBlock } from '../services/time-tracking-service';
 
 interface SubitemNode {
   file: TFile;
@@ -171,7 +172,7 @@ export class PanelBuilder {
 
         if (file.extension?.toLowerCase() === 'md') {
           try {
-           await this.plugin.frontmatterMutationService.processUserInitiated(file, (frontmatter: any) => {
+            await this.plugin.frontmatterMutationService.processUserInitiated(file, (frontmatter: any) => {
               const mergedTags = mergeNormalizedTags(frontmatter.tags, archiveTag);
               setValueCaseInsensitive(frontmatter, 'tags', mergedTags);
               if (!Array.isArray(frontmatter.activity)) {
@@ -345,9 +346,9 @@ export class PanelBuilder {
         label.textContent = newVal;
         setIcon(icon, this.getStatusIcon(newVal));
       }, options, async (files) => {
-        // Apply companion rules to update icon after status change
+        // Apply rules to update icon after status change
         for (const file of files) {
-          await applyCompanionRulesToFile(this.plugin, file);
+          await applyRulesToNewFile(this.plugin, file);
         }
       });
     });
@@ -1012,6 +1013,7 @@ export class PanelBuilder {
     const parentNavContainer = document.createElement('div');
     parentNavContainer.className = 'tps-gcm-parent-nav-container';
     section.appendChild(parentNavContainer);
+    void this.populateTopNavButtons(rootFile, parentNavContainer);
 
     // Children section
     const childrenSection = document.createElement('div');
@@ -1296,9 +1298,13 @@ export class PanelBuilder {
     });
   }
 
-  private async populateParentNavButton(rootFile: TFile, container: HTMLElement): Promise<void> {
+  private async populateTopNavButtons(rootFile: TFile, container: HTMLElement): Promise<void> {
     container.innerHTML = '';
+    await this.populateParentNavButton(rootFile, container);
+    await this.populateTimeBlockNavButtons(rootFile, container);
+  }
 
+  private async populateParentNavButton(rootFile: TFile, container: HTMLElement): Promise<void> {
     const parentFiles = this.resolveParentFilesFor(rootFile);
 
     if (parentFiles.length === 0) return;
@@ -1342,7 +1348,7 @@ export class PanelBuilder {
               .setIcon('unlink')
               .onClick(() => {
                 void this.plugin.bulkEditService.unlinkFromParent(rootFile, parentFile).then(() => {
-                  void this.populateParentNavButton(rootFile, container);
+                  void this.populateTopNavButtons(rootFile, container);
                 });
               });
           });
@@ -1357,7 +1363,7 @@ export class PanelBuilder {
                 if (count > 0) {
                   new Notice(`Removed ${count} parent link${count === 1 ? '' : 's'}.`);
                 }
-                void this.populateParentNavButton(rootFile, container);
+                void this.populateTopNavButtons(rootFile, container);
               });
             });
         });
@@ -1377,7 +1383,7 @@ export class PanelBuilder {
             .setIcon('unlink')
             .onClick(() => {
               void this.plugin.bulkEditService.unlinkFromParent(rootFile, parentFile).then(() => {
-                void this.populateParentNavButton(rootFile, container);
+                void this.populateTopNavButtons(rootFile, container);
               });
             });
         });
@@ -1392,7 +1398,7 @@ export class PanelBuilder {
               if (count > 0) {
                 new Notice(`Removed ${count} parent link${count === 1 ? '' : 's'}.`);
               }
-              void this.populateParentNavButton(rootFile, container);
+              void this.populateTopNavButtons(rootFile, container);
             });
           });
       });
@@ -1400,6 +1406,66 @@ export class PanelBuilder {
     });
 
     container.appendChild(navButton);
+  }
+
+  private async populateTimeBlockNavButtons(rootFile: TFile, container: HTMLElement): Promise<void> {
+    const projections = await this.plugin.timeTrackingService.getProjectedTimeBlocksForFile(rootFile);
+    const externalBlocks = projections.filter((entry) => entry.isExternal);
+    const runningBlock = externalBlocks.find((entry) => entry.status === 'working') || null;
+    const completedBlocks = externalBlocks.filter((entry) => entry.status === 'complete');
+
+    if (runningBlock) {
+      const runningButton = document.createElement('button');
+      runningButton.type = 'button';
+      runningButton.className = 'tps-gcm-parent-nav-button tps-gcm-time-block-nav-button';
+      runningButton.title = `Open running time block in ${runningBlock.sourceFile.basename}`;
+      setIcon(runningButton, 'timer');
+
+      const label = document.createElement('span');
+      label.className = 'tps-gcm-parent-nav-label';
+      runningButton.appendChild(label);
+      this.bindRunningTimeBlockLabel(label, runningBlock);
+
+      addSafeClickListener(runningButton, () => {
+        void this.openTimeBlock(runningBlock);
+      });
+      container.appendChild(runningButton);
+    }
+
+    if (completedBlocks.length > 0) {
+      const completedButton = document.createElement('button');
+      completedButton.type = 'button';
+      completedButton.className = 'tps-gcm-parent-nav-button tps-gcm-time-block-nav-button';
+      completedButton.title = completedBlocks.length === 1 ? 'Open linked time block' : 'Open linked time blocks';
+      setIcon(completedButton, 'clock-3');
+
+      const label = document.createElement('span');
+      label.className = 'tps-gcm-parent-nav-label';
+      label.textContent = completedBlocks.length === 1 ? 'Time Block' : `Time Blocks (${completedBlocks.length})`;
+      completedButton.appendChild(label);
+
+      addSafeClickListener(completedButton, () => {
+        if (completedBlocks.length === 1) {
+          void this.openTimeBlock(completedBlocks[0]);
+          return;
+        }
+
+        const menu = new Menu();
+        for (const block of completedBlocks) {
+          menu.addItem((item) => {
+            item
+              .setTitle(this.getTimeBlockMenuLabel(block))
+              .setIcon('clock-3')
+              .onClick(() => {
+                void this.openTimeBlock(block);
+              });
+          });
+        }
+        menu.showAtPosition({ x: completedButton.getBoundingClientRect().left, y: completedButton.getBoundingClientRect().bottom });
+      });
+
+      container.appendChild(completedButton);
+    }
   }
 
   private resolveParentFilesFor(rootFile: TFile): TFile[] {
@@ -1467,7 +1533,7 @@ export class PanelBuilder {
     if (navContainer) {
       const isCollapsed = panel?.classList.contains('tps-gcm-subitems-panel--collapsed') ?? false;
       navContainer.style.display = isCollapsed ? 'none' : '';
-      void this.populateParentNavButton(rootFile, navContainer);
+      void this.populateTopNavButtons(rootFile, navContainer);
     }
     try {
       const tree = await this.buildSubitemTree(rootFile);
@@ -2343,6 +2409,58 @@ export class PanelBuilder {
         }
       } catch {
         // Highlight is purely cosmetic
+      }
+    }, 80);
+  }
+
+  private bindRunningTimeBlockLabel(labelEl: HTMLElement, block: ProjectedTimeBlock): void {
+    const update = () => {
+      if (!labelEl.isConnected) return false;
+      const elapsedMs = Math.max(0, Date.now() - block.start.getTime());
+      labelEl.textContent = `Running ${this.formatElapsedForNav(elapsedMs)}`;
+      return true;
+    };
+
+    if (!update()) return;
+    const timerId = window.setInterval(() => {
+      if (!update()) {
+        window.clearInterval(timerId);
+      }
+    }, 1000);
+  }
+
+  private formatElapsedForNav(elapsedMs: number): string {
+    const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    if (hours > 0) return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  private getTimeBlockMenuLabel(block: ProjectedTimeBlock): string {
+    const timestamp = block.start.toLocaleString();
+    return `${block.label || this.getFileDisplayTitle(block.sourceFile)} - ${timestamp}`;
+  }
+
+  private async openTimeBlock(block: ProjectedTimeBlock): Promise<void> {
+    await this.plugin.openFileInLeaf(block.sourceFile, false, () => this.app.workspace.getLeaf(false), {
+      revealLeaf: true,
+      ignoreCanvasDragGuard: true,
+    });
+
+    window.setTimeout(() => {
+      const leaf = this.app.workspace.getLeavesOfType('markdown')
+        .find((candidate: any) => candidate?.view?.file?.path === block.sourceFile.path);
+      const view = leaf?.view as MarkdownView | undefined;
+      if (!(view instanceof MarkdownView)) return;
+
+      const viewState = (view as any).getState?.() || {};
+      const isReading = viewState.mode === 'preview';
+      if (isReading) {
+        this.scrollInReadingMode(view, block.lineNumber, block.label);
+      } else {
+        this.scrollInEditorMode(view, block.lineNumber);
       }
     }, 80);
   }

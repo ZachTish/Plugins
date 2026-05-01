@@ -9,68 +9,16 @@ import {
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, WidgetType, type ViewUpdate } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 import { AutoBaseEmbedSettingTab } from "./settings-tab";
-
-// ============ Types ============
-
-export interface BaseEmbedConditions {
-  folders?: string[];           // Only embed if note is IN these folders
-  excludeFolders?: string[];    // Don't embed if note is in these folders
-  paths?: string[];             // Only embed if note path/basename matches these patterns
-  excludePaths?: string[];      // Don't embed if note path/basename matches these patterns
-  tags?: string[];              // Only embed if note has one of these tags
-  excludeTags?: string[];       // Don't embed if note has one of these tags
-  requiredStatuses?: string[];  // Only embed if status matches one of these values
-  ignoreStatuses?: string[];    // Don't embed if status matches one of these values
-  requireTagMatchingNoteName?: boolean; // Require tag that exactly matches note basename (case-insensitive)
-  excludeTagMatchingNoteName?: boolean; // Exclude when note has a tag matching note basename (case-insensitive)
-  requireProperty?: string;     // Property must exist (e.g., "scheduled")
-  requirePropertyEmpty?: string; // Property must be empty or missing (e.g., "scheduled")
-  propertyEquals?: Array<{ key: string; value: string }>;   // Property must equal value
-  propertyNotEquals?: Array<{ key: string; value: string }>; // Property must NOT equal value
-}
-
-export interface BaseEmbedRule {
-  id: string;
-  basePath: string;
-  enabled: boolean;
-  conditions: BaseEmbedConditions;
-  initialState?: "collapsed" | "expanded" | "default";
-  renderPlacement?: "floating" | "after-title" | "after-content";
-}
-
-export interface AutoBaseEmbedSettings {
-  enabled: boolean;
-  enableCanvasEmbeds: boolean;
-  enableCanvasNodeEmbeds: boolean;
-  debugLogging: boolean;
-  renderMode: "floating" | "inline";
-  inlinePlacement: "after-title" | "after-content";
-  rules: BaseEmbedRule[];
-  excludeFiles: string;
-  defaultExpanded: boolean;
-  accordionMode: boolean;
-  alwaysExpanded: boolean;
-  manualExpansionState?: Record<string, boolean>;
-  // Legacy fields kept for cleanup only
-  basePath?: string;
-  basePaths?: string;
-  excludeFolders?: string;
-}
-
-const DEFAULT_SETTINGS: AutoBaseEmbedSettings = {
-  enabled: true,
-  enableCanvasEmbeds: false,
-  enableCanvasNodeEmbeds: false,
-  debugLogging: false,
-  renderMode: "floating",
-  inlinePlacement: "after-content",
-  rules: [],
-  excludeFiles: "",
-  defaultExpanded: false,
-  accordionMode: false,
-  alwaysExpanded: false,
-  manualExpansionState: {},
-};
+import * as logger from "./logger";
+import {
+  DEFAULT_SETTINGS,
+  sanitizeAutoBaseEmbedSettings,
+  type AutoBaseEmbedSettings,
+  type BaseEmbedConditions,
+  type BaseEmbedRule,
+  type EmbedRuleKind,
+  type RuleRenderPlacement,
+} from './settings-model';
 
 const EMBED_CLASS = "tps-auto-base-embed";
 const STYLE_ID = "tps-auto-base-embed-style";
@@ -82,7 +30,6 @@ const COLLAPSED_ATTR = "data-tps-auto-base-embed-collapsed";
 const RENDERING_ATTR = "data-tps-auto-base-embed-rendering";
 const BUILD_STAMP = "2026-03-15T23:05:00Z";
 const REFRESH_COOLDOWN_MS = 1500;
-type RuleRenderPlacement = "floating" | "after-title" | "after-content";
 
 class SourceEndEmbedWidget extends WidgetType {
   constructor(private readonly filePath: string) {
@@ -125,6 +72,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   private renderSignatureByLeaf = new WeakMap<WorkspaceLeaf, string>();
   private lastRefreshMetaByLeaf = new WeakMap<WorkspaceLeaf, { signature: string; at: number }>();
   private expandedPanels = new WeakMap<WorkspaceLeaf, Set<string>>();
+  private activeTabsByLeaf = new WeakMap<WorkspaceLeaf, Map<RuleRenderPlacement, string>>();
   private currentFileByLeaf = new WeakMap<WorkspaceLeaf, string>();
   private headerSyncTimers = new WeakMap<WorkspaceLeaf, number>();
   private titleReattachObservers = new WeakMap<WorkspaceLeaf, MutationObserver>();
@@ -153,6 +101,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     observer: MutationObserver | null;
     nodeOverlays: Map<HTMLElement, HTMLElement>; // nodeEl → overlay container
     nodeExpanded: Map<HTMLElement, Set<string>>; // nodeEl → expanded basePaths
+    nodeActiveTabs: Map<HTMLElement, string>;    // nodeEl → active rule key
     nodeSig: Map<HTMLElement, string>;           // nodeEl → last render signature
   }>();
   /** Guards against concurrent scans for the same node element. */
@@ -199,13 +148,11 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   }
 
   private debugInfo(message: string, ...args: unknown[]): void {
-    if (!this.settings?.debugLogging) return;
-    console.info(message, ...args);
+    logger.info(message, ...args);
   }
 
   private debugWarn(message: string, ...args: unknown[]): void {
-    if (!this.settings?.debugLogging) return;
-    console.warn(message, ...args);
+    logger.warn(message, ...args);
   }
 
   async onload(): Promise<void> {
@@ -518,6 +465,23 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     return existing;
   }
 
+  private getActiveTabMap(leaf: WorkspaceLeaf): Map<RuleRenderPlacement, string> {
+    let existing = this.activeTabsByLeaf.get(leaf);
+    if (!existing) {
+      existing = new Map<RuleRenderPlacement, string>();
+      this.activeTabsByLeaf.set(leaf, existing);
+    }
+    return existing;
+  }
+
+  private getActiveTabForPlacement(leaf: WorkspaceLeaf, placement: RuleRenderPlacement): string | null {
+    return this.activeTabsByLeaf.get(leaf)?.get(placement) ?? null;
+  }
+
+  private setActiveTabForPlacement(leaf: WorkspaceLeaf, placement: RuleRenderPlacement, ruleKey: string): void {
+    this.getActiveTabMap(leaf).set(placement, ruleKey);
+  }
+
   private checkAndReattachOverlays(): void {
     if (!this.settings.enabled) return;
     const leaves = this.getSupportedLeaves();
@@ -685,43 +649,16 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     const loaded = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
-    let updatedRulePlacements = false;
-    if (!this.settings.manualExpansionState || typeof this.settings.manualExpansionState !== "object") {
-      this.settings.manualExpansionState = {};
-    }
-
-    // Legacy cleanup only: do not auto-create rules from old settings.
-    const cleanedRules = this.settings.rules.filter((rule) => !this.isLegacyGeneratedRule(rule));
-    const removedLegacyRules = cleanedRules.length !== this.settings.rules.length;
-    if (removedLegacyRules) {
-      this.settings.rules = cleanedRules;
-    }
-    const legacyDefaultPlacement: RuleRenderPlacement = this.settings.renderMode === 'inline'
-      ? this.settings.inlinePlacement
-      : 'floating';
-    for (const rule of this.settings.rules) {
-      if (rule.renderPlacement !== 'floating' && rule.renderPlacement !== 'after-title' && rule.renderPlacement !== 'after-content') {
-        rule.renderPlacement = legacyDefaultPlacement;
-        updatedRulePlacements = true;
-      }
-    }
-    const hadLegacyFields =
-      typeof this.settings.basePaths === "string" ||
-      typeof this.settings.basePath === "string" ||
-      typeof this.settings.excludeFolders === "string";
-    if (hadLegacyFields) {
-      delete this.settings.basePaths;
-      delete this.settings.basePath;
-      delete this.settings.excludeFolders;
-    }
-
-    if (removedLegacyRules || hadLegacyFields || updatedRulePlacements) {
+    const { settings, didChange } = sanitizeAutoBaseEmbedSettings(loaded, (rule) => this.isLegacyGeneratedRule(rule));
+    this.settings = settings;
+    logger.setLoggingEnabled(this.settings.debugLogging === true);
+    if (didChange) {
       await this.saveData(this.settings);
     }
   }
 
   async saveSettings(): Promise<void> {
+    logger.setLoggingEnabled(this.settings.debugLogging === true);
     await this.saveData(this.settings);
     this.refreshAllSupportedViews({ resetExpanded: true });
   }
@@ -1011,6 +948,256 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       }
     }
     return impacted;
+  }
+
+  private getRuleKind(rule: BaseEmbedRule): EmbedRuleKind {
+    return rule.kind === 'dataviewjs' ? 'dataviewjs' : 'base';
+  }
+
+  private getRuleStateKey(rule: BaseEmbedRule): string {
+    if (this.getRuleKind(rule) === 'dataviewjs') {
+      return `dataviewjs:${String(rule.id || '').trim()}`;
+    }
+    return normalizePath(String(rule.basePath || ''));
+  }
+
+  private getRuleDependencyPath(rule: BaseEmbedRule): string | null {
+    if (this.getRuleKind(rule) !== 'base') return null;
+    const normalized = normalizePath(String(rule.basePath || ''));
+    return normalized || null;
+  }
+
+  private getRuleDisplayLabel(rule: BaseEmbedRule): string {
+    if (this.getRuleKind(rule) === 'dataviewjs') {
+      const firstMeaningfulLine = String(rule.dataviewjsCode || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean);
+      return firstMeaningfulLine ? `DataviewJS: ${firstMeaningfulLine}` : 'DataviewJS';
+    }
+    const basePath = String(rule.basePath || '');
+    return basePath.replace(/.*\//, '').replace(/\.base$/i, '') || 'Base';
+  }
+
+  private getRuleSignatureKey(rule: BaseEmbedRule, leaf: WorkspaceLeaf): string {
+    return JSON.stringify({
+      id: rule.id,
+      kind: this.getRuleKind(rule),
+      basePath: normalizePath(String(rule.basePath || '')),
+      dataviewjsCode: String(rule.dataviewjsCode || ''),
+      initialState: rule.initialState || 'default',
+      placement: this.getEffectiveRulePlacement(rule, leaf),
+    });
+  }
+
+  private getRuleRenderMarkdown(rule: BaseEmbedRule): string {
+    if (this.getRuleKind(rule) === 'dataviewjs') {
+      const code = String(rule.dataviewjsCode || '').replace(/\r\n/g, '\n').trim();
+      return `\`\`\`dataviewjs\n${code}\n\`\`\``;
+    }
+    return `![[${rule.basePath}]]`;
+  }
+
+  private getRenderableRulesForSource(rules: BaseEmbedRule[], sourcePath: string): BaseEmbedRule[] {
+    return rules.filter((rule) => !(this.getRuleKind(rule) === 'base' && sourcePath === rule.basePath));
+  }
+
+  private resolveInitialActiveRuleKey(
+    rules: BaseEmbedRule[],
+    preferredKey: string | null | undefined,
+    expandedSet?: Set<string>,
+  ): string | null {
+    const ruleKeys = rules.map((rule) => this.getRuleStateKey(rule));
+    if (preferredKey && ruleKeys.includes(preferredKey)) {
+      return preferredKey;
+    }
+    if (expandedSet) {
+      const expandedKey = ruleKeys.find((ruleKey) => expandedSet.has(ruleKey));
+      if (expandedKey) return expandedKey;
+    }
+    return ruleKeys[0] ?? null;
+  }
+
+  private async buildTabbedPanelsForPlacement(
+    leaf: WorkspaceLeaf,
+    placement: RuleRenderPlacement,
+    rules: BaseEmbedRule[],
+    sourcePath: string,
+    view: any,
+    renderToken: number,
+    container: HTMLElement,
+  ): Promise<number> {
+    const activeRuleKey = this.resolveInitialActiveRuleKey(
+      rules,
+      this.getActiveTabForPlacement(leaf, placement),
+      this.getExpandedSet(leaf),
+    );
+    const tabGroup = document.createElement('div');
+    tabGroup.className = `${EMBED_CLASS}__tab-group`;
+
+    const tabBar = document.createElement('div');
+    tabBar.className = `${EMBED_CLASS}__tabs`;
+    tabBar.setAttribute('role', 'tablist');
+    tabGroup.appendChild(tabBar);
+
+    const panelContainer = document.createElement('div');
+    panelContainer.className = `${EMBED_CLASS}__tab-panels`;
+    tabGroup.appendChild(panelContainer);
+    container.appendChild(tabGroup);
+
+    const renderedPanels = new Map<string, HTMLElement>();
+    const tabButtons = new Map<string, HTMLButtonElement>();
+
+    const setActive = (ruleKey: string) => {
+      this.setActiveTabForPlacement(leaf, placement, ruleKey);
+      for (const [key, panel] of renderedPanels) {
+        panel.hidden = key !== ruleKey;
+      }
+      for (const [key, button] of tabButtons) {
+        const isActive = key === ruleKey;
+        button.classList.toggle(`${EMBED_CLASS}__tab--active`, isActive);
+        button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        button.tabIndex = isActive ? 0 : -1;
+      }
+    };
+
+    for (const rule of rules) {
+      if (this.renderTokens.get(leaf) !== renderToken) return 0;
+      const ruleKey = this.getRuleStateKey(rule);
+      const tabButton = document.createElement('button');
+      tabButton.type = 'button';
+      tabButton.className = `${EMBED_CLASS}__tab`;
+      tabButton.textContent = this.getRuleDisplayLabel(rule);
+      tabButton.setAttribute('role', 'tab');
+      tabButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setActive(ruleKey);
+      });
+      tabBar.appendChild(tabButton);
+      tabButtons.set(ruleKey, tabButton);
+
+      const panel = await this.buildPanel(leaf, rule, sourcePath, view, renderToken, panelContainer);
+      if (!panel) return 0;
+      renderedPanels.set(ruleKey, panel);
+    }
+
+    if (renderedPanels.size === 0) {
+      tabGroup.remove();
+      return 0;
+    }
+
+    setActive(activeRuleKey && renderedPanels.has(activeRuleKey) ? activeRuleKey : Array.from(renderedPanels.keys())[0]);
+    return renderedPanels.size;
+  }
+
+  private async buildTabbedPanelsForCanvasNode(
+    nodeEl: HTMLElement,
+    overlay: HTMLElement,
+    rules: BaseEmbedRule[],
+    sourcePath: string,
+    expandedSet: Set<string>,
+    activeRuleKey: string | null | undefined,
+    setActiveRuleKey: (ruleKey: string) => void,
+  ): Promise<number> {
+    const initialActiveRuleKey = this.resolveInitialActiveRuleKey(rules, activeRuleKey, expandedSet);
+    const tabGroup = document.createElement('div');
+    tabGroup.className = `${EMBED_CLASS}__tab-group`;
+
+    const tabBar = document.createElement('div');
+    tabBar.className = `${EMBED_CLASS}__tabs`;
+    tabBar.setAttribute('role', 'tablist');
+    tabGroup.appendChild(tabBar);
+
+    const panelContainer = document.createElement('div');
+    panelContainer.className = `${EMBED_CLASS}__tab-panels`;
+    tabGroup.appendChild(panelContainer);
+    overlay.appendChild(tabGroup);
+
+    const renderedPanels = new Map<string, HTMLElement>();
+    const tabButtons = new Map<string, HTMLButtonElement>();
+
+    const setActive = (ruleKey: string) => {
+      setActiveRuleKey(ruleKey);
+      for (const [key, panel] of renderedPanels) {
+        panel.hidden = key !== ruleKey;
+      }
+      for (const [key, button] of tabButtons) {
+        const isActive = key === ruleKey;
+        button.classList.toggle(`${EMBED_CLASS}__tab--active`, isActive);
+        button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        button.tabIndex = isActive ? 0 : -1;
+      }
+    };
+
+    for (const rule of rules) {
+      const ruleKey = this.getRuleStateKey(rule);
+      const tabButton = document.createElement('button');
+      tabButton.type = 'button';
+      tabButton.className = `${EMBED_CLASS}__tab`;
+      tabButton.textContent = this.getRuleDisplayLabel(rule);
+      tabButton.setAttribute('role', 'tab');
+      tabButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setActive(ruleKey);
+      });
+      tabBar.appendChild(tabButton);
+      tabButtons.set(ruleKey, tabButton);
+
+      const panel = await this.buildCanvasNodePanel(nodeEl, panelContainer, rule, sourcePath, expandedSet);
+      if (!panel) return 0;
+      renderedPanels.set(ruleKey, panel);
+    }
+
+    if (renderedPanels.size === 0) {
+      tabGroup.remove();
+      return 0;
+    }
+
+    setActive(initialActiveRuleKey && renderedPanels.has(initialActiveRuleKey) ? initialActiveRuleKey : Array.from(renderedPanels.keys())[0]);
+    return renderedPanels.size;
+  }
+
+  private async renderRuleIntoTarget(
+    rule: BaseEmbedRule,
+    renderTarget: HTMLElement,
+    sourcePath: string,
+    view: MarkdownView | null,
+    panel: HTMLElement,
+  ): Promise<void> {
+    if (this.getRuleKind(rule) === 'dataviewjs') {
+      await MarkdownRenderer.render(this.app, this.getRuleRenderMarkdown(rule), renderTarget, sourcePath, view as any);
+      return;
+    }
+
+    const baseFile = this.app.vault.getAbstractFileByPath(rule.basePath);
+    if (!(baseFile instanceof TFile)) return;
+
+    let usedEmbedRegistry = false;
+    const embedRegistry = (this.app as any).embedRegistry;
+    const embedCtor = embedRegistry?.embedByExtension?.get?.('base');
+    if (embedCtor) {
+      try {
+        const ctx = { app: this.app, sourcePath };
+        const embed = embedCtor(ctx, baseFile, '');
+        if (embed?.containerEl) {
+          renderTarget.appendChild(embed.containerEl);
+          try {
+            this.addChild(embed as any);
+          } catch {
+            try { if (typeof embed.load === 'function') embed.load(); } catch { /* ignore */ }
+          }
+          this.panelEmbeds.set(panel, embed);
+          usedEmbedRegistry = true;
+        }
+      } catch (error) {
+        this.debugWarn('[TPS Auto Base Embed] embedRegistry failed, falling back to MarkdownRenderer', error);
+      }
+    }
+    if (!usedEmbedRegistry) {
+      await MarkdownRenderer.render(this.app, this.getRuleRenderMarkdown(rule), renderTarget, sourcePath, view as any);
+    }
   }
 
   private getManualExpansionState(basePath: string): boolean | null {
@@ -1749,7 +1936,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     rules: BaseEmbedRule[],
   ): string {
     const ruleKey = rules
-      .map((rule) => `${rule.id}:${normalizePath(rule.basePath)}:${rule.initialState || "default"}:${this.getEffectiveRulePlacement(rule, leaf)}`)
+      .map((rule) => this.getRuleSignatureKey(rule, leaf))
       .join("|");
     return `${file.path}::${ruleKey}`;
   }
@@ -1921,14 +2108,14 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     if (!this.expandedPanels.has(leaf)) {
       const initialSet = new Set<string>();
       for (const rule of matchingRules) {
-        const manualState = this.getManualExpansionState(rule.basePath);
+        const manualState = this.getManualExpansionState(this.getRuleStateKey(rule));
         let shouldExpand = this.settings.defaultExpanded;
         if (rule.initialState === "expanded") shouldExpand = true;
         if (rule.initialState === "collapsed") shouldExpand = false;
         if (manualState !== null) shouldExpand = manualState;
 
         if (shouldExpand) {
-          initialSet.add(rule.basePath);
+          initialSet.add(this.getRuleStateKey(rule));
         }
       }
       this.expandedPanels.set(leaf, initialSet);
@@ -1954,7 +2141,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     ) {
       for (const [placement, rules] of matchingRuleGroups) {
         const container = this.getHostForPlacement(leaf, placement);
-        container?.setAttribute("data-base-paths", rules.map((r) => r.basePath).join(","));
+        container?.setAttribute("data-base-paths", rules.map((r) => this.getRuleDependencyPath(r)).filter(Boolean).join(","));
         container?.setAttribute("data-source-path", file.path);
       }
       return;
@@ -1967,7 +2154,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     ) {
       for (const [placement, rules] of matchingRuleGroups) {
         const container = this.getHostForPlacement(leaf, placement);
-        container?.setAttribute("data-base-paths", rules.map((r) => r.basePath).join(","));
+        container?.setAttribute("data-base-paths", rules.map((r) => this.getRuleDependencyPath(r)).filter(Boolean).join(","));
         container?.setAttribute("data-source-path", file.path);
       }
       return;
@@ -1976,10 +2163,10 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     const nextToken = (this.renderTokens.get(leaf) ?? 0) + 1;
     this.renderTokens.set(leaf, nextToken);
 
-    const basePaths = matchingRules.map((r) => r.basePath);
+    const ruleStateKeys = matchingRules.map((rule) => this.getRuleStateKey(rule));
     const expanded = this.getExpandedSet(leaf);
     for (const path of Array.from(expanded)) {
-      if (!basePaths.includes(path)) expanded.delete(path);
+      if (!ruleStateKeys.includes(path)) expanded.delete(path);
     }
 
     // Seed the cooldown timestamp BEFORE rendering so the metadataCache.changed
@@ -2003,19 +2190,31 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         return;
       }
       this.clearPanels(container);
-      container.setAttribute("data-base-paths", rules.map((r) => r.basePath).join(","));
+      const renderableRules = this.getRenderableRulesForSource(rules, file.path);
+      container.setAttribute("data-base-paths", renderableRules.map((r) => this.getRuleDependencyPath(r)).filter(Boolean).join(","));
       container.setAttribute("data-source-path", file.path);
 
-      for (const rule of rules) {
-        if (this.renderTokens.get(leaf) !== nextToken) return;
-        if (file.path === rule.basePath) continue;
-        const baseFile = this.app.vault.getAbstractFileByPath(rule.basePath);
-        if (!(baseFile instanceof TFile)) continue;
-        const panel = await this.buildPanel(leaf, baseFile, rule.basePath, file.path, view as any, nextToken, container);
+      if (renderableRules.length === 0) {
+        continue;
+      }
+
+      if (renderableRules.length === 1) {
+        const panel = await this.buildPanel(leaf, renderableRules[0], file.path, view as any, nextToken, container);
         if (panel && this.renderTokens.get(leaf) === nextToken) {
           renderedPanelCount += 1;
         }
+        continue;
       }
+
+      renderedPanelCount += await this.buildTabbedPanelsForPlacement(
+        leaf,
+        placement,
+        renderableRules,
+        file.path,
+        view as any,
+        nextToken,
+        container,
+      );
     }
 
     if (renderedPanelCount === 0) {
@@ -2196,8 +2395,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
   private async buildPanel(
     leaf: WorkspaceLeaf,
-    baseFile: TFile,
-    basePath: string,
+    rule: BaseEmbedRule,
     sourcePath: string,
     view: any,
     renderToken: number,
@@ -2206,21 +2404,22 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     if (this.renderTokens.get(leaf) !== renderToken) return null;
     const panel = document.createElement("div");
     panel.className = `${EMBED_CLASS}__panel`;
+    const ruleKey = this.getRuleStateKey(rule);
+    const displayLabel = this.getRuleDisplayLabel(rule);
     const alwaysExpanded = this.settings.alwaysExpanded;
-    const isExpanded = alwaysExpanded || this.getExpandedSet(leaf).has(basePath);
+    const isExpanded = alwaysExpanded || this.getExpandedSet(leaf).has(ruleKey);
     panel.setAttribute(COLLAPSED_ATTR, "false");
     panel.setAttribute(RENDERING_ATTR, "true");
-    panel.setAttribute("data-base-path", basePath);
+    panel.setAttribute("data-base-path", ruleKey);
 
     if (!alwaysExpanded) {
-      const baseLabel = basePath.replace(/.*\//, "").replace(/\.base$/i, "");
       panel.innerHTML = `
         <div class="${EMBED_CLASS}__bar">
           <div class="${EMBED_CLASS}__bar-left">
-            <span class="${EMBED_CLASS}__bar-label">${baseLabel}</span>
+            <span class="${EMBED_CLASS}__bar-label">${displayLabel}</span>
           </div>
           <div class="${EMBED_CLASS}__bar-right">
-            <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded base">▸</button>
+            <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded panel">▸</button>
           </div>
         </div>
         <div class="${EMBED_CLASS}__content"></div>
@@ -2260,11 +2459,11 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         if (toggle) toggle.textContent = collapsed ? "▾" : "▸";
         const expandedSet = this.getExpandedSet(leaf);
         if (collapsed) {
-          expandedSet.add(basePath);
-          this.setManualExpansionState(basePath, true);
+          expandedSet.add(ruleKey);
+          this.setManualExpansionState(ruleKey, true);
         } else {
-          expandedSet.delete(basePath);
-          this.setManualExpansionState(basePath, false);
+          expandedSet.delete(ruleKey);
+          this.setManualExpansionState(ruleKey, false);
         }
         if (contentEl) {
           if (!collapsed) {
@@ -2323,35 +2522,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     // app.embedRegistry instantiates the Bases embed component directly,
     // bypassing markdown parsing and metadata registration entirely while
     // still passing the correct sourcePath for query/filter resolution.
-    let usedEmbedRegistry = false;
-    {
-      const embedRegistry = (this.app as any).embedRegistry;
-      const embedCtor = embedRegistry?.embedByExtension?.get?.("base");
-      if (embedCtor) {
-        try {
-          const ctx = { app: this.app, sourcePath };
-          const embed = embedCtor(ctx, baseFile, "");
-          if (embed?.containerEl) {
-            renderTarget.appendChild(embed.containerEl);
-            // addChild registers the embed in Obsidian's component tree and calls
-            // embed.load() (which triggers onload). This is critical for multiple
-            // embeds: without it, embed instances are orphaned and may conflict.
-            try {
-              this.addChild(embed as any);
-            } catch {
-              try { if (typeof embed.load === "function") embed.load(); } catch { /* ignore */ }
-            }
-            this.panelEmbeds.set(panel, embed);
-            usedEmbedRegistry = true;
-          }
-        } catch (e) {
-          this.debugWarn("[TPS Auto Base Embed] embedRegistry failed, falling back to MarkdownRenderer", e);
-        }
-      }
-    }
-    if (!usedEmbedRegistry) {
-      await MarkdownRenderer.render(this.app, `![[${basePath}]]`, renderTarget, sourcePath, view);
-    }
+    await this.renderRuleIntoTarget(rule, renderTarget, sourcePath, view as MarkdownView | null, panel);
     if (this.renderTokens.get(leaf) !== renderToken) return null;
     this.syncEmbeddedPanelMode(contentEl, panel);
     this.attachHeaderObserver(leaf, contentEl, panel);
@@ -2360,7 +2531,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     }
 
     // Guard: if this panel wasn't explicitly expanded by the user, keep it collapsed after initial render.
-    if (!alwaysExpanded && !this.getExpandedSet(leaf).has(basePath)) {
+    if (!alwaysExpanded && !this.getExpandedSet(leaf).has(ruleKey)) {
       panel.setAttribute(COLLAPSED_ATTR, "true");
       const toggleBtn = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
       if (toggleBtn) toggleBtn.textContent = "▸";
@@ -2610,6 +2781,40 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         transition: opacity 0.15s ease, visibility 0.15s ease;
       }
       .${EMBED_CLASS}__panel {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .${EMBED_CLASS}__tab-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .${EMBED_CLASS}__tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .${EMBED_CLASS}__tab {
+        appearance: none;
+        border: 1px solid var(--background-modifier-border);
+        background: var(--background-secondary);
+        color: var(--text-muted);
+        border-radius: 999px;
+        padding: 0.28em 0.7em;
+        line-height: 1.2;
+        cursor: pointer;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .${EMBED_CLASS}__tab--active {
+        background: var(--interactive-accent);
+        color: var(--text-on-accent, var(--text-normal));
+        border-color: var(--interactive-accent);
+      }
+      .${EMBED_CLASS}__tab-panels {
         display: flex;
         flex-direction: column;
         gap: 6px;
@@ -3191,6 +3396,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       observer: null as MutationObserver | null,
       nodeOverlays: new Map<HTMLElement, HTMLElement>(),
       nodeExpanded: new Map<HTMLElement, Set<string>>(),
+      nodeActiveTabs: new Map<HTMLElement, string>(),
       nodeSig: new Map<HTMLElement, string>(),
     };
     this.canvasLeafData.set(leaf, data);
@@ -3255,19 +3461,21 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       activeNodeEls.add(nodeEl);
 
       const matchingRules = this.settings.rules.filter(r => this.shouldEmbedRule(r, file));
+      const renderableRules = this.getRenderableRulesForSource(matchingRules, file.path);
 
-      if (matchingRules.length === 0) {
+      if (renderableRules.length === 0) {
         const overlay = data.nodeOverlays.get(nodeEl);
         if (overlay) {
           this.clearPanels(overlay);
           overlay.remove();
           data.nodeOverlays.delete(nodeEl);
+          data.nodeActiveTabs.delete(nodeEl);
           data.nodeSig.delete(nodeEl);
         }
         continue;
       }
 
-      const newSig = `canvas::${file.path}::${matchingRules.map(r => r.id + ":" + r.basePath).join("|")}`;
+      const newSig = `canvas::${file.path}::${renderableRules.map((rule) => this.getRuleSignatureKey(rule, leaf)).join('|')}`;
       const existingSig = data.nodeSig.get(nodeEl);
       const existingOverlay = data.nodeOverlays.get(nodeEl);
 
@@ -3299,13 +3507,13 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         // Get or initialise expanded set for this node
         if (!data.nodeExpanded.has(nodeEl)) {
           const initial = new Set<string>();
-          for (const rule of matchingRules) {
-            const manualState = this.getManualExpansionState(rule.basePath);
+          for (const rule of renderableRules) {
+            const manualState = this.getManualExpansionState(this.getRuleStateKey(rule));
             let expand = this.settings.defaultExpanded;
             if (rule.initialState === "expanded") expand = true;
             if (rule.initialState === "collapsed") expand = false;
             if (manualState !== null) expand = manualState;
-            if (expand) initial.add(rule.basePath);
+            if (expand) initial.add(this.getRuleStateKey(rule));
           }
           data.nodeExpanded.set(nodeEl, initial);
         }
@@ -3318,11 +3526,18 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         // Build new panels
         const excludedFiles = this.parseList(this.settings.excludeFiles);
         if (!excludedFiles.some(p => normalizePath(p) === file.path)) {
-          for (const rule of matchingRules) {
-            if (file.path === rule.basePath) continue;
-            const baseFile = this.app.vault.getAbstractFileByPath(rule.basePath);
-            if (!(baseFile instanceof TFile)) continue;
-            await this.buildCanvasNodePanel(nodeEl, overlay, baseFile, rule.basePath, file.path, expandedSet);
+          if (renderableRules.length === 1) {
+            await this.buildCanvasNodePanel(nodeEl, overlay, renderableRules[0], file.path, expandedSet);
+          } else {
+            await this.buildTabbedPanelsForCanvasNode(
+              nodeEl,
+              overlay,
+              renderableRules,
+              file.path,
+              expandedSet,
+              data.nodeActiveTabs.get(nodeEl),
+              (ruleKey) => data.nodeActiveTabs.set(nodeEl, ruleKey),
+            );
           }
         }
 
@@ -3332,6 +3547,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         if (!overlay.querySelector(`.${EMBED_CLASS}__panel`)) {
           overlay.remove();
           data.nodeOverlays.delete(nodeEl);
+          data.nodeActiveTabs.delete(nodeEl);
           data.nodeSig.delete(nodeEl);
         }
       } finally {
@@ -3345,6 +3561,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         this.clearPanels(overlay);
         overlay.remove();
         data.nodeOverlays.delete(nodeEl);
+        data.nodeActiveTabs.delete(nodeEl);
         data.nodeSig.delete(nodeEl);
       }
     }
@@ -3374,28 +3591,28 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   private async buildCanvasNodePanel(
     nodeEl: HTMLElement,
     overlay: HTMLElement,
-    baseFile: TFile,
-    basePath: string,
+    rule: BaseEmbedRule,
     sourcePath: string,
     expandedSet: Set<string>,
   ): Promise<HTMLElement | null> {
     const panel = document.createElement("div");
     panel.className = `${EMBED_CLASS}__panel`;
+    const ruleKey = this.getRuleStateKey(rule);
+    const displayLabel = this.getRuleDisplayLabel(rule);
     const alwaysExpanded = this.settings.alwaysExpanded;
-    const isExpanded = alwaysExpanded || expandedSet.has(basePath);
+    const isExpanded = alwaysExpanded || expandedSet.has(ruleKey);
     panel.setAttribute(COLLAPSED_ATTR, "false");
     panel.setAttribute(RENDERING_ATTR, "true");
-    panel.setAttribute("data-base-path", basePath);
+    panel.setAttribute("data-base-path", ruleKey);
 
     if (!alwaysExpanded) {
-      const baseLabel = basePath.replace(/.*\//, "").replace(/\.base$/i, "");
       panel.innerHTML = `
         <div class="${EMBED_CLASS}__bar">
           <div class="${EMBED_CLASS}__bar-left">
-            <span class="${EMBED_CLASS}__bar-label">${baseLabel}</span>
+            <span class="${EMBED_CLASS}__bar-label">${displayLabel}</span>
           </div>
           <div class="${EMBED_CLASS}__bar-right">
-            <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded base">▸</button>
+            <button class="${EMBED_CLASS}__toggle" aria-label="Expand embedded panel">▸</button>
           </div>
         </div>
         <div class="${EMBED_CLASS}__content"></div>
@@ -3413,11 +3630,11 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           panel.setAttribute(COLLAPSED_ATTR, collapsed ? "false" : "true");
           if (toggle) toggle.textContent = collapsed ? "▾" : "▸";
           if (collapsed) {
-            expandedSet.add(basePath);
-            this.setManualExpansionState(basePath, true);
+            expandedSet.add(ruleKey);
+            this.setManualExpansionState(ruleKey, true);
           } else {
-            expandedSet.delete(basePath);
-            this.setManualExpansionState(basePath, false);
+            expandedSet.delete(ruleKey);
+            this.setManualExpansionState(ruleKey, false);
           }
         });
       }
@@ -3433,11 +3650,11 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           const toggleBtn = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
           if (toggleBtn) toggleBtn.textContent = collapsed ? "▾" : "▸";
           if (collapsed) {
-            expandedSet.add(basePath);
-            this.setManualExpansionState(basePath, true);
+            expandedSet.add(ruleKey);
+            this.setManualExpansionState(ruleKey, true);
           } else {
-            expandedSet.delete(basePath);
-            this.setManualExpansionState(basePath, false);
+            expandedSet.delete(ruleKey);
+            this.setManualExpansionState(ruleKey, false);
           }
         });
       }
@@ -3456,38 +3673,12 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
     overlay.appendChild(panel);
 
-    // Prefer embedRegistry (avoids metadataCache loop)
-    let usedEmbedRegistry = false;
-    {
-      const embedRegistry = (this.app as any).embedRegistry;
-      const embedCtor = embedRegistry?.embedByExtension?.get?.("base");
-      if (embedCtor) {
-        try {
-          const ctx = { app: this.app, sourcePath };
-          const embed = embedCtor(ctx, baseFile, "");
-          if (embed?.containerEl) {
-            renderTarget.appendChild(embed.containerEl);
-            try {
-              this.addChild(embed as any);
-            } catch {
-              try { if (typeof embed.load === "function") embed.load(); } catch { /* ignore */ }
-            }
-            this.panelEmbeds.set(panel, embed);
-            usedEmbedRegistry = true;
-          }
-        } catch (e) {
-          this.debugWarn("[TPS Auto Base Embed] canvas-node embedRegistry failed, falling back", e);
-        }
-      }
-    }
-    if (!usedEmbedRegistry) {
-      await MarkdownRenderer.render(this.app, `![[${basePath}]]`, renderTarget, sourcePath, null as any);
-    }
+    await this.renderRuleIntoTarget(rule, renderTarget, sourcePath, null, panel);
 
     this.syncEmbeddedPanelMode(contentEl, panel);
     panel.setAttribute(RENDERING_ATTR, "false");
 
-    if (!alwaysExpanded && !expandedSet.has(basePath)) {
+    if (!alwaysExpanded && !expandedSet.has(ruleKey)) {
       panel.setAttribute(COLLAPSED_ATTR, "true");
       const toggleBtn = panel.querySelector<HTMLButtonElement>(`.${EMBED_CLASS}__toggle`);
       if (toggleBtn) toggleBtn.textContent = "▸";

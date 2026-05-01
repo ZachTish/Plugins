@@ -3,6 +3,7 @@ import type TPSGlobalContextMenuPlugin from '../main';
 import { buildBaseCompatibleParentLinkValue } from '../handlers/parent-link-format';
 import { CreateSubitemModal } from '../modals/create-subitem-modal';
 import { mergeNormalizedTags, parseTagInput } from '../utils/tag-utils';
+import { applyRulesToFile as applyRulesToFileShared } from '../utils/rule-resolver';
 import * as logger from '../logger';
 import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
 import { generateSubitemId, getSubitemIdFromRecord, SUBITEM_ID_KEY } from '../utils/subitem-id';
@@ -214,7 +215,7 @@ export async function createSubitemForParentWithTitle(
   }
 
   if (plugin.settings.applyCompanionRulesOnSubitemCreate) {
-    await applyCompanionRulesToFile(plugin, created);
+    await applyRulesToNewFile(plugin, created);
   }
 
   if (seedParentTags && parentTags.length > 0) {
@@ -281,22 +282,8 @@ async function ensureFolderPath(app: App, path: string): Promise<void> {
   }
 }
 
-export async function applyCompanionRulesToFile(plugin: TPSGlobalContextMenuPlugin, file: TFile): Promise<void> {
-  const companion = (plugin.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-  const directApply = companion?.applyRulesToFile;
-  const apiApply = companion?.api?.applyRulesToFile;
-
-  try {
-    if (typeof directApply === 'function' && companion?.settings?.enabled) {
-      await directApply.call(companion, file, { reason: 'gcm-subitem-create', force: true });
-      return;
-    }
-    if (typeof apiApply === 'function') {
-      await apiApply(file);
-    }
-  } catch (error) {
-    logger.warn('[TPS GCM] Failed applying companion rules after subitem create:', file.path, error);
-  }
+export async function applyRulesToNewFile(plugin: TPSGlobalContextMenuPlugin, file: TFile): Promise<void> {
+  await applyRulesToFileShared(plugin.app, file, 'gcm-subitem-create');
 }
 
 async function mergeParentTagsIntoSubitem(plugin: TPSGlobalContextMenuPlugin, file: TFile, parentTags: string[]): Promise<void> {

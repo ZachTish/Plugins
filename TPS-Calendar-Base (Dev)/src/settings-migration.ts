@@ -33,8 +33,7 @@ export const DEFAULT_SETTINGS: CalendarPluginSettings = {
     statusKey: "status",
     previousStatusKey: "tpsCalendarPrevStatus",
     startProperty: "scheduled",
-    secondaryStartProperty: "due",
-    tertiaryStartProperty: "completed",
+    additionalDateProperties: ["due", "completedDate"],
     endProperty: "timeEstimate",
     frontmatterColorField: "color",
     frontmatterIconField: "icon",
@@ -86,6 +85,12 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         return /^[A-Za-z0-9_-]+$/.test(raw) ? raw : fallback;
     };
 
+    const sanitizeOptionalKey = (value: unknown): string | null => {
+        const raw = String(value ?? "").trim();
+        if (!raw) return null;
+        return /^[A-Za-z0-9_-]+$/.test(raw) ? raw : null;
+    };
+
     if (!stored) {
         return {
             ...DEFAULT_SETTINGS,
@@ -105,6 +110,29 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         const key = sanitizeKey(value, fallback);
         return identity.has(key.toLowerCase()) ? fallback : key;
     };
+    const sanitizeOptionalNonIdentityKey = (value: unknown): string | null => {
+        const key = sanitizeOptionalKey(value);
+        if (!key) return null;
+        return identity.has(key.toLowerCase()) ? null : key;
+    };
+    const normalizeAdditionalDateProperties = (value: unknown): string[] => {
+        const rawValues = Array.isArray(value)
+            ? value
+            : typeof value === "string"
+                ? value.split(",")
+                : [];
+        const normalized: string[] = [];
+        const seen = new Set<string>();
+        for (const rawValue of rawValues) {
+            const key = sanitizeOptionalNonIdentityKey(rawValue);
+            if (!key) continue;
+            const normalizedKey = key.toLowerCase();
+            if (seen.has(normalizedKey)) continue;
+            seen.add(normalizedKey);
+            normalized.push(key);
+        }
+        return normalized;
+    };
 
     const viewMode = ["day", "3d", "4d", "5d", "7d", "week", "month", "continuous"].includes(stored?.viewMode)
         ? stored.viewMode
@@ -119,6 +147,15 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         typeof storedMinEventHeight === "number" && Number.isFinite(storedMinEventHeight)
             ? Math.max(0, Math.min(120, storedMinEventHeight))
             : 20;
+    const startProperty = sanitizeNonIdentityKey(stored?.startProperty, "scheduled");
+    const additionalDateProperties = normalizeAdditionalDateProperties(stored?.additionalDateProperties);
+    const legacyAdditionalDateProperties = [
+        sanitizeOptionalNonIdentityKey(stored?.secondaryStartProperty),
+        sanitizeOptionalNonIdentityKey(stored?.tertiaryStartProperty),
+    ].filter((value): value is string => Boolean(value));
+    const mergedAdditionalDateProperties = (additionalDateProperties.length ? additionalDateProperties : legacyAdditionalDateProperties)
+        .filter((key, index, values) => values.findIndex((candidate) => candidate.toLowerCase() === key.toLowerCase()) === index)
+        .filter((key) => key.toLowerCase() !== startProperty.toLowerCase());
 
     return {
         enableExternalCalendars: stored?.enableExternalCalendars ?? true,
@@ -147,9 +184,8 @@ export function migrateSettings(stored: any): CalendarPluginSettings {
         titleKey: sanitizeNonIdentityKey(stored?.titleKey, "title"),
         statusKey: sanitizeNonIdentityKey(stored?.statusKey, "status"),
         previousStatusKey: sanitizeNonIdentityKey(stored?.previousStatusKey, "tpsCalendarPrevStatus"),
-        startProperty: sanitizeNonIdentityKey(stored?.startProperty, "scheduled"),
-        secondaryStartProperty: sanitizeNonIdentityKey(stored?.secondaryStartProperty, "due"),
-        tertiaryStartProperty: sanitizeNonIdentityKey(stored?.tertiaryStartProperty, "completed"),
+        startProperty,
+        additionalDateProperties: mergedAdditionalDateProperties.length ? mergedAdditionalDateProperties : [...DEFAULT_SETTINGS.additionalDateProperties],
         endProperty: sanitizeNonIdentityKey(stored?.endProperty, "timeEstimate"),
         frontmatterColorField: sanitizeNonIdentityKey(stored?.frontmatterColorField, "color"),
         frontmatterIconField: sanitizeNonIdentityKey(stored?.frontmatterIconField, "icon"),

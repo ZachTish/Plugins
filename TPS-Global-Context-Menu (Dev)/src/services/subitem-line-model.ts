@@ -16,7 +16,7 @@ export type VisualState = 'open' | 'complete' | 'canceled' | 'working';
 
 export interface PropertyPill {
   label: string;
-  kind: 'status' | 'priority' | 'scheduled' | 'tag' | 'folder' | 'action' | 'recurrence' | 'selector';
+  kind: 'status' | 'priority' | 'scheduled' | 'tag' | 'folder' | 'action' | 'recurrence' | 'selector' | 'hidden';
   value?: string;
   propertyKey?: string;
   propertyType?: string;
@@ -69,16 +69,18 @@ export class SubitemLineModelService {
     },
     childFile: TFile,
     parentFile: TFile,
+    sourceLine?: string,
   ): SubitemLineModel {
-    const status = this.getNormalizedStatus(childFile);
+    const lineStatus = this.getNormalizedInlineStatus(sourceLine);
+    const status = lineStatus || this.getNormalizedStatus(childFile);
     const statusMappedCheckboxState = status ? this.mapStatusToCheckboxState(status) : '';
-    const hasExplicitStatus = !!status;
+    const hasExplicitStatus = !!lineStatus || !!status;
     const checkboxState =
       hasExplicitStatus
         ? (statusMappedCheckboxState || parsed.checkboxState || this.plugin.settings.linkedSubitemDefaultOpenState || '[ ]')
         : (parsed.kind === 'checkbox' || parsed.kind === 'heading' ? (parsed.checkboxState || this.plugin.settings.linkedSubitemDefaultOpenState || '[ ]') : null);
     const visualState = this.getVisualState(checkboxState);
-    const pills = this.getPropertyPills(childFile, parsed.kind);
+    const pills = this.getPropertyPills(childFile, parsed.kind, sourceLine);
 
     return {
       childFile,
@@ -159,7 +161,7 @@ export class SubitemLineModelService {
   /**
    * Get property pills for a subitem line.
    */
-  getPropertyPills(file: TFile, lineKind?: string): PropertyPill[] {
+  getPropertyPills(file: TFile, lineKind?: string, sourceLine?: string): PropertyPill[] {
     const cache = this.plugin.app.metadataCache.getFileCache(file);
     const fm = (cache?.frontmatter || {}) as Record<string, unknown>;
     const pills: PropertyPill[] = [];
@@ -177,6 +179,7 @@ export class SubitemLineModelService {
     const properties = resolveCustomProperties(this.plugin.settings.properties || [], entries, new ViewModeService());
 
     const visibleProperties = properties.filter((prop) => prop.hidden !== true && prop.showInCollapsed !== false);
+    const concealedProperties = properties.filter((prop) => prop.hidden === true || prop.showInCollapsed === false);
 
     const statusProp = visibleProperties.find((prop) => prop.id === 'status' || prop.key === this.getStatusKey() || prop.key === 'status');
     if (statusProp?.type === 'selector') {
@@ -253,6 +256,17 @@ export class SubitemLineModelService {
       });
     }
 
+    for (const prop of concealedProperties) {
+      if (!this.hasDisplayablePropertyValue(file, fm, prop, sourceLine)) continue;
+      pills.push({
+        label: '|',
+        kind: 'hidden',
+        value: '|',
+        propertyKey: prop.key,
+        propertyType: prop.type,
+      });
+    }
+
     console.debug('[TPS GCM] [DIAG] getPropertyPills result', {
       file: file.path,
       lineKind,
@@ -264,6 +278,27 @@ export class SubitemLineModelService {
     return pills;
   }
 
+  private hasDisplayablePropertyValue(
+    file: TFile,
+    frontmatter: Record<string, unknown>,
+    prop: { key: string; type: string },
+    sourceLine?: string,
+  ): boolean {
+    if (!prop?.key) return false;
+    if (sourceLine) {
+      const inlineProperties = this.plugin.itemSemanticsService.parseInlineProperties(sourceLine);
+      const inlineValue = String(inlineProperties[String(prop.key || '').trim().toLowerCase()] || '').trim();
+      if (inlineValue) return true;
+    }
+    if (prop.type === 'list') {
+      return this.readTags(frontmatter).length > 0;
+    }
+    if (prop.type === 'folder') {
+      return !!file.parent?.path;
+    }
+    return !!this.readFrontmatterString(frontmatter, prop.key);
+  }
+
   /**
    * Read a string value from frontmatter (case-insensitive key lookup).
    */
@@ -272,6 +307,14 @@ export class SubitemLineModelService {
     const raw = actualKey ? frontmatter[actualKey] : undefined;
     if (typeof raw === 'string') return raw.trim();
     return '';
+  }
+
+  private getNormalizedInlineStatus(sourceLine?: string): string {
+    const raw = String(sourceLine || '').trim();
+    if (!raw) return '';
+    const properties = this.plugin.itemSemanticsService.parseInlineProperties(raw);
+    const statusKey = this.getStatusKey().toLowerCase();
+    return String(properties[statusKey] || properties.status || '').trim().toLowerCase();
   }
 
   /**

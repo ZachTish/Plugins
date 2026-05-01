@@ -88,6 +88,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   propertyPageManager!: PropertyPageManager;
   styleService!: StyleService;
   vaultWalker!: VaultWalker;
+  private lastEffectiveSettingsTraceKey: string | null = null;
 
   private getGcmPlugin(): any {
     return (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu')
@@ -104,7 +105,9 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   private isUserInitiatedRuleReason(reason: string): boolean {
     return reason === 'manual-active'
       || reason === 'direct-file'
-      || reason === 'manual-status-refresh';
+      || reason === 'manual-status-refresh'
+      || reason === 'manual-all'
+      || reason === 'startup-auto';
   }
 
   private isAutomationWriteSettled(): boolean {
@@ -132,8 +135,19 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   private getEffectiveSettings(): NotebookNavigatorCompanionSettings {
     const gcm = this.getGcmPlugin();
     const gcmSettings = gcm?.settings;
-    if (!gcmSettings) return this.settings;
-    return {
+    if (!gcmSettings) {
+      const traceKey = `local:${this.settings.rules.length}:${this.settings.hideRules.length}:${this.settings.smartSort ? 'on' : 'off'}`;
+      if (this.lastEffectiveSettingsTraceKey !== traceKey) {
+        this.lastEffectiveSettingsTraceKey = traceKey;
+        this.logger.debug("Using companion-local effective settings", {
+          rules: this.settings.rules.length,
+          hideRules: this.settings.hideRules.length,
+          smartSort: this.settings.smartSort,
+        });
+      }
+      return this.settings;
+    }
+    const effectiveSettings = {
       ...this.settings,
       frontmatterIconField: String(gcmSettings.notebookNavigatorIconField || this.settings.frontmatterIconField || 'icon'),
       frontmatterColorField: String(gcmSettings.notebookNavigatorColorField || this.settings.frontmatterColorField || 'color'),
@@ -149,6 +163,16 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       smartSort: gcmSettings.notebookNavigatorSmartSort || this.settings.smartSort,
       hideRules: Array.isArray(gcmSettings.notebookNavigatorHideRules) ? gcmSettings.notebookNavigatorHideRules : this.settings.hideRules,
     };
+    const traceKey = `gcm:${effectiveSettings.rules.length}:${effectiveSettings.hideRules.length}:${effectiveSettings.smartSort ? 'on' : 'off'}`;
+    if (this.lastEffectiveSettingsTraceKey !== traceKey) {
+      this.lastEffectiveSettingsTraceKey = traceKey;
+      this.logger.debug("Using GCM-overlay effective settings", {
+        rules: effectiveSettings.rules.length,
+        hideRules: effectiveSettings.hideRules.length,
+        smartSort: effectiveSettings.smartSort,
+      });
+    }
+    return effectiveSettings;
   }
 
   async onload(): Promise<void> {
@@ -1213,7 +1237,9 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       reason === "rename" ||
       reason === "create" ||
       reason === "manual-active" ||
-      reason === "direct-file";
+      reason === "direct-file" ||
+      reason === "manual-all" ||
+      reason === "startup-auto";
     const changed = await this.ruleApplicationService.applyRulesToFile(targetFile, {
       reason,
       force,

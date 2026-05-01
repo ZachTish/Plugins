@@ -1,4 +1,5 @@
 import { TFile, Platform, debounce, MarkdownView, WorkspaceLeaf } from 'obsidian';
+import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
 import { resolveLinkValueToFile } from '../handlers/parent-link-format';
 import { getPluginById } from '../core';
 import type TPSGlobalContextMenuPlugin from '../main';
@@ -6,6 +7,8 @@ import { ViewModeService } from '../services/view-mode-service';
 import { RemoveHiddenSubitemsModal } from '../modals/remove-hidden-subitems-modal';
 import { checkAndPromptForUnresolvedSubitems } from '../services/unresolved-subitem-modal';
 import type { BodySubitemLink } from '../services/subitem-types';
+import { applyRulesToFile as applyNotebookNavigatorRulesToFile } from '../utils/rule-resolver';
+import * as logger from '../logger';
 
 /**
  * Registers all workspace and vault event listeners on the given plugin instance.
@@ -14,6 +17,7 @@ import type { BodySubitemLink } from '../services/subitem-types';
  * Also performs the initial `ensureMenus()` call at the end.
  */
 export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
+    const eventLogger = logger.createScoped('EventFlow');
     const shouldSuppressNotebookNavigatorStatusIconContextMenu = (file: TFile | null): boolean => {
         if (!(file instanceof TFile) || file.extension !== 'md') return false;
 
@@ -56,6 +60,32 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
             if (plugin.settings.inlineMenuOnly) return;
             if (info && info.file instanceof TFile) {
                 plugin.menuController.addToNativeMenu(menu, [info.file]);
+
+                const cursor = typeof (editor as any)?.getCursor === 'function'
+                    ? (editor as any).getCursor()
+                    : null;
+                const lineNumber = typeof cursor?.line === 'number' ? cursor.line : -1;
+                const lineText = lineNumber >= 0 && typeof (editor as any)?.getLine === 'function'
+                    ? String((editor as any).getLine(lineNumber) || '')
+                    : '';
+                const resolver = getDailyNoteResolver(plugin.app, {
+                    formatOverride: (plugin as any)?.settings?.dailyNoteDateFormat,
+                });
+                const todayDailyNotePath = resolver?.buildPath?.(new Date(), 'md');
+                const isTodayDailyNote = typeof todayDailyNotePath === 'string' && todayDailyNotePath === info.file.path;
+
+                if (isTodayDailyNote && lineNumber >= 0 && lineText.trim().length === 0) {
+                    menu.addSeparator();
+                    menu.addItem((item) => {
+                        item.setTitle('Start Time Tracking Here')
+                            .setIcon('timer')
+                            .onClick(() => {
+                                const view = plugin.app.workspace.getActiveViewOfType(MarkdownView);
+                                if (!(view instanceof MarkdownView) || view.file?.path !== info.file.path) return;
+                                void plugin.timeTrackingService.startFromDailyNoteEmptyLine(info.file, view, lineNumber);
+                            });
+                    });
+                }
             }
         }),
     );
@@ -74,11 +104,21 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
 
         // Clear existing timer for this file
         const existing = pendingSubitemTimers.get(path);
-        if (existing !== undefined) window.clearTimeout(existing);
+        if (existing !== undefined) {
+            window.clearTimeout(existing);
+            eventLogger.debug('Coalesced pending subitem refresh', { path, delay });
+        }
+
+        eventLogger.debug('Scheduled subitem refresh', {
+            path,
+            delay,
+            activeFile: plugin.app.workspace.getActiveFile()?.path ?? null,
+        });
 
         // Schedule unified refresh
         const timer = window.setTimeout(() => {
             pendingSubitemTimers.delete(path);
+            eventLogger.debug('Executing subitem refresh', { path });
             plugin.inlineTaskSubtaskService?.ensureForAllMarkdownViews();
             plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
             plugin.linkedSubitemCheckboxService?.refreshLivePreviewEditors();
@@ -92,6 +132,57 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
     const throttledEnsureLinkedSubitemCheckboxes = debounce(() => {
         plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
     }, 120, false);
+    const pendingNotebookRuleTimers = new Map<string, number>();
+
+    const scheduleNotebookRuleApply = (file: TFile | null, reason: string, delay = 250, attempt = 0) => {
+        if (!(file instanceof TFile) || file.extension !== 'md') return;
+        const path = file.path;
+        const existing = pendingNotebookRuleTimers.get(path);
+        if (existing !== undefined) {
+            window.clearTimeout(existing);
+            eventLogger.debug('Coalesced pending notebook rule apply', { path, reason, delay, attempt });
+        }
+
+        eventLogger.debug('Scheduled notebook rule apply', { path, reason, delay, attempt });
+
+        const timer = window.setTimeout(() => {
+            pendingNotebookRuleTimers.delete(path);
+            if (!plugin.isInitialSyncSettled()) {
+                eventLogger.debug('Deferred notebook rule apply until initial sync settles', {
+                    path,
+                    reason,
+                    attempt,
+                });
+                if (attempt < 12 && (reason === 'file-open' || reason === 'create' || reason === 'metadata-change')) {
+                    scheduleNotebookRuleApply(file, reason, 1000, attempt + 1);
+                } else {
+                    eventLogger.warn('Dropped notebook rule apply after sync retries exhausted', {
+                        path,
+                        reason,
+                        attempt,
+                    });
+                }
+                return;
+            }
+            const wasRecentlyWritten = plugin.frontmatterMutationService.wasRecentlyWritten(path);
+            const writeInProgress = plugin.frontmatterMutationService.isWriteInProgress(path);
+            if (wasRecentlyWritten || writeInProgress) {
+                eventLogger.debug('Skipped notebook rule apply due to frontmatter mutation guard', {
+                    path,
+                    reason,
+                    wasRecentlyWritten,
+                    writeInProgress,
+                });
+                return;
+            }
+            eventLogger.debug('Executing notebook rule apply', { path, reason, attempt });
+            void Promise.resolve()
+                .then(() => applyNotebookNavigatorRulesToFile(plugin.app, file, reason))
+                .catch((error) => logger.error('[TPS GCM] Notebook rule apply failed', { path, reason, attempt, error }));
+        }, Math.max(0, delay));
+
+        pendingNotebookRuleTimers.set(path, timer);
+    };
     const pendingRecurrenceAdvanceTimers = new Map<string, number>();
     const pendingRefreshTimers = new Map<string, number>();
     const pendingLateRefreshTimers = new Map<string, number>();
@@ -101,21 +192,38 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         const timers = pendingFileOpenGuardTimers.get(path) || [];
         for (const timer of timers) window.clearTimeout(timer);
         pendingFileOpenGuardTimers.delete(path);
+        if (timers.length > 0) {
+            eventLogger.debug('Cleared pending file-open guard timers', { path, count: timers.length });
+        }
     };
 
     const scheduleFileOpenGuard = (file: TFile, delayMs: number, task: () => Promise<void> | void) => {
         if (!(file instanceof TFile) || file.extension !== 'md') return;
         const path = file.path;
+        eventLogger.debug('Scheduled file-open guard task', { path, delayMs });
         const timer = window.setTimeout(() => {
             const active = plugin.app.workspace.getActiveFile();
-            if (!(active instanceof TFile) || active.path !== path) return;
+            if (!(active instanceof TFile) || active.path !== path) {
+                eventLogger.debug('Skipped file-open guard because file is no longer active', {
+                    path,
+                    activePath: active instanceof TFile ? active.path : null,
+                });
+                return;
+            }
             const live = plugin.app.vault.getAbstractFileByPath(path);
-            if (!(live instanceof TFile) || live.extension !== 'md') return;
+            if (!(live instanceof TFile) || live.extension !== 'md') {
+                eventLogger.debug('Skipped file-open guard because live file could not be resolved', { path });
+                return;
+            }
             if (!plugin.isInitialSyncSettled()) {
+                eventLogger.debug('Deferred file-open guard because initial sync is unsettled', { path, delayMs });
                 scheduleFileOpenGuard(live, 1000, task);
                 return;
             }
-            void task();
+            eventLogger.debug('Executing file-open guard task', { path, delayMs });
+            void Promise.resolve()
+                .then(() => task())
+                .catch((error) => logger.error('[TPS GCM] File-open guard task failed', { path, delayMs, error }));
         }, Math.max(0, delayMs));
         const timers = pendingFileOpenGuardTimers.get(path) || [];
         timers.push(timer);
@@ -126,11 +234,19 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         if (!(file instanceof TFile) || file.extension !== 'md') return;
         const path = file.path;
         const existing = pendingRecurrenceAdvanceTimers.get(path);
-        if (existing !== undefined) window.clearTimeout(existing);
+        if (existing !== undefined) {
+            window.clearTimeout(existing);
+            eventLogger.debug('Coalesced pending recurrence advance check', { path, delay });
+        }
+
+        eventLogger.debug('Scheduled recurrence advance check', { path, delay });
 
         const timer = window.setTimeout(() => {
             pendingRecurrenceAdvanceTimers.delete(path);
-            void plugin.bulkEditService.advanceRecurringInstanceIfPastDue(file);
+            eventLogger.debug('Executing recurrence advance check', { path });
+            void Promise.resolve()
+                .then(() => plugin.bulkEditService.advanceRecurringInstanceIfPastDue(file))
+                .catch((error) => logger.error('[TPS GCM] Recurrence advance check failed', { path, error }));
         }, Math.max(0, delay));
         pendingRecurrenceAdvanceTimers.set(path, timer);
     };
@@ -146,13 +262,29 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
 
         // Consolidate to a single refresh - clear both early and late timers
         const existing = pendingRefreshTimers.get(path);
-        if (existing !== undefined) window.clearTimeout(existing);
+        if (existing !== undefined) {
+            window.clearTimeout(existing);
+        }
         const lateExisting = pendingLateRefreshTimers.get(path);
-        if (lateExisting !== undefined) window.clearTimeout(lateExisting);
+        if (lateExisting !== undefined) {
+            window.clearTimeout(lateExisting);
+        }
+        if (existing !== undefined || lateExisting !== undefined) {
+            eventLogger.debug('Coalesced pending responsive menu refresh', {
+                path,
+                delayMs,
+                rebuild,
+                hadPrimaryTimer: existing !== undefined,
+                hadLateTimer: lateExisting !== undefined,
+            });
+        }
+
+        eventLogger.debug('Scheduled responsive menu refresh', { path, delayMs, rebuild });
 
         const timer = window.setTimeout(() => {
             pendingRefreshTimers.delete(path);
             pendingLateRefreshTimers.delete(path);
+            eventLogger.debug('Executing responsive menu refresh', { path, rebuild });
             plugin.persistentMenuManager.refreshMenusForFile(file, true, { rebuildInlineSubitems: rebuild });
             throttledEnsureMenus();
         }, Math.max(0, delayMs));
@@ -300,9 +432,30 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
 
     plugin.registerEvent(
         plugin.app.workspace.on('file-open', (file) => {
+            if (file instanceof TFile) {
+                eventLogger.debug('Observed file-open event', {
+                    path: file.path,
+                    initialSyncSettled: plugin.isInitialSyncSettled(),
+                });
+            }
             ensureMenus();
 
+            // Sync `scheduled` frontmatter to the daily note's filename-date before the
+            // sync gate. The value is derived from the filename (not vault sync state),
+            // the write is idempotent, and it passes { userInitiated: true } internally so
+            // it is never blocked by the 20-second settlement window.
+            if (file instanceof TFile) {
+                previousActiveFile = file;
+                refreshOpenNoteUiImmediately(file, { rebuildInlineSubitems: true });
+                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 120 });
+                void plugin.dailyNoteNavManager.syncScheduledFrontmatterOnOpen(file);
+                scheduleNotebookRuleApply(file, 'file-open', 300);
+            }
+
             if (!plugin.isInitialSyncSettled()) {
+                if (file instanceof TFile) {
+                    eventLogger.debug('Skipping post-open guards until initial sync settles', { path: file.path });
+                }
                 return;
             }
 
@@ -317,10 +470,6 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
                 }, 500);
             }
             if (file instanceof TFile) {
-                previousActiveFile = file;
-                refreshOpenNoteUiImmediately(file, { rebuildInlineSubitems: true });
-                scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 120 });
-
                 // ── Note-open reconciliation hooks ─────────────────────────────────
                 // 0. Repair broken parent body links from childOf backlinks before any
                 // other subitem reconciliation runs. This prevents transient broken
@@ -328,6 +477,10 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
                 // Keep note-open reconciliation non-destructive beyond broken-link repair;
                 // rewriting valid body links here causes vault-wide metadata churn.
                 void plugin.subitemRelationshipSyncService?.repairBrokenBodyLinksForParent(file);
+
+                // Run file naming normalization (tags, folder path, title sync) for the
+                // opened note. Gated by individual feature flags inside the service.
+                void plugin.fileNamingService.processFileOnOpen(file, { bypassCreationGrace: true });
 
                 // 1. Check for unresolved/deleted subitem links and prompt user
                 scheduleFileOpenGuard(file, 250, async () => {
@@ -356,6 +509,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
     const debouncedCompletedDateSync = debounce((file: TFile) => {
         if (!file || file.extension !== 'md') return;
         if (plugin.frontmatterMutationService.wasRecentlyWritten(file.path) || plugin.frontmatterMutationService.isWriteInProgress(file.path)) {
+            eventLogger.debug('Skipped completedDate sync due to frontmatter mutation guard', { file: file.path });
             return;
         }
 
@@ -374,6 +528,10 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         const hasCompletedDate = !!completedDateKey && fm[completedDateKey] != null && fm[completedDateKey] !== '';
 
         if (doneStatuses.has(currentStatus) && !hasCompletedDate) {
+            eventLogger.debug('Writing completedDate because status is terminal without completedDate', {
+                file: file.path,
+                status: currentStatus,
+            });
             // Write completedDate — status is done but completedDate is missing
             void plugin.frontmatterMutationService.process(file, (fmw) => {
                 fmw['completedDate'] = (window as any).moment
@@ -381,6 +539,10 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
                     : new Date().toISOString().replace('T', ' ').slice(0, 19);
             });
         } else if (!doneStatuses.has(currentStatus) && hasCompletedDate && currentStatus) {
+            eventLogger.debug('Clearing completedDate because status is no longer terminal', {
+                file: file.path,
+                status: currentStatus,
+            });
             // Clear completedDate — status reverted away from done
             void plugin.frontmatterMutationService.process(file, (fmw) => {
                 const key = Object.keys(fmw).find((k) => k.toLowerCase() === 'completeddate');
@@ -441,6 +603,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
                 scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 80 });
                 debouncedCompletedDateSync(file);
                 scheduleRecurringAdvanceCheck(file, 1200);
+                scheduleNotebookRuleApply(file, 'metadata-change', 260);
             }
         }),
     );
@@ -455,12 +618,14 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
             }
             refreshOpenNoteUiImmediately(file, { rebuildInlineSubitems: true });
             scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 120 });
+            scheduleNotebookRuleApply(file, 'modify-save', 260);
         }),
     );
 
     plugin.registerEvent(
         (plugin.app.workspace as any).on('tps-gcm-files-updated', (paths: string[] | undefined) => {
             if (!Array.isArray(paths) || paths.length === 0) return;
+            eventLogger.debug('Observed tps-gcm-files-updated event', { count: paths.length, sample: paths.slice(0, 5) });
             for (const path of paths) {
                 const f = plugin.app.vault.getFileByPath(path);
                 if (!f) continue;
@@ -475,6 +640,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         plugin.app.vault.on('rename', (file) => {
             if (file instanceof TFile && file.extension === 'md') {
                 plugin.persistentMenuManager.refreshMenusForFile(file);
+                scheduleNotebookRuleApply(file, 'rename', 220);
                 setTimeout(() => {
                     plugin.fileNamingService.syncTitleFromFilename(file);
                 }, 150);
@@ -487,10 +653,18 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         }),
     );
 
+    plugin.registerEvent(
+        plugin.app.vault.on('create', (file) => {
+            if (!(file instanceof TFile) || file.extension !== 'md') return;
+            scheduleNotebookRuleApply(file, 'create', 2200);
+        }),
+    );
+
     plugin.app.workspace.onLayoutReady(() => {
         const activeFile = plugin.app.workspace.getActiveFile();
-        if (activeFile instanceof TFile && plugin.isInitialSyncSettled()) {
+        if (activeFile instanceof TFile) {
             refreshOpenNoteUiImmediately(activeFile, { rebuildInlineSubitems: true });
+            scheduleResponsiveMenuRefresh(activeFile, { rebuildInlineSubitems: true, delayMs: 120 });
         }
     });
 
@@ -501,6 +675,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         for (const timer of pendingLateRefreshTimers.values()) window.clearTimeout(timer);
         for (const timer of pendingRecurrenceAdvanceTimers.values()) window.clearTimeout(timer);
         for (const timer of pendingSubitemTimers.values()) window.clearTimeout(timer);
+        for (const timer of pendingNotebookRuleTimers.values()) window.clearTimeout(timer);
         for (const timers of pendingFileOpenGuardTimers.values()) {
             for (const timer of timers) window.clearTimeout(timer);
         }
@@ -508,6 +683,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         pendingLateRefreshTimers.clear();
         pendingRecurrenceAdvanceTimers.clear();
         pendingSubitemTimers.clear();
+        pendingNotebookRuleTimers.clear();
         pendingFileOpenGuardTimers.clear();
     });
 

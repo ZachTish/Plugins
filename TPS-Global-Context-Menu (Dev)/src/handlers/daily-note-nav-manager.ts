@@ -74,6 +74,18 @@ export class DailyNoteNavManager extends Component {
         this.plugin = plugin;
     }
 
+    private normalizeDailyNoteStatusFrontmatter(fm: any): void {
+        const tags = Array.isArray(fm?.tags)
+            ? fm.tags.map((value: unknown) => String(value || '').trim().replace(/^#/, '').toLowerCase()).filter(Boolean)
+            : typeof fm?.tags === 'string'
+                ? fm.tags.split(/[\s,]+/).map((value: string) => value.trim().replace(/^#/, '').toLowerCase()).filter(Boolean)
+                : [];
+        const status = String(fm?.status ?? '').trim().toLowerCase();
+        if (tags.includes('dailynote') && status === 'note') {
+            delete fm.status;
+        }
+    }
+
     onload() {
         this.registerEvent(
             this.plugin.app.workspace.on("active-leaf-change", () => this._scheduleRefresh())
@@ -748,6 +760,7 @@ export class DailyNoteNavManager extends Component {
                     }
                 }
                 fm.folderPath = targetFolder;
+                this.normalizeDailyNoteStatusFrontmatter(fm);
             });
         } catch (error) {
             logger.warn('Failed normalizing daily note after creation', { file: file.path, error });
@@ -760,89 +773,46 @@ export class DailyNoteNavManager extends Component {
         }
 
         try {
-            const companion = (this.plugin.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-            await companion?.api?.applyRulesToFile?.(file);
+            const { applyRulesToFile } = await import('../utils/rule-resolver');
+            await applyRulesToFile(this.plugin.app, file, 'gcm-daily-note');
         } catch (error) {
             logger.warn('Failed applying NN rules to daily note', { file: file.path, error });
         }
     }
 
-    private async getDailyNoteScheduledFrontmatterValue(file: TFile): Promise<string> {
-        return await this.getDailyNoteFrontmatterValue(file, 'scheduled');
-    }
+    /**
+     * Syncs the `scheduled` frontmatter field to match the date encoded in the
+     * daily note's filename. Called on file-open for existing daily notes so the
+     * value stays correct even if it was never set, was left as a template
+     * expression, or drifted out of sync.
+     */
+    async syncScheduledFrontmatterOnOpen(file: TFile): Promise<void> {
+        if (this.plugin.settings.enableDailyNoteScheduledNormalization === false) return;
 
-    private async getDailyNoteFrontmatterValue(file: TFile, key: string): Promise<string> {
-        const cache = this.plugin.app.metadataCache.getFileCache(file);
-        const frontmatter = (cache?.frontmatter || {}) as Record<string, unknown>;
-        const requestedKey = String(key || '').trim().toLowerCase();
-        const matchedCacheKey = Object.keys(frontmatter).find((candidate) => candidate.toLowerCase() === requestedKey);
-        const cachedValue = String((matchedCacheKey ? frontmatter[matchedCacheKey] : '') || '').trim();
-        if (cachedValue) return cachedValue;
+        const resolver = getDailyNoteResolver(this.plugin.app, {
+            formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+        });
+        const scheduledDateKey = resolver.parseFilenameToDateKey(file.basename);
+        if (!scheduledDateKey) return;
 
-        let content = '';
         try {
-            content = await this.plugin.app.vault.cachedRead(file);
-        } catch {
-            return '';
-        }
-
-        const frontmatterMatch = content.match(/^\uFEFF?---\n([\s\S]*?)\n---(?:\n|$)/);
-        if (!frontmatterMatch) return '';
-
-        const escapedKey = requestedKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const valueMatch = frontmatterMatch[1].match(new RegExp(`^(${escapedKey})\\s*:\\s*(.+)$`, 'im'));
-        if (!valueMatch) return '';
-
-        return valueMatch[2].trim().replace(/^['"]|['"]$/g, '');
-    }
-
-    private async writeScheduledFrontmatterValue(file: TFile, scheduledDateKey: string): Promise<boolean> {
-        return await this.writeDailyNoteFrontmatterValues(file, { scheduled: scheduledDateKey });
-    }
-
-    private async writeDailyNoteFrontmatterValues(file: TFile, updates: Record<string, string>): Promise<boolean> {
-        let content = '';
-        try {
-            content = await this.plugin.app.vault.cachedRead(file);
+            // userInitiated: true — the date key is derived from the filename, not vault
+            // sync state, so this write is safe to perform even during the sync settlement
+            // window. The outer file-open handler intentionally runs this before the
+            // isInitialSyncSettled gate for the same reason.
+            await this.plugin.frontmatterMutationService.process(file, (fm: any) => {
+                const existing = String((fm?.scheduled ?? fm?.Scheduled ?? '')).trim();
+                const existingMoment = existing ? window.moment(existing) : null;
+                const existingKey = existingMoment?.isValid?.() ? existingMoment.format('YYYY-MM-DD') : '';
+                const isTemplateDerived = /<%[\s\S]*%>/.test(existing) || /\{\{[\s\S]*\}\}/.test(existing);
+                if (!existing || isTemplateDerived || !existingMoment?.isValid?.() || existingKey !== scheduledDateKey) {
+                    setValueCaseInsensitive(fm, 'scheduled', scheduledDateKey);
+                }
+                this.normalizeDailyNoteStatusFrontmatter(fm);
+            }, { userInitiated: true });
         } catch (error) {
-            logger.warn('[DailyNoteNavManager] Failed reading daily note before frontmatter write', {
-                file: file.path,
-                error,
-            });
-            return false;
+            logger.warn('[DailyNoteNavManager] Failed syncing scheduled frontmatter on open', { file: file.path, error });
         }
-
-        const normalized = content.replace(/\r\n/g, '\n');
-        const bom = normalized.startsWith('\uFEFF') ? '\uFEFF' : '';
-        const body = bom ? normalized.slice(1) : normalized;
-        const normalizedUpdates = Object.entries(updates)
-            .map(([key, value]) => [String(key || '').trim(), String(value || '').trim()] as const)
-            .filter(([key, value]) => !!key && !!value);
-        if (normalizedUpdates.length === 0) return false;
-
-        let nextBody: string;
-        const frontmatterMatch = body.match(/^---\n([\s\S]*?)\n---(\n|$)/);
-        if (frontmatterMatch) {
-            let updatedBlock = frontmatterMatch[1];
-            for (const [key, value] of normalizedUpdates) {
-                const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const nextLine = `${key}: ${value}`;
-                const keyPattern = new RegExp(`(^${escapedKey}\\s*:.*$)`, 'im');
-                updatedBlock = keyPattern.test(updatedBlock)
-                    ? updatedBlock.replace(keyPattern, nextLine)
-                    : `${updatedBlock}\n${nextLine}`;
-            }
-            nextBody = body.replace(/^---\n[\s\S]*?\n---(\n|$)/, `---\n${updatedBlock}\n---$1`);
-        } else {
-            const trimmedBody = body.replace(/^\s*/, '');
-            const block = normalizedUpdates.map(([key, value]) => `${key}: ${value}`).join('\n');
-            nextBody = `---\n${block}\n---\n${trimmedBody}`;
-        }
-
-        const nextContent = `${bom}${nextBody}`;
-        if (nextContent === normalized) return true;
-
-        return await this.plugin.frontmatterMutationService.writeContentSafely(file, nextContent, { userInitiated: true });
     }
 
     private async normalizeLeadingWhitespaceBeforeFrontmatter(file: TFile): Promise<void> {

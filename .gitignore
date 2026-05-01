@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+coverage/
+.test-dist/
+*.tsbuildinfo
+*.map
+*.log
+.DS_Store
+
+# Plugin runtime output
+main.js
+styles.css
+main.css
+data.json
+.sync-request.json
+*session*.json
+*state*.json
+
+# Editor metadata
+.vscode/
+.idea/
+*.iml

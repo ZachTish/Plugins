@@ -17,6 +17,7 @@ import {
     setValueCaseInsensitive,
     showNotice,
 } from '../core';
+import { getConfiguredTimeEstimatePropertyKey } from '../utils/configured-property-key';
 
 export class BulkEditService {
     plugin: TPSGlobalContextMenuPlugin;
@@ -1228,6 +1229,7 @@ export class BulkEditService {
 
     async updateScheduledDetails(files: TFile[], scheduled: string | null, timeEstimate: number | null, allDay: boolean, key: string = 'scheduled'): Promise<number> {
         return this.applyToFiles(files, (fm) => {
+            const durationKey = getConfiguredTimeEstimatePropertyKey(this.plugin.settings);
             if (scheduled) {
                 this.setFrontmatterValueCaseInsensitive(fm, key, scheduled);
             } else {
@@ -1235,9 +1237,9 @@ export class BulkEditService {
             }
 
             if (timeEstimate !== null && timeEstimate !== undefined && !isNaN(timeEstimate)) {
-                this.setFrontmatterValueCaseInsensitive(fm, 'timeEstimate', timeEstimate);
+                this.setFrontmatterValueCaseInsensitive(fm, durationKey, timeEstimate);
             } else {
-                this.deleteFrontmatterValueCaseInsensitive(fm, 'timeEstimate');
+                this.deleteFrontmatterValueCaseInsensitive(fm, durationKey);
             }
 
             if (allDay) {

@@ -42,3 +42,62 @@ export const DEFAULT_SETTINGS: KanbanSettings = {
   enableKanbanTaskCards: true,
   laneLabelAliasesByView: {},
 };
+
+const SCALE_MIN = 0.7;
+const SCALE_MAX = 1.4;
+
+export function normalizeKanbanScale(value: unknown): number {
+  const n = typeof value === 'string' ? parseFloat(value) : Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_SETTINGS.scale;
+  return Math.min(SCALE_MAX, Math.max(SCALE_MIN, n));
+}
+
+function normStr(raw: unknown, fallback: string): string {
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  return s || fallback;
+}
+
+function normBool(raw: unknown, fallback: boolean): boolean {
+  return typeof raw === 'boolean' ? raw : fallback;
+}
+
+function normRecord(raw: unknown): Record<string, unknown> {
+  return raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+}
+
+export function sanitizeKanbanSettings(raw: Partial<KanbanSettings> | Record<string, unknown>): KanbanSettings {
+  const r = raw as Record<string, unknown>;
+  const colorTargets: KanbanSettings['frontmatterColorTarget'][] = ['card', 'icon', 'both', 'off'];
+  const positions: KanbanSettings['ungroupedPosition'][] = ['first', 'last'];
+  const createModes: KanbanSettings['defaultCreateMode'][] = ['note', 'task'];
+  const cardPositions: KanbanSettings['kanbanTaskCardPosition'][] = ['top', 'bottom'];
+
+  const frontmatterColorTarget = colorTargets.includes(r.frontmatterColorTarget as KanbanSettings['frontmatterColorTarget'])
+    ? r.frontmatterColorTarget as KanbanSettings['frontmatterColorTarget']
+    : DEFAULT_SETTINGS.frontmatterColorTarget;
+  const ungroupedPosition = positions.includes(r.ungroupedPosition as KanbanSettings['ungroupedPosition'])
+    ? r.ungroupedPosition as KanbanSettings['ungroupedPosition']
+    : DEFAULT_SETTINGS.ungroupedPosition;
+  const defaultCreateMode = createModes.includes(r.defaultCreateMode as KanbanSettings['defaultCreateMode'])
+    ? r.defaultCreateMode as KanbanSettings['defaultCreateMode']
+    : DEFAULT_SETTINGS.defaultCreateMode;
+  const kanbanTaskCardPosition = cardPositions.includes(r.kanbanTaskCardPosition as KanbanSettings['kanbanTaskCardPosition'])
+    ? r.kanbanTaskCardPosition as KanbanSettings['kanbanTaskCardPosition']
+    : DEFAULT_SETTINGS.kanbanTaskCardPosition;
+
+  return {
+    iconKey: normStr(r.iconKey, DEFAULT_SETTINGS.iconKey),
+    colorKey: normStr(r.colorKey, DEFAULT_SETTINGS.colorKey),
+    frontmatterColorTarget,
+    ungroupedPosition,
+    defaultCreateMode,
+    defaultCreateDestination: typeof r.defaultCreateDestination === 'string' ? r.defaultCreateDestination.trim() : DEFAULT_SETTINGS.defaultCreateDestination,
+    laneOrderByView: normRecord(r.laneOrderByView) as Record<string, string[]>,
+    kanbanTaskCardPosition,
+    scale: normalizeKanbanScale(r.scale),
+    layoutModeByView: normRecord(r.layoutModeByView) as Record<string, 'board' | 'list'>,
+    dynamicEmptyLaneWidth: normBool(r.dynamicEmptyLaneWidth, DEFAULT_SETTINGS.dynamicEmptyLaneWidth),
+    enableKanbanTaskCards: normBool(r.enableKanbanTaskCards, DEFAULT_SETTINGS.enableKanbanTaskCards),
+    laneLabelAliasesByView: normRecord(r.laneLabelAliasesByView) as Record<string, Record<string, string>>,
+  };
+}

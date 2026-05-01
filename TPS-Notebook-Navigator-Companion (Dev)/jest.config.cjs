@@ -7,7 +7,6 @@ module.exports = {
   transform: {
     '^.+\\.ts$': ['ts-jest', { useESM: true, tsconfig: '<rootDir>/tsconfig.test.json' }]
   },
-  moduleNameMapper: {
-    '^(\\.{1,2}/.*)\\.js$': '$1'
+  moduleNameMapper: {    '^obsidian$': '<rootDir>/tests/mocks/obsidian.ts',    '^(\\.{1,2}/.*)\\.js$': '$1'
   }
 };

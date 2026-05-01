@@ -38,18 +38,13 @@ export class TaskCheckboxHandler {
         if (!targetEl) return;
         const checkboxEl = this.resolveTaskCheckboxTarget(targetEl);
         if (!checkboxEl) return;
-        const view = this.resolveMarkdownViewForElement(checkboxEl);
-        const file = view?.file;
-        if (!view || !file) return;
-
-        const isReadingView = !!checkboxEl.closest('.markdown-reading-view, .markdown-preview-view');
-        const lineNumber = this.findTaskLineNumber(checkboxEl, view, isReadingView);
-        if (lineNumber < 0) return;
+        const context = await this.resolveTaskContextForMenuTarget(checkboxEl);
+        if (!context) return;
 
         evt.preventDefault();
         evt.stopPropagation();
         evt.stopImmediatePropagation();
-        this.showTaskStateSelectorMenu(file, view, lineNumber, evt.clientX, evt.clientY, isReadingView);
+        this.showTaskStateSelectorMenu(context.file, context.view, context.lineNumber, evt.clientX, evt.clientY, context.isReadingView);
     }
 
     handleTouchStart(evt: TouchEvent): void {
@@ -152,6 +147,13 @@ export class TaskCheckboxHandler {
             }
         }
 
+        const renderedTaskRow = targetEl.closest('.task-list-item, .dataview-task-list-item');
+        if (renderedTaskRow instanceof HTMLElement) {
+            const checkbox = renderedTaskRow.querySelector('input.task-list-item-checkbox, .task-list-item-checkbox');
+            if (checkbox instanceof HTMLElement) return checkbox;
+            return renderedTaskRow;
+        }
+
         const lineHost = targetEl.closest('.cm-line');
         if (lineHost instanceof HTMLElement && this.isTaskLineHost(lineHost)) {
             return lineHost;
@@ -200,6 +202,126 @@ export class TaskCheckboxHandler {
             if (typeof line !== 'number' || !Number.isFinite(line)) return -1;
             return Math.max(0, line - 1);
         } catch { return -1; }
+    }
+
+    private async resolveTaskContextForMenuTarget(targetEl: HTMLElement): Promise<{
+        view: MarkdownView;
+        file: TFile;
+        lineNumber: number;
+        isReadingView: boolean;
+    } | null> {
+        const view = this.resolveMarkdownViewForElement(targetEl);
+        const file = view?.file;
+        if (!view || !file) return null;
+
+        const isReadingView = !!targetEl.closest('.markdown-reading-view, .markdown-preview-view');
+        const lineNumber = this.findTaskLineNumber(targetEl, view, isReadingView);
+        if (lineNumber >= 0) {
+            return { view, file, lineNumber, isReadingView };
+        }
+
+        if (!isReadingView) return null;
+        return await this.resolveRenderedTaskSourceContext(targetEl, view);
+    }
+
+    private async resolveRenderedTaskSourceContext(targetEl: HTMLElement, view: MarkdownView): Promise<{
+        view: MarkdownView;
+        file: TFile;
+        lineNumber: number;
+        isReadingView: boolean;
+    } | null> {
+        const taskHost = targetEl.closest<HTMLElement>('[data-task], .task-list-item, .dataview-task-list-item, li');
+        if (!taskHost) return null;
+
+        const sourcePath = this.resolveRenderedTaskSourcePath(taskHost);
+        if (!sourcePath) return null;
+
+        const sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
+        if (!(sourceFile instanceof TFile) || sourceFile.extension !== 'md') return null;
+
+        const lineNumber = await this.findRenderedTaskSourceLine(sourceFile, taskHost);
+        if (lineNumber < 0) return null;
+
+        return {
+            view,
+            file: sourceFile,
+            lineNumber,
+            isReadingView: true,
+        };
+    }
+
+    private resolveRenderedTaskSourcePath(taskHost: HTMLElement): string | null {
+        const rowPathCarrier = taskHost.closest<HTMLElement>('[data-path], [data-file-path], [data-filepath]');
+        const rowPath = rowPathCarrier?.dataset.path
+            || rowPathCarrier?.getAttribute('data-file-path')
+            || rowPathCarrier?.getAttribute('data-filepath');
+        if (typeof rowPath === 'string' && rowPath.trim().length > 0) {
+            return rowPath.trim();
+        }
+
+        const sourceLink = taskHost.querySelector<HTMLElement>('[data-path], [data-file-path], [data-filepath]');
+        const sourceLinkPath = sourceLink?.dataset.path
+            || sourceLink?.getAttribute('data-file-path')
+            || sourceLink?.getAttribute('data-filepath');
+        if (typeof sourceLinkPath === 'string' && sourceLinkPath.trim().length > 0) {
+            return sourceLinkPath.trim();
+        }
+
+        const noteLink = taskHost.querySelector<HTMLElement>('a.internal-link, [data-href], [data-linkpath], [data-file]');
+        const href = noteLink?.dataset.href || noteLink?.getAttribute('data-href') || noteLink?.dataset.linkpath || noteLink?.dataset.file;
+        if (typeof href === 'string' && href.trim().length > 0) {
+            const resolved = this.app.metadataCache.getFirstLinkpathDest(href.trim(), '');
+            if (resolved instanceof TFile) return resolved.path;
+        }
+
+        return null;
+    }
+
+    private async findRenderedTaskSourceLine(sourceFile: TFile, taskHost: HTMLElement): Promise<number> {
+        const content = await this.app.vault.cachedRead(sourceFile);
+        const lines = content.split('\n');
+        const cache = this.app.metadataCache.getFileCache(sourceFile) as any;
+        const listItems = Array.isArray(cache?.listItems) ? cache.listItems : [];
+        const renderedText = this.normalizeTaskTextForComparison(this.getRenderedTaskText(taskHost));
+        if (!renderedText) return -1;
+
+        let fallbackLine = -1;
+        for (const item of listItems) {
+            const line = Number(item?.position?.start?.line);
+            const taskState = String(item?.task ?? '');
+            if (!Number.isFinite(line) || line < 0 || line >= lines.length) continue;
+            if (!taskState.length) continue;
+
+            const normalizedLine = this.normalizeTaskTextForComparison(lines[line] || '');
+            if (!normalizedLine) continue;
+            if (normalizedLine === renderedText) return line;
+            if (fallbackLine < 0 && (normalizedLine.includes(renderedText) || renderedText.includes(normalizedLine))) {
+                fallbackLine = line;
+            }
+        }
+
+        return fallbackLine;
+    }
+
+    private getRenderedTaskText(taskHost: HTMLElement): string {
+        const rowContent = taskHost.querySelector<HTMLElement>(':scope > .list-item, :scope > .list-item-content, :scope > .list-item-inner, :scope > p');
+        const cloneSource = rowContent ?? taskHost;
+        const clone = cloneSource.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll('input, .task-list-item-checkbox').forEach((el) => el.remove());
+        return clone.textContent?.trim() || '';
+    }
+
+    private normalizeTaskTextForComparison(text: string): string {
+        return String(text || '')
+            .replace(/^\s*(?:[-*+]|\d+\.)\s*\[[^\]]*\]\s*/, '')
+            .replace(/^\s*(?:[-*+]|\d+\.)\s*/, '')
+            .replace(/\[[^\]]+::[^\]]*\]/g, ' ')
+            .replace(/\[\[([^\]|]+\|)?([^\]]+)\]\]/g, '$2')
+            .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+            .replace(/[#*_`>~]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
     }
 
     private getViewSourceText(view: MarkdownView): string {
@@ -292,6 +414,7 @@ export class TaskCheckboxHandler {
         const updatedContent = lines.join('\n');
         if (updatedContent === content) return false;
         await this.app.vault.modify(file, updatedContent);
+        await this.maybeStopTimerOnTerminalState(file, previousState, next.nextState, candidateLine);
         await this.maybePromptToCompleteNote(file, previousState, next.nextState, lines);
         this.scheduleChecklistReorder(file);
         return true;
@@ -323,6 +446,7 @@ export class TaskCheckboxHandler {
         const updatedContent = lines.join('\n');
         if (updatedContent === content) return false;
         await this.app.vault.modify(file, updatedContent);
+        await this.maybeStopTimerOnTerminalState(file, previousState, targetState, candidateLine);
         await this.maybePromptToCompleteNote(file, previousState, targetState, lines);
         this.scheduleChecklistReorder(file);
         return true;
@@ -367,15 +491,22 @@ export class TaskCheckboxHandler {
                     void this.plugin.timeTrackingService.startFromTaskLine(file, view, lineNumber, isReadingView);
                 });
         });
-        menu.addItem((item) => {
-            item.setTitle('Stop Timer on This Line')
-                .setIcon('square')
-                .onClick(() => {
-                    void this.plugin.timeTrackingService.stopTimerAtLine(file, view, lineNumber, isReadingView);
-                });
-        });
 
         menu.showAtPosition({ x, y });
+    }
+
+    private async maybeStopTimerOnTerminalState(
+        file: TFile,
+        previousState: CheckboxStateChar | null,
+        nextState: CheckboxStateChar,
+        lineNumber: number,
+    ): Promise<void> {
+        if ((nextState !== 'x' && nextState !== '-') || previousState === nextState) return;
+        try {
+            await this.plugin.timeTrackingService.stopTimerForTerminalTaskState(file, lineNumber);
+        } catch (error) {
+            logger.warn('[TPS GCM] Failed stopping timer from task terminal state change', { file: file.path, lineNumber, error });
+        }
     }
 
     private async maybePromptToCompleteNote(

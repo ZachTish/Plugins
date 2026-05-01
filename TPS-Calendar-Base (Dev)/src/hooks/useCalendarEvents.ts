@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { BasesEntry, BasesPropertyId, Value } from "obsidian";
 import type { CalendarEntry } from "../CalendarReactView";
+import { compareCalendarOrderValues } from "../utils/calendar-presentation";
 
 /**
  * Normalizes a potentially UTC-midnight Date to local midnight for all-day events.
@@ -89,18 +90,21 @@ export function useCalendarEvents({
   }, [entries]);
 
   const events = useMemo(() => {
-    return entries.map((calEntry) => {
+    const mappedEvents = entries.map((calEntry) => {
       const startDate = new Date(calEntry.startDate);
       const endDate = calEntry.endDate
         ? new Date(calEntry.endDate)
         : new Date(startDate.getTime() + 60 * 60 * 1000);
 
       const classNames = ["bases-calendar-event", ...(calEntry.cssClasses || [])];
+      const isAdditionalDateSource = classNames.includes("is-additional-date-source");
       const effectiveColor = calEntry.isExternal
         ? (calEntry.color || "#3788d8")
-        : (calEntry.backgroundColor || "var(--background-modifier-border)");
+        : isAdditionalDateSource
+          ? ""
+          : (calEntry.backgroundColor || "var(--background-modifier-border)");
       const backgroundColor = effectiveColor;
-      const borderColor = calEntry.borderColor || backgroundColor;
+      const borderColor = calEntry.borderColor || (isAdditionalDateSource ? "var(--background-modifier-border)" : backgroundColor);
 
       const allDaySource = allDayProperty
         ? tryGetValue(calEntry.entry, allDayProperty)
@@ -165,12 +169,14 @@ export function useCalendarEvents({
             ? (calEntry.entry as any).__taskItem?.filePath || (calEntry.entry as any).file?.path
             : (calEntry.entry as any).file?.path,
           calEntryTitle: calEntry.title,
+          sortKey: calEntry.sortKey,
           iconName: calEntry.iconName,
           iconColor: calEntry.iconColor,
           status: calEntry.status,
-          priorityColor: backgroundColor,
+          priorityColor: isAdditionalDateSource ? "" : backgroundColor,
           minEventHeight,
           isExternal: calEntry.isExternal,
+          isAdditionalDateSource,
           externalEvent: calEntry.externalEvent,
           isGhost: calEntry.isGhost,
           ghostDate: calEntry.ghostDate ? calEntry.ghostDate.toISOString() : undefined,
@@ -183,10 +189,32 @@ export function useCalendarEvents({
         display: "block",
         backgroundColor: backgroundColor,
         borderColor: borderColor,
-        textColor: "#ffffff",
-        "data-priority-color": backgroundColor,
+        textColor: isAdditionalDateSource ? "var(--text-normal)" : "#ffffff",
+        "data-priority-color": isAdditionalDateSource ? "" : backgroundColor,
       };
     });
+
+    mappedEvents.sort((left, right) => {
+      const result = compareCalendarOrderValues(
+        {
+          sortKey: left.extendedProps?.sortKey,
+          start: left.start as Date,
+          end: left.end as Date,
+          title: left.title,
+        },
+        {
+          sortKey: right.extendedProps?.sortKey,
+          start: right.start as Date,
+          end: right.end as Date,
+          title: right.title,
+        },
+      );
+      // Stable sort fallback: preserve original array order for equal events
+      // to avoid React reconciliation churn from unstable sort permutations.
+      return result;
+    });
+
+    return mappedEvents;
   }, [entries, allDayProperty, minEventHeight, tick]);
 
   return { basesEntryMap, events };

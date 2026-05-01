@@ -406,6 +406,13 @@ export class RuleEngine {
   }
 
   matchesRule(rule: IconColorRule | HideRule, context: RuleEvaluationContext): boolean {
+    // pathPrefix is always an early exit — it gates the rule regardless of whether
+    // the rule uses legacy property matching or the conditions array.
+    const prefix = "pathPrefix" in rule ? rule.pathPrefix : "";
+    if (!this.matchesPathPrefix(context.file.path, prefix)) {
+      return false;
+    }
+
     if (Array.isArray(rule.conditions) && rule.conditions.length > 0) {
       return this.matchesConditionGroup(rule.conditions, rule.match, context);
     }
@@ -415,10 +422,6 @@ export class RuleEngine {
     }
     const property = String(rule.property || "").trim();
     if (!property) {
-      return false;
-    }
-
-    if (!this.matchesPathPrefix(context.file.path, rule.pathPrefix)) {
       return false;
     }
 

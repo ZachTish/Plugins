@@ -45,6 +45,7 @@ class LinkedSubitemPillsWidget extends WidgetType {
   constructor(
     private readonly model: SubitemLineModel,
     private readonly onPillClick: (evt: MouseEvent, pill: PropertyPill) => void,
+    private readonly onLineTailClick: (evt: MouseEvent) => void,
   ) {
     super();
   }
@@ -73,6 +74,19 @@ class LinkedSubitemPillsWidget extends WidgetType {
     wrapper.className = `${CM_WIDGET_CLASS} tps-gcm-linked-subitem-pills-only`;
     wrapper.dataset.linkedSubitemPath = this.model.childFile.path;
     wrapper.dataset.linkedSubitemParent = this.model.parentFile.path;
+    wrapper.addEventListener('mousedown', (evt) => {
+      const target = evt.target as HTMLElement | null;
+      if (target?.closest('.tps-gcm-linked-subitem-pill')) return;
+      evt.preventDefault();
+      evt.stopPropagation();
+    });
+    wrapper.addEventListener('click', (evt) => {
+      const target = evt.target as HTMLElement | null;
+      if (target?.closest('.tps-gcm-linked-subitem-pill')) return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      this.onLineTailClick(evt);
+    });
     wrapper.appendChild(elements.pillsContainer);
     return wrapper;
   }
@@ -748,7 +762,7 @@ export class LinkedSubitemCheckboxService {
         if (!parsed) continue;
         const childFile = this.resolveLinkedFile(parsed.linkTarget, file.path);
         if (!(childFile instanceof TFile)) continue;
-        const model = this.subitemLineModelService.buildModel(parsed, childFile, file);
+        const model = this.subitemLineModelService.buildModel(parsed, childFile, file, lines[i]);
         if (parsed.kind === 'checkbox' && !model.hasExplicitStatus) {
           this.queueClearedStatusSync(childFile);
         }
@@ -1462,6 +1476,9 @@ export class LinkedSubitemCheckboxService {
   }
 
   private async applyLinkedSubitemStatusChange(file: TFile, normalizedStatus: string): Promise<void> {
+    if (normalizedStatus === 'complete' || normalizedStatus === 'wont-do') {
+      await this.plugin.timeTrackingService.stopFirstRunningTimer(file);
+    }
     await this.plugin.bulkEditService.setStatus([file], normalizedStatus);
     await this.syncCheckboxStateAcrossParents(file, normalizedStatus);
     await this.refreshReferencesForChild(file);
@@ -1743,7 +1760,7 @@ export class LinkedSubitemCheckboxService {
           potentialCount++;
           const childFile = this.resolveLinkedFile(parsed.linkTarget, parentFile.path);
           if (childFile instanceof TFile) {
-            const model = this.subitemLineModelService.buildModel(parsed, childFile, parentFile);
+            const model = this.subitemLineModelService.buildModel(parsed, childFile, parentFile, line.text);
             if (parsed.kind === 'checkbox' && !model.hasExplicitStatus) {
               this.queueClearedStatusSync(childFile);
             }
@@ -1817,6 +1834,9 @@ export class LinkedSubitemCheckboxService {
                   evt,
                   (evt.target as HTMLElement).closest('.tps-gcm-linked-subitem-pill') as HTMLElement,
                 );
+              },
+              () => {
+                this.placeCursorAtVisibleTaskEnd(view, safeReplaceTo);
               },
             );
 
@@ -1938,6 +1958,22 @@ export class LinkedSubitemCheckboxService {
         // Ignore stale editors during workspace churn.
       }
     }, Math.max(0, delayMs));
+  }
+
+  private placeCursorAtVisibleTaskEnd(view: EditorView, position: number): void {
+    const docLength = view.state.doc.length;
+    const safePosition = Math.max(0, Math.min(position, docLength));
+    window.setTimeout(() => {
+      try {
+        view.dispatch({
+          selection: { anchor: safePosition, head: safePosition },
+          scrollIntoView: true,
+        });
+        view.focus();
+      } catch {
+        // Ignore stale editors during workspace churn.
+      }
+    }, 0);
   }
 
   private logReadingModeHostDiagnostics(

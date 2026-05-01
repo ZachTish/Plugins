@@ -27,6 +27,7 @@ import {
   DEFAULT_CONDENSE_LEVEL,
   DEFAULT_PRIORITY_COLOR_MAP,
 } from "./utils";
+import { compareCalendarOrderValues } from "./utils/calendar-presentation";
 import { ExternalCalendarEvent } from "./types";
 
 // Extracted hooks
@@ -245,6 +246,7 @@ export interface CalendarEntry {
   startDate: Date;
   endDate?: Date;
   title?: string;
+  sortKey?: string;
   forceAllDay?: boolean;
   isGhost?: boolean;
   ghostDate?: Date;
@@ -403,6 +405,58 @@ const extractDailyNoteDateKey = (path: string | null | undefined, userFormat?: s
   return null;
 };
 
+const parseDateKeyToLocalRange = (dateKey: string): { start: Date; end: Date } | null => {
+  const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const [, yearRaw, monthRaw, dayRaw] = match;
+  const year = Number.parseInt(yearRaw, 10);
+  const monthIndex = Number.parseInt(monthRaw, 10) - 1;
+  const day = Number.parseInt(dayRaw, 10);
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) return null;
+  const start = new Date(year, monthIndex, day, 0, 0, 0, 0);
+  const end = new Date(year, monthIndex, day + 1, 0, 0, 0, 0);
+  return { start, end };
+};
+
+const eventOccursOnDateKey = (
+  eventStart: Date | null | undefined,
+  eventEnd: Date | null | undefined,
+  dateKey: string,
+): boolean => {
+  if (!eventStart || Number.isNaN(eventStart.getTime())) return false;
+  const targetRange = parseDateKeyToLocalRange(dateKey);
+  if (!targetRange) return false;
+
+  const startMs = eventStart.getTime();
+  const endMs =
+    eventEnd && !Number.isNaN(eventEnd.getTime()) && eventEnd.getTime() > startMs
+      ? eventEnd.getTime()
+      : startMs + 1;
+
+  return startMs < targetRange.end.getTime() && endMs > targetRange.start.getTime();
+};
+
+const shouldHighlightActiveNoteEvent = ({
+  entryPath,
+  activeFilePath,
+  eventStart,
+  eventEnd,
+  dailyNoteDateFormat,
+}: {
+  entryPath: string | null | undefined;
+  activeFilePath: string | null | undefined;
+  eventStart: Date | null | undefined;
+  eventEnd: Date | null | undefined;
+  dailyNoteDateFormat?: string;
+}): boolean => {
+  if (!pathsLikelyMatch(entryPath, activeFilePath)) return false;
+
+  const activeDateKey = extractDailyNoteDateKey(activeFilePath, dailyNoteDateFormat);
+  if (!activeDateKey) return true;
+
+  return eventOccursOnDateKey(eventStart, eventEnd, activeDateKey);
+};
+
 const applyActiveNoteEventHighlight = (eventEl: HTMLElement, shouldHighlight: boolean): void => {
   const snapshotAttr = "data-tps-active-style-snapshot";
   const readSnapshot = (): Record<string, string | null> | null => {
@@ -523,6 +577,26 @@ const applyActiveDayLabelHighlight = (labelEl: HTMLElement, shouldHighlight: boo
   } else {
     restoreSnapshot();
   }
+};
+
+const compareRenderedCalendarEvents = (left: any, right: any): number => {
+  if (!left && !right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+  return compareCalendarOrderValues(
+    {
+      sortKey: left.extendedProps?.sortKey,
+      start: left.start instanceof Date ? left.start : null,
+      end: left.end instanceof Date ? left.end : null,
+      title: left.title,
+    },
+    {
+      sortKey: right.extendedProps?.sortKey,
+      start: right.start instanceof Date ? right.start : null,
+      end: right.end instanceof Date ? right.end : null,
+      title: right.title,
+    },
+  );
 };
 
 export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
@@ -734,10 +808,20 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
     const eventEls = rootEl.querySelectorAll<HTMLElement>(".fc-event.tps-calendar-entry[data-path]");
     eventEls.forEach((eventEl) => {
       const path = eventEl.getAttribute("data-path");
-      const shouldHighlight = pathsLikelyMatch(path, activeFilePath);
+      const startMs = Number.parseInt(eventEl.getAttribute("data-start-ts") || "", 10);
+      const endMs = Number.parseInt(eventEl.getAttribute("data-end-ts") || "", 10);
+      const eventStart = Number.isFinite(startMs) ? new Date(startMs) : null;
+      const eventEnd = Number.isFinite(endMs) ? new Date(endMs) : null;
+      const shouldHighlight = shouldHighlightActiveNoteEvent({
+        entryPath: path,
+        activeFilePath,
+        eventStart,
+        eventEnd,
+        dailyNoteDateFormat,
+      });
       applyActiveNoteEventHighlight(eventEl, shouldHighlight);
     });
-  }, [activeFilePath, entries, viewMode, currentDate]);
+  }, [activeFilePath, dailyNoteDateFormat, entries, viewMode, currentDate]);
 
   useEffect(() => {
     const rootEl = containerRef.current;
@@ -1781,6 +1865,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
       }
 
       const priorityColor = (event.extendedProps.priorityColor as string | undefined) ?? "";
+      const isAdditionalDateSource = !!event.extendedProps?.isAdditionalDateSource;
       if (priorityColor) {
         element.style.setProperty("--priority-color", priorityColor);
         element.style.setProperty("background", priorityColor, "important");
@@ -1797,6 +1882,17 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
         element.style.removeProperty("border-color");
       }
 
+      if (isAdditionalDateSource) {
+        element.style.setProperty("background", "transparent", "important");
+        element.style.setProperty("background-image", "none", "important");
+        element.style.setProperty("border-color", "var(--background-modifier-border)", "important");
+        element.style.setProperty("box-shadow", "none", "important");
+        element.style.setProperty("color", "var(--text-normal)", "important");
+      } else {
+        element.style.removeProperty("box-shadow");
+        element.style.removeProperty("color");
+      }
+
       const isExternalDropPreview = !!event.extendedProps?.isExternalDropPreview;
       if (isExternalDropPreview) {
         element.style.opacity = "0.7";
@@ -1806,13 +1902,29 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
 
       if (event.extendedProps.entryPath) {
         element.setAttribute('data-path', event.extendedProps.entryPath);
+        if (event.start) {
+          element.setAttribute("data-start-ts", String(event.start.getTime()));
+        } else {
+          element.removeAttribute("data-start-ts");
+        }
+        if (event.end) {
+          element.setAttribute("data-end-ts", String(event.end.getTime()));
+        } else {
+          element.removeAttribute("data-end-ts");
+        }
         element.classList.add('tps-calendar-entry');
         if (event.extendedProps.isTask) {
           element.setAttribute('data-tps-task-context', 'true');
         } else {
           element.removeAttribute('data-tps-task-context');
         }
-        const shouldHighlight = pathsLikelyMatch(event.extendedProps.entryPath, activeFilePathRef.current);
+        const shouldHighlight = shouldHighlightActiveNoteEvent({
+          entryPath: event.extendedProps.entryPath,
+          activeFilePath: activeFilePathRef.current,
+          eventStart: event.start,
+          eventEnd: event.end,
+          dailyNoteDateFormat: dailyNoteDateFormatRef.current,
+        });
         applyActiveNoteEventHighlight(element, shouldHighlight);
         element.setAttribute("draggable", "true");
         const dragPath = String(event.extendedProps.sourceLinkPath || event.extendedProps.entryPath || "").trim();
@@ -2865,6 +2977,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
               eventResizeStart={handleDragStart}
               // @ts-ignore
               eventResizeStop={handleDragStop}
+              eventOrder={compareRenderedCalendarEvents}
 
               nowIndicator={showNowIndicator}
               dayHeaders={resolvedFilterViewMode === "day" ? showSingleDayDateLabel : true}

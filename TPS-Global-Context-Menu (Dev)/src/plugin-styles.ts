@@ -1335,6 +1335,15 @@ export const PLUGIN_STYLES = `
         color: var(--text-muted);
       }
 
+      .tps-gcm-linked-subitem-pill--hidden {
+        border: 0;
+        background: transparent;
+        color: var(--text-faint);
+        font-weight: 700;
+        padding: 0 1px;
+        cursor: default;
+      }
+
       /* CodeMirror widget context - ensure pills are visible in live preview */
       .cm-widget .tps-gcm-linked-subitem-pill,
       .cm-content .tps-gcm-linked-subitem-pill,
@@ -3700,10 +3709,25 @@ export const PLUGIN_STYLES = `
         margin-bottom: 12px;
         display: flex;
         justify-content: flex-start;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
         user-select: none;
       }
       .tps-gcm-parent-nav-button--top {
         margin-left: 0 !important;
+      }
+
+      .tps-gcm-parent-nav-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+
+      .tps-gcm-time-block-nav-button {
+        background-color: color-mix(in srgb, var(--interactive-accent) 82%, var(--background-secondary));
       }
 
       /* Plus Buttons - Neutral Style */

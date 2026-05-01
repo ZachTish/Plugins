@@ -3,6 +3,7 @@ import { BasesEntry, BasesPropertyId, Value, setIcon } from "obsidian";
 import { EventContentArg } from "@fullcalendar/core";
 import { parsePropertyId } from "obsidian";
 import { tryGetValue } from "../hooks/useCalendarEvents";
+import { normalizeCalendarIconName } from "../utils/calendar-presentation";
 
 interface UseEventRendererOptions {
   app: any;
@@ -306,7 +307,7 @@ const EventIcon: React.FC<{ iconName: string; color?: string }> = ({ iconName, c
     if (!node) return;
     node.empty();
     try {
-      const normalizedIconName = String(iconName || "").replace(/^lucide[:\-]/i, "").trim();
+      const normalizedIconName = normalizeCalendarIconName(iconName);
       if (!normalizedIconName) return;
       setIcon(node, normalizedIconName);
       const resolvedColor = color || "var(--text-on-accent)";

@@ -295,53 +295,84 @@ export class SubitemRelationshipSyncService {
    * This ensures subitem links appear at a consistent location in the note body.
    */
   private insertLineAfterFrontmatter(content: string, line: string): string {
-    const lines = content.split('\n');
-    
-    // Check for frontmatter (starts with --- on first line)
-    if (lines[0]?.trim() !== '---') {
-      // No frontmatter - insert at the top
-      if (content.length === 0) return `${line}\n`;
-      if (content.endsWith('\n')) return `${line}\n${content}`;
-      return `${line}\n${content}`;
+    const normalized = content.replace(/\r\n/g, '\n');
+    const bom = normalized.startsWith('\uFEFF') ? '\uFEFF' : '';
+    const body = bom ? normalized.slice(1) : normalized;
+    const topBlock = this.findFrontmatterBlockAtTop(body);
+    if (topBlock) {
+      return this.insertLineAfterFrontmatterBlock(`${bom}${body}`, topBlock.end + bom.length, line);
     }
 
-    // Find the closing ---
-    let frontmatterEndIndex = -1;
-    for (let i = 1; i < lines.length; i++) {
-      if (lines[i]?.trim() === '---') {
-        frontmatterEndIndex = i;
-        break;
-      }
+    const nestedBlock = this.findNestedFrontmatterBlock(body);
+    if (nestedBlock) {
+      return this.insertLineAfterFrontmatterBlock(`${bom}${body}`, nestedBlock.end + bom.length, line);
     }
 
-    if (frontmatterEndIndex === -1) {
-      // Unclosed frontmatter - append to end as fallback
-      if (content.endsWith('\n') || content.length === 0) return `${content}${line}\n`;
-      return `${content}\n${line}\n`;
-    }
+    if (content.length === 0) return `${line}\n`;
+    if (content.endsWith('\n')) return `${line}\n${content}`;
+    return `${line}\n${content}`;
+  }
 
-    // Insert after frontmatter closing ---
-    // Keep the restored/inserted subitem as the first body line, but preserve
-    // a blank separator before the remaining body so headings/paragraphs do not
-    // collapse into the list item.
-    const afterFrontmatter = lines.slice(frontmatterEndIndex + 1);
-    const hasBlankLineAfter = afterFrontmatter.length > 0 && afterFrontmatter[0]?.trim() === '';
-    
-    // Build the new content
-    const beforeInsert = lines.slice(0, frontmatterEndIndex + 1);
-    const resultLines = [...beforeInsert, '', line];
-    
-    // Add remaining content, skipping leading blank line if we already added one
-    const remainingContent = hasBlankLineAfter ? afterFrontmatter.slice(1) : afterFrontmatter;
-    if (remainingContent.length > 0) {
-      resultLines.push('');
-      resultLines.push(...remainingContent);
+  private insertLineAfterFrontmatterBlock(content: string, blockEndOffset: number, line: string): string {
+    const before = content.slice(0, blockEndOffset).replace(/\n*$/, '');
+    const afterRaw = content.slice(blockEndOffset).replace(/^\n*/, '');
+    let result = `${before}\n\n${line}`;
+    if (afterRaw.length > 0) {
+      result += `\n\n${afterRaw}`;
+    } else {
+      result += '\n';
     }
-    
-    // Ensure trailing newline
-    let result = resultLines.join('\n');
     if (!result.endsWith('\n')) result += '\n';
     return result;
+  }
+
+  private findFrontmatterBlockAtTop(content: string): { body: string; end: number } | null {
+    if (content.startsWith('---\n')) {
+      return this.findFrontmatterBlock(content, 0);
+    }
+
+    const trimmedLeading = content.replace(/^\s*/, '');
+    const leadingOffset = content.length - trimmedLeading.length;
+    if (leadingOffset > 0 && !/\S/.test(content.slice(0, leadingOffset)) && trimmedLeading.startsWith('---\n')) {
+      return this.findFrontmatterBlock(content, leadingOffset);
+    }
+
+    return null;
+  }
+
+  private findNestedFrontmatterBlock(content: string): { body: string; end: number } | null {
+    for (let index = content.indexOf('---\n'); index >= 0; index = content.indexOf('---\n', index + 4)) {
+      const block = this.findFrontmatterBlock(content, index);
+      if (!block) continue;
+      if (this.looksLikeYamlFrontmatter(block.body)) {
+        return block;
+      }
+    }
+    return null;
+  }
+
+  private findFrontmatterBlock(content: string, startIndex: number): { body: string; end: number } | null {
+    if (!content.startsWith('---\n', startIndex)) {
+      return null;
+    }
+
+    const closeIndex = content.indexOf('\n---\n', startIndex + 4);
+    if (closeIndex === -1) {
+      return null;
+    }
+
+    return {
+      body: content.slice(startIndex + 4, closeIndex),
+      end: closeIndex + '\n---\n'.length,
+    };
+  }
+
+  private looksLikeYamlFrontmatter(body: string): boolean {
+    return body
+      .split('\n')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .some((entry) => /^[A-Za-z0-9_"'.-]+\s*:/.test(entry));
   }
 
   private buildBodyLinkLine(parentFile: TFile, childFile: TFile, checkboxState?: string | null): string {

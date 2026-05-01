@@ -135,11 +135,18 @@ export class ContextTargetService {
         if (this.isNativeMenuManagedTarget(target)) return false;
         if (this.resolveEmbedTarget(target)) return true;
 
+        const resolvedPath = this.resolveExplorerPath(target);
+        const isRenderedRow = !!target.closest(
+            '.bases-feed-entry, .bases-calendar-event-content, .tps-calendar-entry, li, .dataview, .dataview-result-list-li, .dataview-task-list-item',
+        );
+        if (isRenderedRow && typeof resolvedPath === 'string' && resolvedPath.trim().length > 0) {
+            return true;
+        }
+
         // Bases/Calendar entries are not always rendered as links, but they often
         // carry a resolvable data-path for the underlying note.
         if (target.closest('.tps-calendar-entry, .bases-feed-entry, .bases-calendar-event-content')) {
-            const path = this.resolveExplorerPath(target);
-            if (typeof path === 'string' && path.trim().length > 0) {
+            if (typeof resolvedPath === 'string' && resolvedPath.trim().length > 0) {
                 return true;
             }
         }
@@ -990,6 +997,34 @@ export class ContextTargetService {
      * 3. 'data-file'/'data-linkpath' attributes.
      */
     resolveExplorerPath(target: HTMLElement): string | null {
+        const directPath = this.resolvePathFromElement(target);
+        if (directPath) {
+            return directPath;
+        }
+
+        const directLink = target.closest('a.internal-link, [data-href], [data-linkpath], [data-file], [data-path]');
+        if (directLink instanceof HTMLElement) {
+            const directLinkPath = this.resolvePathFromElement(directLink);
+            if (directLinkPath) {
+                return directLinkPath;
+            }
+        }
+
+        const entryContainer = target.closest<HTMLElement>(
+            '.bases-feed-entry, .tps-calendar-entry, li, .dataview, .dataview-result-list-li, .dataview-task-list-item',
+        );
+        if (entryContainer) {
+            const nestedLink = entryContainer.querySelector<HTMLElement>(
+                'a.internal-link, [data-href], [data-linkpath], [data-file], [data-path]',
+            );
+            if (nestedLink) {
+                const nestedLinkPath = this.resolvePathFromElement(nestedLink);
+                if (nestedLinkPath) {
+                    return nestedLinkPath;
+                }
+            }
+        }
+
         const item = target.closest(
             '.nav-file, .nav-folder, .tree-item, .tree-item-self, .tps-calendar-entry, .bases-feed-entry, .nn-file, .nn-navitem, .nn-path-segment, [data-path]',
         );

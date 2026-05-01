@@ -11,7 +11,7 @@
   "tagPageFolder": "",
   "tagPageFileType": "canvas",
   "createTagPageOnOpen": true,
-  "propertyPageFolder": "",
+  "propertyPageFolder": "_properties",
   "propertyPageFileType": "canvas",
   "createPropertyPageOnOpen": false,
   "frontmatterIconField": "icon",

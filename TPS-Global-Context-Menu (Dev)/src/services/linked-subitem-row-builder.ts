@@ -125,11 +125,13 @@ export function buildLinkedSubitemRow(
     const pill = document.createElement('span');
     pill.className = `tps-gcm-linked-subitem-pill tps-gcm-linked-subitem-pill--${pillData.kind}`;
     pill.textContent = pillData.label;
-    pill.dataset.linkedSubitemPath = model.childFile.path;
-    pill.dataset.linkedSubitemPillKind = pillData.kind;
-    pill.dataset.linkedSubitemPillValue = pillData.value || pillData.label;
-    if (pillData.propertyKey) pill.dataset.linkedSubitemPropertyKey = pillData.propertyKey;
-    if (pillData.propertyType) pill.dataset.linkedSubitemPropertyType = pillData.propertyType;
+    if (pillData.kind !== 'hidden') {
+      pill.dataset.linkedSubitemPath = model.childFile.path;
+      pill.dataset.linkedSubitemPillKind = pillData.kind;
+      pill.dataset.linkedSubitemPillValue = pillData.value || pillData.label;
+      if (pillData.propertyKey) pill.dataset.linkedSubitemPropertyKey = pillData.propertyKey;
+      if (pillData.propertyType) pill.dataset.linkedSubitemPropertyType = pillData.propertyType;
+    }
     if (pillData.textColor) pill.style.color = pillData.textColor;
     if (pillData.backgroundColor) {
       pill.style.backgroundColor = pillData.backgroundColor;
@@ -138,15 +140,17 @@ export function buildLinkedSubitemRow(
     if (pillData.borderColor) {
       pill.style.border = `1px solid ${pillData.borderColor}`;
     }
-    pill.addEventListener('mousedown', (evt) => {
-      evt.preventDefault();
-      evt.stopPropagation();
-    });
-    pill.addEventListener('click', (evt) => {
-      evt.preventDefault();
-      evt.stopPropagation();
-      onPillClick(evt, pillData);
-    });
+    if (pillData.kind !== 'hidden') {
+      pill.addEventListener('mousedown', (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+      });
+      pill.addEventListener('click', (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        onPillClick(evt, pillData);
+      });
+    }
     pillsContainer.appendChild(pill);
   }
   container.appendChild(pillsContainer);

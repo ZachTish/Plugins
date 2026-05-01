@@ -3,6 +3,12 @@ import TPSGlobalContextMenuPlugin from '../main';
 import { resolveCustomProperties } from '../resolve-profiles';
 import { ViewModeService } from '../services/view-mode-service';
 import { normalizeTagValue, parseTagInput } from '../utils/tag-utils';
+import {
+  buildRuleContext,
+  evaluateIconColorRules,
+  isRuleWriteExcluded,
+  isValidCssColor,
+} from '../utils/rule-resolver';
 import * as logger from '../logger';
 import { parseLinksFromFrontmatterValue, resolveLinkTargetToFile } from '../services/link-target-service';
 import type { ResolvedParentLink } from '../services/subitem-types';
@@ -272,41 +278,22 @@ export class SubitemMetadataService {
     const fromIconField = pickString(frontmatter?.icon);
     if (fromIconField) return fromIconField;
 
-    const pluginsApi: any = (this.app as any)?.plugins;
-    const companion: any = pluginsApi?.plugins?.['tps-notebook-navigator-companion'];
     const configuredIconField = pickString(this.plugin.settings.notebookNavigatorIconField);
     if (configuredIconField) {
       const configuredValue = pickString(this.getFrontmatterValueCaseInsensitive(frontmatter, configuredIconField));
       if (configuredValue) return configuredValue;
     }
 
-    if (this.isCompanionWriteExcluded(file)) {
+    if (this.isRuleWriteExcludedForFile(file)) {
       return '';
     }
 
-    const ruleEngine: any = companion?.ruleEngine;
-    if (companion?.settings?.enabled && ruleEngine?.resolveVisualOutputs) {
-      try {
-        const cache = this.app.metadataCache.getFileCache(file) as any;
-        const cacheTags = parseTagInput([...(getAllTags(cache) || []), frontmatter?.tags, frontmatter?.tag]);
-        const visual = ruleEngine.resolveVisualOutputs(this.plugin.settings.notebookNavigatorRules || [], {
-          file: {
-            path: file.path,
-            name: file.name,
-            basename: file.basename,
-            extension: file.extension,
-          },
-          frontmatter,
-          tags: Array.from(new Set(cacheTags.map((tag) => normalizeTagValue(tag)).filter(Boolean))),
-        });
-        const ruleIcon = pickString(visual?.icon?.value);
-        if (ruleIcon) return ruleIcon;
-      } catch (error) {
-        logger.warn('[TPS GCM] Failed resolving companion icon for subitem:', file.path, error);
-      }
-    }
+    const localRules = this.plugin.settings.notebookNavigatorRules;
+    if (!localRules || localRules.length === 0) return '';
 
-    return '';
+    const context = buildRuleContext(this.app, file, frontmatter);
+    const visual = evaluateIconColorRules(this.app, localRules, context);
+    return pickString(visual?.icon?.value);
   }
 
   private ensureSubitemIconVisible(iconEl: HTMLElement): void {
@@ -329,72 +316,30 @@ export class SubitemMetadataService {
       }
     }
 
-    if (file && !this.isCompanionWriteExcluded(file)) {
-      const companionColor = this.resolveCompanionRuleColor(file, frontmatter);
-      if (companionColor) {
-        return companionColor;
+    if (file && !this.isRuleWriteExcludedForFile(file)) {
+      const ruleColor = this.resolveRuleColor(file, frontmatter);
+      if (ruleColor) {
+        return ruleColor;
       }
     }
     return '';
   }
 
-  private isCompanionWriteExcluded(file: TFile): boolean {
-    const pluginsApi: any = (this.app as any)?.plugins;
-    const companion: any =
-      pluginsApi?.plugins?.['tps-notebook-navigator-companion']
-      ?? pluginsApi?.plugins?.['TPS-Notebook-Navigator-Companion (Dev)'];
-    const exclusionService: any = companion?.exclusionService;
-    if (!exclusionService || typeof exclusionService.shouldIgnore !== 'function') return false;
-    try {
-      return !!exclusionService.shouldIgnore(file, { bypassCreationGrace: true });
-    } catch {
-      return false;
-    }
+  private isRuleWriteExcludedForFile(file: TFile): boolean {
+    return isRuleWriteExcluded(this.app, file, this.plugin.settings.notebookNavigatorFrontmatterWriteExclusions);
   }
 
   private isValidCssColor(value: string): boolean {
-    const normalized = String(value || '').trim();
-    if (!normalized) return false;
-    if (normalized.startsWith('var(')) return true;
-    if (typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', normalized)) {
-      return true;
-    }
-    return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(normalized);
+    return isValidCssColor(value);
   }
 
-  private resolveCompanionRuleColor(file: TFile, frontmatter: Record<string, any>): string {
-    const pluginsApi: any = (this.app as any)?.plugins;
-    const companion: any = pluginsApi?.plugins?.['tps-notebook-navigator-companion'];
-    if (!companion?.settings?.enabled) return '';
+  private resolveRuleColor(file: TFile, frontmatter: Record<string, any>): string {
+    const rules = this.plugin.settings.notebookNavigatorRules;
+    if (!rules || rules.length === 0) return '';
 
-    const ruleEngine: any = companion.ruleEngine;
-    if (!ruleEngine || typeof ruleEngine.resolveVisualOutputs !== 'function') return '';
-
-    const cache = this.app.metadataCache.getFileCache(file) as any;
-    const normalizedTags = Array.from(new Set(
-      parseTagInput([...(getAllTags(cache) || []), frontmatter?.tags, frontmatter?.tag])
-        .map((tag) => normalizeTagValue(tag))
-        .filter(Boolean)
-    ));
-
-    const context = {
-      file: {
-        path: file.path,
-        name: file.name,
-        basename: file.basename,
-        extension: file.extension,
-      },
-      frontmatter,
-      tags: normalizedTags,
-    };
-
-    try {
-      const visual = ruleEngine.resolveVisualOutputs(companion.settings.rules || [], context);
-      const color = String(visual?.color?.value || '').trim();
-      return this.isValidCssColor(color) ? color : '';
-    } catch (error) {
-      logger.warn('[TPS GCM] Failed resolving companion color for subitem:', file.path, error);
-      return '';
-    }
+    const context = buildRuleContext(this.app, file, frontmatter);
+    const visual = evaluateIconColorRules(this.app, rules, context);
+    const color = String(visual?.color?.value || '').trim();
+    return isValidCssColor(color) ? color : '';
   }
 }

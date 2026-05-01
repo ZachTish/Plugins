@@ -1,4 +1,5 @@
 import { ItemView, TFile, WorkspaceLeaf } from "obsidian";
+import { resolveMainAreaLeaf } from "../utils/workspace-leaf";
 
 export const UNSCHEDULED_VIEW_TYPE = "tps-calendar-unscheduled";
 
@@ -132,16 +133,10 @@ export class UnscheduledView extends ItemView {
           }
           return;
         }
-        const workspaceAny = this.app.workspace as any;
-        const activeLeaf = workspaceAny?.activeLeaf ?? null;
-        const activeType = activeLeaf?.view?.getViewType?.();
-        const fallbackLeaf =
-          activeLeaf && activeType !== "calendar-bases-view" && activeType !== "calendar"
-            ? activeLeaf
-            : this.app.workspace.getLeavesOfType("markdown")[0] ?? null;
-        const leaf = (e.ctrlKey || e.metaKey)
-          ? this.app.workspace.getLeaf("tab")
-          : fallbackLeaf;
+        const leaf = resolveMainAreaLeaf(this.app, {
+          preferNewTab: e.ctrlKey || e.metaKey,
+          excludedViewTypes: [UNSCHEDULED_VIEW_TYPE, "calendar", "calendar-bases-view"],
+        });
         if (!leaf) return;
         void leaf.openFile(file);
       });

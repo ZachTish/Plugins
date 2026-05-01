@@ -545,8 +545,8 @@ export class NoteOperationService {
         }
 
         try {
-            const companion = (this.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-            await companion?.api?.applyRulesToFile?.(file);
+            const { applyRulesToFile } = await import('../utils/rule-resolver');
+            await applyRulesToFile(this.app, file, 'gcm-daily-note-create');
         } catch (error) {
             logger.warn('Failed applying NN rules to created daily note', { file: file.path, error });
         }

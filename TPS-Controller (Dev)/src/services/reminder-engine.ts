@@ -89,6 +89,13 @@ export class ReminderEngine {
                 const cache = this.app.metadataCache.getFileCache(file);
                 const fm = (cache?.frontmatter || {}) as Record<string, unknown>;
                 const targets = await buildReminderTargetsForFile(this.app, file, fm, settings);
+                if (targets.length > 0) {
+                    logger.debug('[ReminderEngine] Built reminder targets for file', {
+                        file: file.path,
+                        count: targets.length,
+                        sourceTypes: Array.from(new Set(targets.map((target) => target.sourceType))),
+                    });
+                }
 
                 for (const target of targets) {
                     const result = this.evaluateTarget({
@@ -110,6 +117,11 @@ export class ReminderEngine {
 
         if (needsExternalEvents) {
             const externalTargets = await this.buildUnmatchedExternalReminderTargets(files, settings);
+            if (externalTargets.length > 0) {
+                logger.debug('[ReminderEngine] Built unmatched external reminder targets', {
+                    count: externalTargets.length,
+                });
+            }
             for (const target of externalTargets) {
                 const event = target.externalEvent;
                 if (!event) continue;
@@ -245,6 +257,12 @@ export class ReminderEngine {
             const state = alertState[target.sourceKey][reminder.id];
 
             if (state.lastTriggerKey && state.lastTriggerKey !== triggerKey && state.triggered) {
+                logger.debug('[ReminderEngine] Reset reminder state because trigger key changed', {
+                    sourceKey: target.sourceKey,
+                    reminderId: reminder.id,
+                    previousTriggerKey: state.lastTriggerKey,
+                    nextTriggerKey: triggerKey,
+                });
                 state.triggered = false;
                 state.repeatCount = 0;
                 state.lastSent = undefined;
@@ -273,6 +291,10 @@ export class ReminderEngine {
             const shouldStop = reminder.stopConditions.some((cond) => checkStopCondition(effectiveFm, cond));
             if (shouldStop) {
                 if (state.triggered) {
+                    logger.debug('[ReminderEngine] Cleared reminder state because a stop condition matched', {
+                        sourceKey: target.sourceKey,
+                        reminderId: reminder.id,
+                    });
                     state.triggered = false;
                     state.repeatCount = 0;
                     state.lastSent = undefined;
@@ -338,7 +360,11 @@ export class ReminderEngine {
             stateChanged = true;
 
             if (settings.enableLogging) {
-                logger.log(`[ReminderEngine] Firing notification: "${title}" for ${fileRef.basename} (rule: "${reminder.label || reminder.id}")`);
+                logger.log(`[ReminderEngine] Firing notification: "${title}" for ${fileRef.basename} (rule: "${reminder.label || reminder.id}")`, {
+                    sourceType: target.sourceType,
+                    sourceKey: target.sourceKey,
+                    reminderId: reminder.id,
+                });
             }
 
             break;
@@ -363,7 +389,13 @@ export class ReminderEngine {
 
         for (const url of urls) {
             try {
+                logger.debug('[ReminderEngine] Fetching unmatched external reminder events', {
+                    url,
+                    rangeStart,
+                    rangeEnd,
+                });
                 const events = await this.externalCalendarService.fetchEvents(url, rangeStart, rangeEnd, false, false);
+                const targetCountBefore = targets.length;
                 for (const event of events) {
                     if (event.isCancelled) continue;
                     if (this.matchesLocalEvent(localIndex, event)) continue;
@@ -382,6 +414,11 @@ export class ReminderEngine {
                         },
                     });
                 }
+                logger.debug('[ReminderEngine] Completed unmatched external reminder scan', {
+                    url,
+                    fetched: events.length,
+                    added: targets.length - targetCountBefore,
+                });
             } catch (error) {
                 logger.warn(`[ReminderEngine] Failed fetching external reminder events for ${url}`, error);
             }

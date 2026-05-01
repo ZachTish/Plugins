@@ -104,8 +104,7 @@ export interface CalendarPluginSettings {
     statusKey: string;
     previousStatusKey: string;
     startProperty: string;
-    secondaryStartProperty: string;
-    tertiaryStartProperty: string;
+    additionalDateProperties: string[];
     endProperty: string;
     frontmatterColorField: string;
     frontmatterIconField: string;

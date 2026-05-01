@@ -27,7 +27,12 @@ export default class TPSMessager extends Plugin {
         logger.log('[TPS Messager] onload() started');
         try {
             await this.loadSettings();
-            logger.log('[TPS Messager] Settings loaded');
+            logger.info('[TPS Messager] Settings loaded', {
+                enabled: this.settings.enabled,
+                enableLogging: this.settings.enableLogging,
+                enableManualComposer: this.settings.enableManualComposer,
+                hasTopic: !!String(this.settings.ntfyTopic || '').trim(),
+            });
 
             // Add Command to manually send a notification
             this.addCommand({
@@ -80,19 +85,23 @@ export default class TPSMessager extends Plugin {
         try {
             const data = await this.loadData();
             this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
-
-            if (this.settings.enableLogging) {
-                logger.setLoggingEnabled(true);
-            }
+            logger.setLoggingEnabled(this.settings.enableLogging);
         } catch (e) {
             logger.error('[TPS Messager] Error in loadSettings:', e);
             this.settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+            logger.setLoggingEnabled(this.settings.enableLogging);
         }
     }
 
     async saveSettings() {
         logger.setLoggingEnabled(this.settings.enableLogging);
         await this.saveData(this.settings);
+        logger.info('[TPS Messager] Settings saved', {
+            enabled: this.settings.enabled,
+            enableLogging: this.settings.enableLogging,
+            enableManualComposer: this.settings.enableManualComposer,
+            hasTopic: !!String(this.settings.ntfyTopic || '').trim(),
+        });
     }
 
     log(message: string, ...args: any[]) {
@@ -119,11 +128,20 @@ export default class TPSMessager extends Plugin {
 
     async sendMessage(text: string, file?: TFile, title?: string) {
         if (!this.settings.enabled) {
+            logger.warn('[TPS Messager] Skipped notification because delivery is disabled', {
+                title: title || 'TPS Messager',
+                file: file?.path ?? null,
+            });
             new Notice('TPS Messager delivery is disabled in settings.');
             return;
         }
         const url = this.getNtfyUrl();
         if (!url) {
+            logger.warn('[TPS Messager] Skipped notification because ntfy is not configured', {
+                hasServer: !!String(this.settings.ntfyServer || '').trim(),
+                hasTopic: !!String(this.settings.ntfyTopic || '').trim(),
+                title: title || 'TPS Messager',
+            });
             new Notice('Configure ntfy server and topic first.');
             return;
         }
@@ -145,6 +163,14 @@ export default class TPSMessager extends Plugin {
             headers['Click'] = clickLink;
         }
 
+        logger.debug('[TPS Messager] Sending notification', {
+            url,
+            title: sanitizedTitle,
+            file: file?.path ?? null,
+            bodyLength: String(text || '(empty message)').length,
+            hasClickLink: !!clickLink,
+        });
+
         try {
             const response = await fetch(url, {
                 method: 'POST',
@@ -156,7 +182,11 @@ export default class TPSMessager extends Plugin {
                 this.log(`Notification sent: ${title}`);
             } else {
                 const err = await response.text();
-                logger.error('[TPS Messager] Ntfy error:', err);
+                logger.error('[TPS Messager] Ntfy error:', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    body: err,
+                });
             }
         } catch (error) {
             logger.error('[TPS Messager] Failed to send notification:', error);

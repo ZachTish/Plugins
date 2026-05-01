@@ -7,7 +7,12 @@ import {
   Modal,
 } from "obsidian";
 import type AutoBaseEmbedPlugin from "./main";
-import type { BaseEmbedRule, BaseEmbedConditions } from "./main";
+import type { BaseEmbedRule, BaseEmbedConditions, EmbedRuleKind } from "./settings-model";
+
+const DEFAULT_DATAVIEWJS_CODE = [
+  'const current = dv.current();',
+  'dv.paragraph(`Viewing ${current.file.name}`);',
+].join('\n');
 
 class BaseFileSuggestModal extends FuzzySuggestModal<TFile> {
   onChoose: (file: TFile) => void;
@@ -275,13 +280,15 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
       .setName("Add new rule")
       .addButton((button) =>
         button
-          .setButtonText("+ Add Rule")
+          .setButtonText("+ Add Base Rule")
           .setCta()
           .onClick(() => {
             new BaseFileSuggestModal(this.app, async (file) => {
               const newRule: BaseEmbedRule = {
                 id: `rule-${Date.now()}`,
+                kind: 'base',
                 basePath: file.path,
+                dataviewjsCode: '',
                 enabled: true,
                 conditions: {},
                 renderPlacement: this.plugin.settings.renderMode === "inline"
@@ -293,6 +300,27 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
               await this.plugin.saveSettings();
               this.display();
             }).open();
+          })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("+ Add DataviewJS Rule")
+          .onClick(async () => {
+            const newRule: BaseEmbedRule = {
+              id: `rule-${Date.now()}`,
+              kind: 'dataviewjs',
+              basePath: '',
+              dataviewjsCode: DEFAULT_DATAVIEWJS_CODE,
+              enabled: true,
+              conditions: {},
+              renderPlacement: this.plugin.settings.renderMode === 'inline'
+                ? this.plugin.settings.inlinePlacement
+                : 'floating',
+            };
+            this.plugin.settings.rules.push(newRule);
+            this.expandedRules.add(newRule.id);
+            await this.plugin.saveSettings();
+            this.display();
           })
       );
 
@@ -373,16 +401,16 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
       });
 
       const pathEl = header.createDiv({ cls: "tps-auto-base-embed-rule-path" });
-      pathEl.textContent = rule.basePath.split("/").pop() || rule.basePath;
-      pathEl.title = rule.basePath;
+      pathEl.textContent = this.getRuleTitle(rule);
+      pathEl.title = this.getRuleTitleTooltip(rule);
 
       const summary = this.getConditionSummary(rule.conditions);
       if (summary) {
         const summaryEl = header.createDiv({ cls: "tps-auto-base-embed-rule-summary" });
-        summaryEl.textContent = `${this.getRenderPlacementSummary(rule)} ${summary}`;
+        summaryEl.textContent = `${this.getRuleKindSummary(rule)} ${this.getRenderPlacementSummary(rule)} ${summary}`;
       } else {
         const summaryEl = header.createDiv({ cls: "tps-auto-base-embed-rule-summary" });
-        summaryEl.textContent = this.getRenderPlacementSummary(rule);
+        summaryEl.textContent = `${this.getRuleKindSummary(rule)} ${this.getRenderPlacementSummary(rule)}`;
       }
 
       const actions = header.createDiv({ cls: "tps-auto-base-embed-rule-actions" });
@@ -426,25 +454,7 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
   }
 
   private renderConditions(container: HTMLElement, rule: BaseEmbedRule): void {
-    new Setting(container)
-      .setName("Base file")
-      .addText((text) =>
-        text
-          .setValue(rule.basePath)
-          .onChange(async (value) => {
-            rule.basePath = value;
-            await this.plugin.saveSettings();
-          })
-      )
-      .addButton((btn) =>
-        btn.setButtonText("Browse").onClick(() => {
-          new BaseFileSuggestModal(this.app, async (file) => {
-            rule.basePath = file.path;
-            await this.plugin.saveSettings();
-            this.display();
-          }).open();
-        })
-      );
+    this.renderRuleSourceSettings(container, rule);
 
     new Setting(container)
       .setName("Initial state")
@@ -543,6 +553,76 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
 
     this.renderKeyValueCondition(container, rule, "propertyEquals", "Property equals", "Embed only if property equals a specific value");
     this.renderKeyValueCondition(container, rule, "propertyNotEquals", "Property not equals", "Don't embed if property equals this value");
+  }
+
+  private renderRuleSourceSettings(container: HTMLElement, rule: BaseEmbedRule): void {
+    new Setting(container)
+      .setName('Embed content')
+      .setDesc('Choose whether this rule renders a Bases file or a DataviewJS code block.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('base', 'Base file')
+          .addOption('dataviewjs', 'DataviewJS code block')
+          .setValue(this.getRuleKind(rule))
+          .onChange(async (value: EmbedRuleKind) => {
+            rule.kind = value;
+            if (value === 'base' && typeof rule.basePath !== 'string') {
+              rule.basePath = '';
+            }
+            if (value === 'dataviewjs' && !String(rule.dataviewjsCode || '').trim()) {
+              rule.dataviewjsCode = DEFAULT_DATAVIEWJS_CODE;
+            }
+            await this.plugin.saveSettings();
+            this.display();
+          })
+      );
+
+    if (this.getRuleKind(rule) === 'dataviewjs') {
+      this.renderDataviewRuleSettings(container, rule);
+      return;
+    }
+
+    this.renderBaseRuleSettings(container, rule);
+  }
+
+  private renderBaseRuleSettings(container: HTMLElement, rule: BaseEmbedRule): void {
+    new Setting(container)
+      .setName('Base file')
+      .addText((text) =>
+        text
+          .setValue(rule.basePath)
+          .onChange(async (value) => {
+            rule.basePath = value;
+            await this.plugin.saveSettings();
+          })
+      )
+      .addButton((btn) =>
+        btn.setButtonText('Browse').onClick(() => {
+          new BaseFileSuggestModal(this.app, async (file) => {
+            rule.basePath = file.path;
+            await this.plugin.saveSettings();
+            this.display();
+          }).open();
+        })
+      );
+  }
+
+  private renderDataviewRuleSettings(container: HTMLElement, rule: BaseEmbedRule): void {
+    new Setting(container)
+      .setName('DataviewJS code')
+      .setDesc('This content is rendered as a fenced dataviewjs block in the matched note context.')
+      .addTextArea((text) => {
+        text
+          .setPlaceholder('const current = dv.current();\ndv.paragraph(current.file.name);')
+          .setValue(String(rule.dataviewjsCode || ''))
+          .onChange(async (value) => {
+            rule.dataviewjsCode = value;
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.rows = 10;
+        text.inputEl.style.width = '100%';
+        text.inputEl.style.fontFamily = 'var(--font-monospace)';
+      });
   }
 
   private renderListCondition(
@@ -680,5 +760,31 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
       default:
         return "hovering";
     }
+  }
+
+  private getRuleKind(rule: BaseEmbedRule): EmbedRuleKind {
+    return rule.kind === 'dataviewjs' ? 'dataviewjs' : 'base';
+  }
+
+  private getRuleKindSummary(rule: BaseEmbedRule): string {
+    return this.getRuleKind(rule) === 'dataviewjs' ? 'dataviewjs' : 'base';
+  }
+
+  private getRuleTitle(rule: BaseEmbedRule): string {
+    if (this.getRuleKind(rule) === 'dataviewjs') {
+      const firstMeaningfulLine = String(rule.dataviewjsCode || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean);
+      return firstMeaningfulLine ? `DataviewJS: ${firstMeaningfulLine}` : 'DataviewJS';
+    }
+    return rule.basePath.split('/').pop() || rule.basePath;
+  }
+
+  private getRuleTitleTooltip(rule: BaseEmbedRule): string {
+    if (this.getRuleKind(rule) === 'dataviewjs') {
+      return String(rule.dataviewjsCode || '').trim() || 'DataviewJS rule';
+    }
+    return rule.basePath;
   }
 }

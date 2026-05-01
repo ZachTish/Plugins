@@ -624,15 +624,6 @@ export class MenuBuilder {
             void this.plugin.timeTrackingService.startForNote(file);
           });
       });
-
-      menu.addItem((item) => {
-        item.setTitle('Stop Running Timer')
-          .setIcon('square')
-          .setSection('tps-props')
-          .onClick(() => {
-            void this.plugin.timeTrackingService.stopFirstRunningTimer(file);
-          });
-      });
     }
 
     // Archive / Unarchive

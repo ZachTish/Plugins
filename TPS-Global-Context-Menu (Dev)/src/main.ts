@@ -23,6 +23,7 @@ import { VaultQueryService } from './services/vault-query-service';
 import { TaskIdentityService } from './services/task-identity-service';
 import { WorkspaceRibbonService } from './services/workspace-ribbon-service';
 import { InlineTaskSubtaskService } from './services/inline-task-subtask-service';
+import { getConfiguredTimeEstimatePropertyKey } from './utils/configured-property-key';
 import { LinkedSubitemCheckboxService } from './services/linked-subitem-checkbox-service';
 import { FrontmatterMutationService } from './services/frontmatter-mutation-service';
 import { ParentLinkResolutionService } from './services/parent-link-resolution-service';
@@ -40,7 +41,6 @@ import { CalendarNoteMutationService } from './services/calendar-note-mutation-s
 import { ParentChildMutationService } from './services/parent-child-mutation-service';
 import { ItemSemanticsService } from './services/item-semantics-service';
 import { LinkedSubitemMigrationService } from './services/linked-subitem-migration-service';
-import type { NotebookNavigatorCompanionSettings } from '../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
 
 
 export default class TPSGlobalContextMenuPlugin extends Plugin {
@@ -235,6 +235,7 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     this.calendarNoteMutationService = new CalendarNoteMutationService(this);
     this.parentChildMutationService = new ParentChildMutationService(this);
     this.linkedSubitemMigrationService = new LinkedSubitemMigrationService(this);
+    this.registerEditorExtension(this.timeTrackingService.getEditorExtension());
     this.registerEditorExtension(this.linkedSubitemCheckboxService.getEditorExtension());
     this.app.workspace.updateOptions();
 
@@ -502,7 +503,8 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       } else if (prop.id === 'priority') {
         this.menuController.propertyRowService.openPrioritySubmenu(anchor, entries, updateInlineDisplay, undefined, inlineValue || undefined);
       } else if (prop.type === 'datetime') {
-        const estimateRaw = siblingValues['timeestimate'] || null;
+        const estimateKey = getConfiguredTimeEstimatePropertyKey(this.settings).toLowerCase();
+        const estimateRaw = siblingValues[estimateKey] || null;
         const allDayRaw = siblingValues['allday'] || null;
         this.menuController.openScheduledModal(
           entries, prop.key, inlineValue, updateInlineDisplay,
@@ -746,36 +748,14 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     if (this.settings.linkedSubitemCheckboxMappings.length === 0) {
       this.settings.linkedSubitemCheckboxMappings = this.getStrictLinkedSubitemMappings();
     }
-    this.adoptCompanionNavigatorRuleSettingsIfNeeded();
+    if (Array.isArray(this.settings.notebookNavigatorRules)) {
+      const filteredRules = this.settings.notebookNavigatorRules.filter((rule) => String(rule?.id || '').trim() !== 'rule-test-untitled-icon');
+      if (filteredRules.length !== this.settings.notebookNavigatorRules.length) {
+        this.settings.notebookNavigatorRules = filteredRules;
+        await this.saveData(this.settings);
+      }
+    }
     logger.setLoggingEnabled(this.settings.enableLogging);
-  }
-
-  private adoptCompanionNavigatorRuleSettingsIfNeeded(): void {
-    const companion: any =
-      getPluginById(this.app, 'tps-notebook-navigator-companion') ??
-      (this.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-    const companionSettings = companion?.settings as Partial<NotebookNavigatorCompanionSettings> | undefined;
-    if (!companionSettings) return;
-
-    const shouldAdopt = (!this.settings.notebookNavigatorRules?.length && Array.isArray(companionSettings.rules) && companionSettings.rules.length > 0)
-      || (!this.settings.notebookNavigatorHideRules?.length && Array.isArray(companionSettings.hideRules) && companionSettings.hideRules.length > 0)
-      || (!this.settings.notebookNavigatorSmartSort?.buckets?.length && companionSettings.smartSort?.buckets?.length);
-    if (!shouldAdopt) return;
-
-    this.settings.notebookNavigatorIconField = String(companionSettings.frontmatterIconField || this.settings.notebookNavigatorIconField || 'icon').trim() || 'icon';
-    this.settings.notebookNavigatorColorField = String(companionSettings.frontmatterColorField || this.settings.notebookNavigatorColorField || 'color').trim() || 'color';
-    this.settings.notebookNavigatorWriteBasesIconFields = companionSettings.writeBasesIconFields === true;
-    this.settings.notebookNavigatorBasesIconMarkdownField = String(companionSettings.basesIconMarkdownField || this.settings.notebookNavigatorBasesIconMarkdownField || 'iconDisplay').trim() || 'iconDisplay';
-    this.settings.notebookNavigatorBasesIconUriField = String(companionSettings.basesIconUriField || this.settings.notebookNavigatorBasesIconUriField || 'iconDisplayUri').trim() || 'iconDisplayUri';
-    this.settings.notebookNavigatorNoteCheckboxIconColor = String(companionSettings.noteCheckboxIconColor || this.settings.notebookNavigatorNoteCheckboxIconColor || '').trim();
-    this.settings.notebookNavigatorClearIconWhenNoMatch = companionSettings.clearIconWhenNoMatch === true;
-    this.settings.notebookNavigatorClearColorWhenNoMatch = companionSettings.clearColorWhenNoMatch === true;
-    this.settings.notebookNavigatorAutoRemoveHiddenWhenNoMatch = companionSettings.autoRemoveHiddenWhenNoMatch !== false;
-    this.settings.notebookNavigatorFrontmatterWriteExclusions = String(companionSettings.frontmatterWriteExclusions || this.settings.notebookNavigatorFrontmatterWriteExclusions || '');
-    this.settings.notebookNavigatorRules = Array.isArray(companionSettings.rules) ? companionSettings.rules : this.settings.notebookNavigatorRules;
-    this.settings.notebookNavigatorHideRules = Array.isArray(companionSettings.hideRules) ? companionSettings.hideRules : this.settings.notebookNavigatorHideRules;
-    this.settings.notebookNavigatorSmartSort = companionSettings.smartSort || this.settings.notebookNavigatorSmartSort;
-    logger.log('[TPS GCM] Adopted Notebook Navigator rule settings from Companion');
   }
 
   private getControllerArchiveFolderPath(): string {

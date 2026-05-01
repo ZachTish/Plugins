@@ -1,4 +1,4 @@
-import { App, Menu, TFile, TFolder, Notice, Platform, WorkspaceLeaf, normalizePath } from 'obsidian';
+﻿import { App, Menu, TFile, TFolder, Notice, Platform, WorkspaceLeaf, normalizePath } from 'obsidian';
 import TPSGlobalContextMenuPlugin from '../main';
 import { AddTagModal } from '../modals/add-tag-modal';
 import { RecurrenceModal } from '../modals/recurrence-modal';
@@ -9,10 +9,12 @@ import { STATUSES, PRIORITIES } from '../constants';
 import * as logger from "../logger";
 import { PropertyRowService } from '../services/property-row-service';
 import { normalizeTagValue, parseTagInput } from '../utils/tag-utils';
+import { applyRulesToFile as applyRulesToFileShared } from '../utils/rule-resolver';
 import { BadgeRenderer, hashStringToHue } from './badge-renderer';
 import { PanelBuilder } from './panel-builder';
 import { MenuBuilder } from './menu-builder';
 import { stripDateSuffix } from '../utils/date-suffix-utils';
+import { getConfiguredTimeEstimatePropertyKey } from '../utils/configured-property-key';
 
 export function addSafeClickListener(element: HTMLElement, handler: (e: MouseEvent) => void) {
   element.addEventListener('click', (e) => {
@@ -260,7 +262,7 @@ export class MenuController {
           });
           if (onUpdate) onUpdate('');
           for (const entry of entries) {
-            await this.applyCompanionRulesToFile(entry.file);
+            await this.applyRulesToFileAfterUpdate(entry.file);
           }
           entries.forEach((e: any) => {
             if (e.file instanceof TFile) {
@@ -280,7 +282,7 @@ export class MenuController {
           });
           if (onUpdate) onUpdate('');
           for (const entry of entries) {
-            await this.applyCompanionRulesToFile(entry.file);
+            await this.applyRulesToFileAfterUpdate(entry.file);
           }
           entries.forEach((e: any) => {
             if (e.file instanceof TFile) {
@@ -302,9 +304,9 @@ export class MenuController {
             });
             if (onUpdate) onUpdate(status);
             await this.plugin.bulkEditService.setStatus(files, status, { userInitiated: true });
-            // Apply companion rules to update icon
+            // Apply icon/color rules after status change
             for (const entry of entries) {
-              await this.applyCompanionRulesToFile(entry.file);
+              await this.applyRulesToFileAfterUpdate(entry.file);
             }
             // Refresh menus immediately
             entries.forEach((e: any) => {
@@ -571,7 +573,8 @@ export class MenuController {
   openScheduledModal(entries: any[], key = 'scheduled', inlineValueOverride?: string | null, onInlineUpdate?: (newVal: string) => void, inlineEstimateOverride?: number, inlineAllDayOverride?: boolean) {
     const fm = entries[0].frontmatter;
     const scheduledValue = this.getFrontmatterValueCI(fm, key) || inlineValueOverride || '';
-    const fmEstimate = this.getFrontmatterValueCI(fm, 'timeEstimate');
+    const durationKey = getConfiguredTimeEstimatePropertyKey(this.plugin.settings);
+    const fmEstimate = this.getFrontmatterValueCI(fm, durationKey);
     const estimateValue = inlineEstimateOverride ?? (typeof fmEstimate === 'number' ? fmEstimate : (fmEstimate ? parseFloat(fmEstimate) || 0 : 0));
     const fmAllDay = this.getFrontmatterValueCI(fm, 'allDay');
     const allDayValue = inlineAllDayOverride ?? (fmAllDay === true || fmAllDay === 'true' || false);
@@ -735,19 +738,8 @@ export class MenuController {
     return value;
   }
 
-  private async applyCompanionRulesToFile(file: TFile): Promise<void> {
-    const pluginsApi: any = (this.app as any)?.plugins;
-    const companion: any = pluginsApi?.plugins?.['tps-notebook-navigator-companion'];
-    if (!companion?.settings?.enabled) return;
-
-    const applyRulesToFile = companion.applyRulesToFile;
-    if (typeof applyRulesToFile !== 'function') return;
-
-    try {
-      await applyRulesToFile.call(companion, file, { reason: 'gcm-status-update', force: true });
-    } catch (error) {
-      logger.warn('[TPS GCM] Failed applying companion rules after status update:', file.path, error);
-    }
+  private async applyRulesToFileAfterUpdate(file: TFile): Promise<void> {
+    await applyRulesToFileShared(this.app, file, 'gcm-status-update');
   }
 
   get app() {

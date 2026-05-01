@@ -7,6 +7,7 @@ import {
 import { ScheduledModal, type ScheduledResult } from '../modals/scheduled-modal';
 import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
 import { ensureDailyNoteFile } from '../../../TPS-Controller (Dev)/src/utils/daily-note-create';
+import { getConfiguredTimeEstimatePropertyKey } from '../utils/configured-property-key';
 
 export interface ScheduledLinkMismatch {
   direction: 'daily-note-opened' | 'scheduled-note-opened';
@@ -350,8 +351,9 @@ export class ScheduledLinkGuardService {
   private async handleReschedule(mismatch: ScheduledLinkMismatch): Promise<void> {
     const cache = this.plugin.app.metadataCache.getFileCache(mismatch.scheduledFile);
     const fm = (cache?.frontmatter || {}) as Record<string, any>;
+    const durationKey = getConfiguredTimeEstimatePropertyKey(this.plugin.settings);
     const currentDate = String(fm.scheduled ?? '').trim();
-    const currentTimeEstimate = Number(fm.timeEstimate ?? 0);
+    const currentTimeEstimate = Number(fm[durationKey] ?? 0);
     const currentAllDay = Boolean(fm.allDay ?? false);
 
     const result = await new Promise<ScheduledResult | null>((resolve) => {
@@ -369,7 +371,7 @@ export class ScheduledLinkGuardService {
     await this.plugin.frontmatterMutationService.process(mismatch.scheduledFile, (fm) => {
       fm.scheduled = result.date;
       if (result.timeEstimate !== undefined) {
-        fm.timeEstimate = result.timeEstimate;
+        fm[durationKey] = result.timeEstimate;
       }
       if (result.allDay !== undefined) {
         fm.allDay = result.allDay;

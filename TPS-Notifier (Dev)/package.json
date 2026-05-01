@@ -6,6 +6,7 @@
     "scripts": {
         "dev": "node esbuild.config.mjs",
         "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+        "test": "tsc -p tsconfig.tests.json && node --test .test-dist/tests/transport-utils.test.js",
         "version": "1.0.0"
     },
     "keywords": [],
