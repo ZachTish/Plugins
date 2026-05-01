@@ -133,8 +133,54 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         plugin.linkedSubitemCheckboxService?.ensureForAllMarkdownViews();
     }, 120, false);
     const pendingNotebookRuleTimers = new Map<string, number>();
+    const NOTEBOOK_RULE_RETRY_WINDOW_MS = 75_000;
+    const NOTEBOOK_RULE_SYNC_RETRY_DELAY_MS = 1000;
+    const NOTEBOOK_RULE_GUARD_RETRY_DELAY_MS = 1200;
+    const NOTEBOOK_RULE_FILE_OPEN_MIN_DELAY_MS = 300;
+    const NOTEBOOK_RULE_POST_WRITE_BUFFER_MS = 120;
 
-    const scheduleNotebookRuleApply = (file: TFile | null, reason: string, delay = 250, attempt = 0) => {
+    const getNotebookRuleRetryRemainingMs = (retryUntil: number): number => Math.max(0, retryUntil - Date.now());
+
+    const rescheduleNotebookRuleApply = (
+        file: TFile,
+        reason: string,
+        attempt: number,
+        retryUntil: number,
+        delay: number,
+        cause: 'sync' | 'frontmatter-guard',
+    ) => {
+        const remainingMs = getNotebookRuleRetryRemainingMs(retryUntil);
+        if (remainingMs <= 0) {
+            eventLogger.warn(
+                cause === 'sync'
+                    ? 'Dropped notebook rule apply after sync retries exhausted'
+                    : 'Dropped notebook rule apply after frontmatter guard retries exhausted',
+                {
+                    path: file.path,
+                    reason,
+                    attempt,
+                    cause,
+                },
+            );
+            return;
+        }
+
+        scheduleNotebookRuleApply(
+            file,
+            reason,
+            Math.min(delay, remainingMs),
+            attempt + 1,
+            retryUntil,
+        );
+    };
+
+    const scheduleNotebookRuleApply = (
+        file: TFile | null,
+        reason: string,
+        delay = 250,
+        attempt = 0,
+        retryUntil = Date.now() + NOTEBOOK_RULE_RETRY_WINDOW_MS,
+    ) => {
         if (!(file instanceof TFile) || file.extension !== 'md') return;
         const path = file.path;
         const existing = pendingNotebookRuleTimers.get(path);
@@ -148,31 +194,29 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         const timer = window.setTimeout(() => {
             pendingNotebookRuleTimers.delete(path);
             if (!plugin.isInitialSyncSettled()) {
+                const remainingMs = getNotebookRuleRetryRemainingMs(retryUntil);
                 eventLogger.debug('Deferred notebook rule apply until initial sync settles', {
                     path,
                     reason,
                     attempt,
+                    remainingMs,
                 });
-                if (attempt < 12 && (reason === 'file-open' || reason === 'create' || reason === 'metadata-change')) {
-                    scheduleNotebookRuleApply(file, reason, 1000, attempt + 1);
-                } else {
-                    eventLogger.warn('Dropped notebook rule apply after sync retries exhausted', {
-                        path,
-                        reason,
-                        attempt,
-                    });
-                }
+                rescheduleNotebookRuleApply(file, reason, attempt, retryUntil, NOTEBOOK_RULE_SYNC_RETRY_DELAY_MS, 'sync');
                 return;
             }
             const wasRecentlyWritten = plugin.frontmatterMutationService.wasRecentlyWritten(path);
             const writeInProgress = plugin.frontmatterMutationService.isWriteInProgress(path);
             if (wasRecentlyWritten || writeInProgress) {
-                eventLogger.debug('Skipped notebook rule apply due to frontmatter mutation guard', {
+                const remainingMs = getNotebookRuleRetryRemainingMs(retryUntil);
+                eventLogger.debug('Deferred notebook rule apply due to frontmatter mutation guard', {
                     path,
                     reason,
+                    attempt,
                     wasRecentlyWritten,
                     writeInProgress,
+                    remainingMs,
                 });
+                rescheduleNotebookRuleApply(file, reason, attempt, retryUntil, NOTEBOOK_RULE_GUARD_RETRY_DELAY_MS, 'frontmatter-guard');
                 return;
             }
             eventLogger.debug('Executing notebook rule apply', { path, reason, attempt });
@@ -182,6 +226,28 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
         }, Math.max(0, delay));
 
         pendingNotebookRuleTimers.set(path, timer);
+    };
+
+    const scheduleFileOpenNotebookRuleApply = (file: TFile) => {
+        void Promise.resolve()
+            .then(async () => {
+                const scheduledWasNormalized = await plugin.dailyNoteNavManager.syncScheduledFrontmatterOnOpen(file);
+                const recentWriteRemainingMs = plugin.frontmatterMutationService.getRecentWriteRemainingMs(file.path);
+                const delay = Math.max(
+                    NOTEBOOK_RULE_FILE_OPEN_MIN_DELAY_MS,
+                    recentWriteRemainingMs > 0 ? recentWriteRemainingMs + NOTEBOOK_RULE_POST_WRITE_BUFFER_MS : 0,
+                );
+
+                eventLogger.debug('Queued notebook rule apply after file-open normalization', {
+                    path: file.path,
+                    scheduledWasNormalized,
+                    recentWriteRemainingMs,
+                    delay,
+                });
+
+                scheduleNotebookRuleApply(file, 'file-open', delay);
+            })
+            .catch((error) => logger.error('[TPS GCM] Failed preparing file-open notebook rule apply', { path: file.path, error }));
     };
     const pendingRecurrenceAdvanceTimers = new Map<string, number>();
     const pendingRefreshTimers = new Map<string, number>();
@@ -448,8 +514,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
                 previousActiveFile = file;
                 refreshOpenNoteUiImmediately(file, { rebuildInlineSubitems: true });
                 scheduleResponsiveMenuRefresh(file, { rebuildInlineSubitems: true, delayMs: 120 });
-                void plugin.dailyNoteNavManager.syncScheduledFrontmatterOnOpen(file);
-                scheduleNotebookRuleApply(file, 'file-open', 300);
+                scheduleFileOpenNotebookRuleApply(file);
             }
 
             if (!plugin.isInitialSyncSettled()) {

@@ -103,6 +103,22 @@ export class FrontmatterMutationService {
     return true;
   }
 
+  getRecentWriteRemainingMs(path: string): number {
+    const key = String(path || '').trim();
+    if (!key) return 0;
+
+    const until = this.recentWrites.get(key);
+    if (!until) return 0;
+
+    const remainingMs = until - Date.now();
+    if (remainingMs <= 0) {
+      this.recentWrites.delete(key);
+      return 0;
+    }
+
+    return remainingMs;
+  }
+
   isWriteInProgress(path: string): boolean {
     const key = String(path || '').trim();
     if (!key) return false;

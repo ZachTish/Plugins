@@ -33,10 +33,7 @@ interface MessagerPluginAPI {
     sendMessage?(text: string, file?: TFile, title?: string): Promise<void>;
 }
 
-interface CompanionPluginAPI {
-    applyRulesToAllFiles?(silent?: boolean): Promise<void>;
-    applyRulesToFile?(file: TFile): Promise<void>;
-}
+interface CompanionPluginAPI {}
 
 interface GcmPluginAPI {
     settings?: Record<string, any>;

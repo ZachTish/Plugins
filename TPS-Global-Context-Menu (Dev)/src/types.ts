@@ -1,9 +1,148 @@
 import { TFile, MarkdownView } from 'obsidian';
-import type {
-  HideRule,
-  IconColorRule,
-  SmartSortSettings,
-} from '../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
+
+export type RuleOperator = 'is' | '!is' | 'contains' | '!contains' | 'exists' | '!exists';
+export type SmartRuleOperator =
+  | RuleOperator
+  | 'is-not-empty'
+  | 'starts'
+  | '!starts'
+  | 'within-next-days'
+  | '!within-next-days'
+  | 'has-open-checkboxes'
+  | '!has-open-checkboxes'
+  | 'is-today'
+  | '!is-today'
+  | 'is-before-today'
+  | '!is-before-today'
+  | 'is-after-today'
+  | '!is-after-today';
+export type RuleMatchMode = 'all' | 'any';
+export type RuleConditionSource =
+  | 'frontmatter'
+  | 'path'
+  | 'extension'
+  | 'name'
+  | 'tag'
+  | 'tag-note-name'
+  | 'body'
+  | 'backlink'
+  | 'date-created'
+  | 'date-modified'
+  | 'parent-frontmatter'
+  | 'parent-tag'
+  | 'parent-name'
+  | 'parent-path';
+
+export interface RuleCondition {
+  source: RuleConditionSource;
+  field: string;
+  operator: SmartRuleOperator;
+  value: string;
+}
+
+export interface IconColorRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  property: string;
+  operator: RuleOperator;
+  value: string;
+  pathPrefix: string;
+  icon: string;
+  color: string;
+  match: RuleMatchMode;
+  conditions: RuleCondition[];
+}
+
+export interface SortValueMapping {
+  input: string;
+  output: string;
+}
+
+export type SortFieldType = 'date' | 'status' | 'priority' | 'text' | 'number';
+
+export interface SortCriteria {
+  source: RuleConditionSource;
+  field: string;
+  type: SortFieldType;
+  direction: 'asc' | 'desc';
+  mappings: SortValueMapping[];
+  missingValuePlacement: 'first' | 'last';
+}
+
+export interface ConditionGroup {
+  id: string;
+  match: RuleMatchMode;
+  conditions: RuleCondition[];
+}
+
+export interface SortBucket {
+  id: string;
+  enabled: boolean;
+  name: string;
+  match: RuleMatchMode;
+  conditions: RuleCondition[];
+  conditionGroups?: ConditionGroup[];
+  sortCriteria: SortCriteria[];
+}
+
+export interface SmartSortSettings {
+  enabled: boolean;
+  field: string;
+  separator: string;
+  appendBasename: boolean;
+  relationshipGrouping: 'none' | 'children-under-parent';
+  clearWhenNoMatch: boolean;
+  buckets: SortBucket[];
+}
+
+export interface SortSegmentRule {
+  id: string;
+  enabled: boolean;
+  source: RuleConditionSource;
+  field: string;
+  fallback: string;
+  mappings: SortValueMapping[];
+  match: RuleMatchMode;
+  conditions: RuleCondition[];
+}
+
+export interface HideRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  match: RuleMatchMode;
+  conditions: RuleCondition[];
+  mode: 'add' | 'remove';
+  tagName: string;
+}
+
+export interface RuleFileDescriptor {
+  path: string;
+  name: string;
+  basename: string;
+  extension: string;
+}
+
+export interface RelationshipLineageNode {
+  file: RuleFileDescriptor;
+  frontmatter: Record<string, unknown> | null;
+  tags: string[];
+}
+
+export interface RuleEvaluationContext {
+  file: RuleFileDescriptor;
+  frontmatter: Record<string, unknown> | null;
+  tags: string[];
+  body?: string;
+  backlinks?: string[];
+  relationshipLineage?: RelationshipLineageNode[];
+  parent?: {
+    file: RuleFileDescriptor;
+    frontmatter: Record<string, unknown> | null;
+    tags: string[];
+  };
+}
 
 /**
  * Plugin settings interface

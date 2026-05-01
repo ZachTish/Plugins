@@ -441,15 +441,16 @@ export class KanbanView extends BasesView {
     return compressedWidth < fullExpandedWidth;
   }
 
-  private async applyCompanionRulesToFile(file: TFile): Promise<void> {
+  private async applyNotebookNavigatorRulesToFile(file: TFile): Promise<void> {
     try {
-      const companion = (this.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-      const apply = companion?.api?.applyRulesToFile;
+      const gcm = (this.app as any)?.plugins?.getPlugin?.('tps-global-context-menu')
+        ?? (this.app as any)?.plugins?.plugins?.['tps-global-context-menu'];
+      const apply = gcm?.api?.notebookNavigator?.applyRulesToFile;
       if (typeof apply === 'function') {
-        await apply(file);
+        await apply(file, 'kanban-status-update');
       }
     } catch {
-      // Ignore optional companion integration failures.
+      // Ignore optional notebook rule integration failures.
     }
   }
 
@@ -1524,7 +1525,7 @@ export class KanbanView extends BasesView {
         }
       });
     }
-    await this.applyCompanionRulesToFile(file);
+    await this.applyNotebookNavigatorRulesToFile(file);
     await this.app.workspace.getLeaf(false).openFile(file);
     this.render();
     return true;
@@ -1553,7 +1554,7 @@ export class KanbanView extends BasesView {
     if (content !== next) {
       await this.app.vault.modify(file, next);
     }
-    await this.applyCompanionRulesToFile(file);
+    await this.applyNotebookNavigatorRulesToFile(file);
     const syncedVisuals = await this.syncMostRecentVirtualTaskVisualProperties(file);
     if (!syncedVisuals) {
       const createdTasks = this.parseKanbanBoardTasks(next);
@@ -3706,7 +3707,7 @@ export class KanbanView extends BasesView {
             menu.addItem(it => it.setTitle(`Move ${selectedFiles.length} cards → ${label}`).onClick(async () => {
               for (const file of selectedFiles) {
                 await this.applyFrontmatterProperty(file, propName, val);
-                await this.applyCompanionRulesToFile(file);
+                await this.applyNotebookNavigatorRulesToFile(file);
               }
               this.render();
             }));
@@ -3714,7 +3715,7 @@ export class KanbanView extends BasesView {
             const target = selectedFiles[0] ?? entry.file;
             menu.addItem(it => it.setTitle(`Move → ${label}`).onClick(async () => {
               await this.applyFrontmatterProperty(target, propName, val);
-              await this.applyCompanionRulesToFile(target);
+              await this.applyNotebookNavigatorRulesToFile(target);
               this.render();
             }));
           }
@@ -4052,7 +4053,7 @@ export class KanbanView extends BasesView {
           const file = this.app.vault.getFileByPath(filePath);
           if (!file) return;
           await this.applyFrontmatterProperty(file, propName, targetValue);
-          await this.applyCompanionRulesToFile(file);
+          await this.applyNotebookNavigatorRulesToFile(file);
           this.render();
         };
         laneEl.addEventListener('dragover', (e: DragEvent) => {

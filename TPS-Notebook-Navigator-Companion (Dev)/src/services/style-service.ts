@@ -1,5 +1,9 @@
 import { App, TFile, FileView } from "obsidian";
-import { NotebookNavigatorCompanionSettings } from "../types";
+
+type CompanionNavigatorVisualSettings = {
+  frontmatterColorField: string;
+  noteCheckboxIconColor: string;
+};
 
 /**
  * Manages the runtime CSS override for Notebook Navigator icon colors,
@@ -15,7 +19,7 @@ export class StyleService {
 
     constructor(
         private app: App,
-        private getSettings: () => NotebookNavigatorCompanionSettings,
+      private getSettings: () => CompanionNavigatorVisualSettings,
     ) {}
 
     /** Inject the always-on hover affordance for clickable Notebook Navigator status icons. */

@@ -786,21 +786,21 @@ export class DailyNoteNavManager extends Component {
      * value stays correct even if it was never set, was left as a template
      * expression, or drifted out of sync.
      */
-    async syncScheduledFrontmatterOnOpen(file: TFile): Promise<void> {
-        if (this.plugin.settings.enableDailyNoteScheduledNormalization === false) return;
+    async syncScheduledFrontmatterOnOpen(file: TFile): Promise<boolean> {
+        if (this.plugin.settings.enableDailyNoteScheduledNormalization === false) return false;
 
         const resolver = getDailyNoteResolver(this.plugin.app, {
             formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
         });
         const scheduledDateKey = resolver.parseFilenameToDateKey(file.basename);
-        if (!scheduledDateKey) return;
+        if (!scheduledDateKey) return false;
 
         try {
             // userInitiated: true — the date key is derived from the filename, not vault
             // sync state, so this write is safe to perform even during the sync settlement
             // window. The outer file-open handler intentionally runs this before the
             // isInitialSyncSettled gate for the same reason.
-            await this.plugin.frontmatterMutationService.process(file, (fm: any) => {
+            return await this.plugin.frontmatterMutationService.process(file, (fm: any) => {
                 const existing = String((fm?.scheduled ?? fm?.Scheduled ?? '')).trim();
                 const existingMoment = existing ? window.moment(existing) : null;
                 const existingKey = existingMoment?.isValid?.() ? existingMoment.format('YYYY-MM-DD') : '';
@@ -812,6 +812,7 @@ export class DailyNoteNavManager extends Component {
             }, { userInitiated: true });
         } catch (error) {
             logger.warn('[DailyNoteNavManager] Failed syncing scheduled frontmatter on open', { file: file.path, error });
+            return false;
         }
     }
 

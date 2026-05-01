@@ -3,6 +3,7 @@ import type TPSGlobalContextMenuPlugin from './main';
 import type { VaultQueryService } from './services/vault-query-service';
 import type { TaskIdentityService } from './services/task-identity-service';
 import type { BodySubitemLink, ResolvedParentLink } from './services/subitem-types';
+import { applyRulesToFile as applyNotebookNavigatorRulesToFile, getSmartSortPreviewForFile } from './utils/rule-resolver';
 import {
     DEFAULT_CHECKBOX_STATE_TO_STATUS,
     DEFAULT_STATUS_TO_CHECKBOX_STATE,
@@ -59,6 +60,32 @@ export function setupPluginApi(plugin: TPSGlobalContextMenuPlugin): void {
             content: string,
             options?: { userInitiated?: boolean },
         ) => plugin.frontmatterMutationService.writeContentSafely(file, content, options),
+    };
+
+    const notebookNavigatorApi = {
+        applyRulesToFile: async (file: TFile, reason = 'gcm-api') => {
+            if (!(file instanceof TFile) || file.extension !== 'md') return false;
+            await applyNotebookNavigatorRulesToFile(plugin.app, file, reason);
+            return true;
+        },
+        applyRulesToActiveFile: async (reason = 'gcm-api-active') => {
+            const file = plugin.app.workspace.getActiveFile();
+            if (!(file instanceof TFile) || file.extension !== 'md') return false;
+            await applyNotebookNavigatorRulesToFile(plugin.app, file, reason);
+            return true;
+        },
+        applyRulesToAllFiles: async (reason = 'gcm-api-all') => {
+            const files = plugin.app.vault.getMarkdownFiles();
+            for (const file of files) {
+                await applyNotebookNavigatorRulesToFile(plugin.app, file, reason);
+            }
+            return files.length;
+        },
+        getSmartSortPreviewForFile: async (file?: TFile) => {
+            const target = file instanceof TFile ? file : plugin.app.workspace.getActiveFile();
+            if (!(target instanceof TFile) || target.extension !== 'md') return null;
+            return getSmartSortPreviewForFile(plugin.app, target);
+        },
     };
 
     (plugin as any).api = {
@@ -131,6 +158,8 @@ export function setupPluginApi(plugin: TPSGlobalContextMenuPlugin): void {
         deleteFrontmatterKeys: frontmatterApi.deleteKeys,
         /** Structured frontmatter API for other TPS plugins. */
         frontmatter: frontmatterApi,
+        /** Notebook Navigator rule application owned by GCM. */
+        notebookNavigator: notebookNavigatorApi,
         applyCalendarEventMutation: (input: Parameters<TPSGlobalContextMenuPlugin['calendarNoteMutationService']['applyEventMutation']>[0]) =>
             plugin.calendarNoteMutationService.applyEventMutation(input),
         createCalendarNote: (input: Parameters<TPSGlobalContextMenuPlugin['calendarNoteMutationService']['createCalendarNote']>[0]) =>

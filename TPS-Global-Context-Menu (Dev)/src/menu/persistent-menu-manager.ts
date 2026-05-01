@@ -20,6 +20,7 @@ import {
   evaluateIconColorRules,
   isRuleWriteExcluded,
   isValidCssColor,
+  normalizeNotebookNavigatorIconValue,
 } from '../utils/rule-resolver';
 import type { ProjectedTimeBlock } from '../services/time-tracking-service';
 // scroll-direction hide/reveal is handled inline â€” no gesture-handler import needed.
@@ -1051,12 +1052,15 @@ export class PersistentMenuManager {
     const pickString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
     // Frontmatter is source of truth for icon
-    const fromIconField = pickString(frontmatter?.icon);
+    const fromIconField = normalizeNotebookNavigatorIconValue(pickString(frontmatter?.icon), { keepLucidePrefix: true });
     if (fromIconField) return fromIconField;
 
     const configuredIconField = pickString(this.plugin.settings.notebookNavigatorIconField);
     if (configuredIconField) {
-      const configuredValue = pickString(this.getFrontmatterValueCaseInsensitive(frontmatter, configuredIconField));
+      const configuredValue = normalizeNotebookNavigatorIconValue(
+        pickString(this.getFrontmatterValueCaseInsensitive(frontmatter, configuredIconField)),
+        { keepLucidePrefix: true },
+      );
       if (configuredValue) return configuredValue;
     }
 
@@ -1071,7 +1075,7 @@ export class PersistentMenuManager {
 
     const context = buildRuleContext(this.plugin.app, file, frontmatter);
     const visual = evaluateIconColorRules(this.plugin.app, localRules, context);
-    const ruleIcon = pickString(visual?.icon?.value);
+    const ruleIcon = normalizeNotebookNavigatorIconValue(pickString(visual?.icon?.value), { keepLucidePrefix: true });
     return ruleIcon;
   }
 
@@ -1079,17 +1083,15 @@ export class PersistentMenuManager {
     iconEl.classList.remove('tps-gcm-note-title-icon--emoji');
     iconEl.textContent = '';
 
-    const normalized = String(iconValue || '').trim();
+    const normalized = normalizeNotebookNavigatorIconValue(iconValue);
     if (normalized && /[\u2600-\u27BF\u{1F300}-\u{1FAFF}]/u.test(normalized)) {
       iconEl.textContent = normalized;
       iconEl.classList.add('tps-gcm-note-title-icon--emoji');
       return;
     }
 
-    const normalizedIconName = normalized.replace(/^(lucide|icon):/i, '').trim();
-
     try {
-      setIcon(iconEl, normalizedIconName || 'file-text');
+      setIcon(iconEl, normalized || 'file-text');
       if (!iconEl.querySelector('svg')) {
         setIcon(iconEl, 'file-text');
       }

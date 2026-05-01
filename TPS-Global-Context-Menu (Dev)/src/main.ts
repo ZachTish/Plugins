@@ -1,5 +1,5 @@
 import { Plugin, TFile, WorkspaceLeaf, Menu, debounce, Notice, normalizePath, Platform, MarkdownView } from 'obsidian';
-import { TPSGlobalContextMenuSettings, BuildPanelOptions } from './types';
+import { TPSGlobalContextMenuSettings, BuildPanelOptions, CustomPropertyProfile, ViewModeRuleCondition } from './types';
 import { DEFAULT_SETTINGS } from './constants';
 import { PLUGIN_STYLES } from './plugin-styles';
 import { MenuController } from './menu/menu-controller';
@@ -748,12 +748,20 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     if (this.settings.linkedSubitemCheckboxMappings.length === 0) {
       this.settings.linkedSubitemCheckboxMappings = this.getStrictLinkedSubitemMappings();
     }
+    let shouldPersistSettings = this.normalizeScheduledPropertyProfilesForRootVault();
+    shouldPersistSettings = this.normalizeRootVaultDailyNoteNotebookRules() || shouldPersistSettings;
+    shouldPersistSettings = this.normalizeRootVaultActionItemNotebookRules() || shouldPersistSettings;
+    shouldPersistSettings = this.normalizeRootVaultNotebookRuleConditions() || shouldPersistSettings;
+    shouldPersistSettings = this.normalizeRootVaultNotebookSmartSortBuckets() || shouldPersistSettings;
     if (Array.isArray(this.settings.notebookNavigatorRules)) {
       const filteredRules = this.settings.notebookNavigatorRules.filter((rule) => String(rule?.id || '').trim() !== 'rule-test-untitled-icon');
       if (filteredRules.length !== this.settings.notebookNavigatorRules.length) {
         this.settings.notebookNavigatorRules = filteredRules;
-        await this.saveData(this.settings);
+        shouldPersistSettings = true;
       }
+    }
+    if (shouldPersistSettings) {
+      await this.saveData(this.settings);
     }
     logger.setLoggingEnabled(this.settings.enableLogging);
   }
@@ -762,6 +770,335 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     const plugin = getPluginById(this.app, 'tps-controller') as any;
     const raw = typeof plugin?.settings?.archiveFolder === 'string' ? plugin.settings.archiveFolder : '';
     return raw.trim();
+  }
+
+  private normalizeScheduledPropertyProfilesForRootVault(): boolean {
+    if (!Array.isArray(this.settings.properties) || this.settings.properties.length === 0) {
+      return false;
+    }
+
+    const scheduledProperty = this.settings.properties.find((property) => String(property?.key || '').trim().toLowerCase() === 'scheduled');
+    if (!scheduledProperty || !Array.isArray(scheduledProperty.profiles) || scheduledProperty.profiles.length === 0) {
+      return false;
+    }
+
+    let changed = false;
+    const normalizedProfiles: CustomPropertyProfile[] = [];
+
+    for (const profile of scheduledProperty.profiles) {
+      if (!profile || typeof profile !== 'object') continue;
+
+      if (this.isLegacyScheduledRootPathProfile(profile)) {
+        changed = true;
+        continue;
+      }
+
+      if (this.isLegacyDailyNoteScheduledProfile(profile)) {
+        normalizedProfiles.push({
+          ...profile,
+          name: String(profile.name || '').trim() || 'Dailynote',
+          match: 'all',
+          conditions: [
+            {
+              type: 'frontmatter',
+              key: 'tags',
+              operator: 'contains',
+              value: 'dailynote',
+            },
+          ],
+        });
+        changed = true;
+        continue;
+      }
+
+      normalizedProfiles.push(profile);
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    scheduledProperty.profiles = normalizedProfiles;
+    return true;
+  }
+
+  private normalizeRootVaultDailyNoteNotebookRules(): boolean {
+    if (!Array.isArray(this.settings.notebookNavigatorRules) || this.settings.notebookNavigatorRules.length === 0) {
+      return false;
+    }
+
+    let changed = false;
+
+    for (const rule of this.settings.notebookNavigatorRules) {
+      if (!this.isLegacyRootScopedDailyNoteRule(rule)) {
+        continue;
+      }
+
+      if (String(rule.pathPrefix || '').trim()) {
+        rule.pathPrefix = '';
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  private normalizeRootVaultActionItemNotebookRules(): boolean {
+    if (!Array.isArray(this.settings.notebookNavigatorRules) || this.settings.notebookNavigatorRules.length === 0) {
+      return false;
+    }
+
+    let changed = false;
+
+    for (const rule of this.settings.notebookNavigatorRules) {
+      if (!this.isLegacyRootScopedActionItemRule(rule)) {
+        continue;
+      }
+
+      if (String(rule.pathPrefix || '').trim()) {
+        rule.pathPrefix = '';
+        changed = true;
+      }
+
+      if (!Array.isArray(rule.conditions)) {
+        rule.conditions = [];
+        changed = true;
+      }
+
+      if (!this.hasActionItemFolderPathCondition(rule.conditions)) {
+        rule.conditions = [
+          {
+            source: 'frontmatter',
+            field: 'folderPath',
+            operator: 'contains',
+            value: 'Action Items',
+          },
+          ...rule.conditions,
+        ];
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  private normalizeRootVaultNotebookRuleConditions(): boolean {
+    if (!Array.isArray(this.settings.notebookNavigatorRules) || this.settings.notebookNavigatorRules.length === 0) {
+      return false;
+    }
+
+    let changed = false;
+
+    for (const rule of this.settings.notebookNavigatorRules) {
+      changed = this.normalizeRootVaultSmartSortConditions(rule?.conditions) || changed;
+    }
+
+    return changed;
+  }
+
+  private normalizeRootVaultNotebookSmartSortBuckets(): boolean {
+    const smartSort = this.settings.notebookNavigatorSmartSort;
+    if (!smartSort || !Array.isArray(smartSort.buckets) || smartSort.buckets.length === 0) {
+      return false;
+    }
+
+    let changed = false;
+
+    for (const bucket of smartSort.buckets) {
+      changed = this.normalizeRootVaultSmartSortConditions(bucket?.conditions) || changed;
+
+      if (!Array.isArray(bucket?.conditionGroups)) {
+        continue;
+      }
+
+      for (const group of bucket.conditionGroups) {
+        changed = this.normalizeRootVaultSmartSortConditions(group?.conditions) || changed;
+      }
+    }
+
+    return changed;
+  }
+
+  private normalizeRootVaultSmartSortConditions(conditions?: Array<{
+    source?: string;
+    field?: string;
+    operator?: string;
+    value?: string;
+  }>): boolean {
+    if (!Array.isArray(conditions) || conditions.length === 0) {
+      return false;
+    }
+
+    let changed = false;
+
+    for (const condition of conditions) {
+      if (!this.isLegacyRootScopedSmartSortPathCondition(condition)) {
+        continue;
+      }
+
+      if (String(condition.source || '').trim().toLowerCase() !== 'frontmatter') {
+        condition.source = 'frontmatter';
+        changed = true;
+      }
+
+      if (String(condition.field || '').trim() !== 'folderPath') {
+        condition.field = 'folderPath';
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  private isLegacyDailyNoteScheduledProfile(profile: CustomPropertyProfile): boolean {
+    if (!profile.hidden || !Array.isArray(profile.conditions) || profile.conditions.length !== 2) {
+      return false;
+    }
+
+    const hasDailyNoteTagCondition = profile.conditions.some((condition) =>
+      this.matchesProfileCondition(condition, {
+        type: 'frontmatter',
+        key: 'tags',
+        operator: 'contains',
+        value: 'dailynote',
+      }),
+    );
+    const hasTemplateTagCondition = profile.conditions.some((condition) =>
+      this.matchesProfileCondition(condition, {
+        type: 'frontmatter',
+        key: 'tags',
+        operator: 'contains',
+        value: 'template',
+      }),
+    );
+
+    return hasDailyNoteTagCondition && hasTemplateTagCondition;
+  }
+
+  private isLegacyScheduledRootPathProfile(profile: CustomPropertyProfile): boolean {
+    if (!profile.hidden || !Array.isArray(profile.conditions) || profile.conditions.length !== 1) {
+      return false;
+    }
+
+    const condition = profile.conditions[0];
+    const type = String(condition?.type || '').trim().toLowerCase();
+    const operator = String(condition?.operator || '').trim().toLowerCase();
+    const value = String(condition?.value || '').trim().toLowerCase();
+
+    if (type !== 'path') {
+      return false;
+    }
+
+    if (operator !== 'starts-with' && operator !== 'contains' && operator !== 'equals') {
+      return false;
+    }
+
+    return value === 'notes' || value === 'daily notes' || value === '00 daily notes';
+  }
+
+  private isLegacyRootScopedDailyNoteRule(rule: {
+    pathPrefix?: string;
+    conditions?: Array<{
+      source?: string;
+      field?: string;
+      operator?: string;
+      value?: string;
+    }>;
+  }): boolean {
+    const pathPrefix = String(rule?.pathPrefix || '').trim().toLowerCase();
+    if (!pathPrefix || (pathPrefix !== '00 daily notes' && pathPrefix !== 'daily notes' && pathPrefix !== 'notes')) {
+      return false;
+    }
+
+    if (!Array.isArray(rule?.conditions) || rule.conditions.length === 0) {
+      return false;
+    }
+
+    return rule.conditions.some((condition) => {
+      const source = String(condition?.source || '').trim().toLowerCase();
+      const field = String(condition?.field || '').trim().toLowerCase();
+      const operator = String(condition?.operator || '').trim().toLowerCase();
+      const value = String(condition?.value || '').trim().toLowerCase();
+
+      if (operator !== 'contains' || value !== 'dailynote') {
+        return false;
+      }
+
+      return source === 'tag' || (source === 'frontmatter' && field === 'tags');
+    });
+  }
+
+  private isLegacyRootScopedActionItemRule(rule: {
+    pathPrefix?: string;
+    conditions?: Array<{
+      source?: string;
+      field?: string;
+      operator?: string;
+      value?: string;
+    }>;
+  }): boolean {
+    const pathPrefix = String(rule?.pathPrefix || '').trim().toLowerCase().replace(/\\/g, '/');
+    if (!pathPrefix) {
+      return false;
+    }
+
+    return pathPrefix === 'markdown/action items'
+      || pathPrefix === 'markdown/01 action items'
+      || pathPrefix.endsWith('/action items')
+      || pathPrefix.endsWith('/01 action items');
+  }
+
+  private hasActionItemFolderPathCondition(conditions: Array<{
+    source?: string;
+    field?: string;
+    operator?: string;
+    value?: string;
+  }>): boolean {
+    return conditions.some((condition) => {
+      const source = String(condition?.source || '').trim().toLowerCase();
+      const field = String(condition?.field || '').trim().toLowerCase();
+      const operator = String(condition?.operator || '').trim().toLowerCase();
+      const value = String(condition?.value || '').trim().toLowerCase();
+
+      return source === 'frontmatter'
+        && field === 'folderpath'
+        && operator === 'contains'
+        && value === 'action items';
+    });
+  }
+
+  private isLegacyRootScopedSmartSortPathCondition(condition: {
+    source?: string;
+    field?: string;
+    operator?: string;
+    value?: string;
+  }): boolean {
+    const source = String(condition?.source || '').trim().toLowerCase();
+    const field = String(condition?.field || '').trim().toLowerCase();
+    const operator = String(condition?.operator || '').trim().toLowerCase();
+    const value = String(condition?.value || '').trim().toLowerCase().replace(/\\/g, '/');
+
+    if (source !== 'path' || field) {
+      return false;
+    }
+
+    if (operator !== 'contains' && operator !== '!contains' && operator !== 'equals' && operator !== 'starts-with') {
+      return false;
+    }
+
+    return value === 'markdown'
+      || value === 'templates'
+      || value.endsWith('/templates')
+      || value.includes('action items');
+  }
+
+  private matchesProfileCondition(condition: ViewModeRuleCondition | undefined, expected: ViewModeRuleCondition): boolean {
+    if (!condition) return false;
+
+    return String(condition.type || '').trim().toLowerCase() === String(expected.type || '').trim().toLowerCase()
+      && String(condition.key || '').trim().toLowerCase() === String(expected.key || '').trim().toLowerCase()
+      && String(condition.operator || '').trim().toLowerCase() === String(expected.operator || '').trim().toLowerCase()
+      && String(condition.value || '').trim().toLowerCase() === String(expected.value || '').trim().toLowerCase();
   }
 
   getInitialSyncReadiness(): { ready: boolean; reason: string } {

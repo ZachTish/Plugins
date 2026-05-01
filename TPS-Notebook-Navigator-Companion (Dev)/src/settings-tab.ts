@@ -77,13 +77,39 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
     containerEl.createEl("h2", { text: "TPS Notebook Navigator Companion" });
     containerEl.createEl("p", {
       cls: "setting-item-description",
-      text: "Data steward for Notebook Navigator. Applies frontmatter icon/color plus optional computed sort key for consistent sorting/grouping."
+      text: "Notebook Navigator companion behavior only. Icon, color, and smart-sort frontmatter writes now live in Global Context Menu."
     });
 
-    const featuresCategory = createSettingsGroup(containerEl, 'Automation', 'Core rule application and click-driven Notebook Navigator behavior.');
-    const automationCategory = createSettingsGroup(containerEl, 'Pages and Metadata', 'On-demand page creation plus higher-impact metadata integration settings.');
+    const coreAutomationSection = createCollapsibleSection(
+      containerEl,
+      'Essentials',
+      'The core automation and status-click behavior you are most likely to change.',
+      true
+    );
+    const tagPagesSection = createCollapsibleSection(
+      containerEl,
+      'Pages',
+      'On-demand tag and property page creation and opening behavior.',
+      false
+    );
+    const clickFlowSection = coreAutomationSection;
+    const propertyPagesSection = tagPagesSection;
+    const advancedMetadataSection = createCollapsibleSection(
+      containerEl,
+      'Advanced Metadata',
+      'Higher-impact metadata integration settings for hide tags, status click flow, and related Notebook Navigator behaviors.',
+      false
+    );
+    const debugGroup = createSettingsGroup(containerEl, 'Debug', 'Troubleshooting output for Companion only.');
 
-    this.renderGeneralSettings(featuresCategory, automationCategory);
+    this.renderGeneralSettings(
+      coreAutomationSection,
+      clickFlowSection,
+      tagPagesSection,
+      propertyPagesSection,
+      advancedMetadataSection,
+      debugGroup,
+    );
     this.restoreSettingsViewState(containerEl);
   }
 
@@ -119,95 +145,18 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
     containerEl.scrollTop = this.settingsScrollTop;
   }
 
-  private renderGeneralSettings(featuresContainer: HTMLElement, automationContainer: HTMLElement): void {
-    const automationSection = createCollapsibleSection(
-      featuresContainer,
-      "Core Automation",
-      "Companion should own notebook visual rule application. Higher-impact metadata behaviors live in Advanced."
-    );
-
-    new Setting(automationSection)
-      .setName("Enable automation")
-      .setDesc("Apply configured rules to markdown files.")
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.enabled)
-          .onChange(async (value) => {
-            this.plugin.settings.enabled = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
-
-    const automationConfig = automationSection.createDiv({ cls: "tps-companion-automation-config" });
-    automationConfig.style.display = this.plugin.settings.enabled ? "" : "none";
-
-    new Setting(automationConfig)
-      .setName("Auto-apply on file open")
-      .setDesc("Evaluate and apply rules when a file becomes active.")
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.autoApplyOnFileOpen)
-          .onChange(async (value) => {
-            this.plugin.settings.autoApplyOnFileOpen = value;
-            await this.plugin.saveSettings();
-          });
-      });
-
-    new Setting(automationConfig)
-      .setName("Auto-apply on metadata change")
-      .setDesc("Evaluate and apply rules after frontmatter changes.")
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.autoApplyOnMetadataChange)
-          .onChange(async (value) => {
-            this.plugin.settings.autoApplyOnMetadataChange = value;
-            await this.plugin.saveSettings();
-          });
-      });
-
-    new Setting(automationConfig)
-      .setName("Startup vault scan")
-      .setDesc("Startup scanning is now managed by the TPS-Controller plugin.")
-      .setDisabled(true);
-
-    new Setting(automationConfig)
-      .setName("Metadata debounce (ms)")
-      .setDesc("Debounce for metadata-change events before re-applying rules.")
-      .addText((text) => {
-        text.setPlaceholder("350");
-        this.bindCommittedText(text, String(this.plugin.settings.metadataDebounceMs), async (value) => {
-          const parsed = Number.parseInt(value, 10);
-          this.plugin.settings.metadataDebounceMs = Number.isFinite(parsed)
-            ? Math.max(0, Math.min(parsed, 5000))
-            : 350;
-        });
-      });
-
-    new Setting(automationConfig)
-      .setName("Manual apply")
-      .setDesc("Apply rules immediately.")
-      .addButton((button) => {
-        button
-          .setButtonText("Active file")
-          .onClick(async () => {
-            await this.plugin.applyRulesToActiveFile(true);
-          });
-      })
-      .addButton((button) => {
-        button
-          .setButtonText("All markdown files")
-          .onClick(async () => {
-            await this.plugin.applyRulesToAllFiles(true);
-          });
-      });
-
-    const statusFlowSection = createCollapsibleSection(
-      automationContainer,
-      "Status Click Flow",
-      "Configure how clicking the Notebook Navigator status icon advances frontmatter status. Leave blank to keep Navigator's default cycle. Values not listed here are left unchanged.",
-      false
-    );
+  private renderGeneralSettings(
+    automationSection: HTMLElement,
+    statusFlowSection: HTMLElement,
+    tagPagesSection: HTMLElement,
+    propertyPagesSection: HTMLElement,
+    advancedSection: HTMLElement,
+    debugContainer: HTMLElement,
+  ): void {
+    automationSection.createEl("p", {
+      cls: "setting-item-description",
+      text: "Notebook Navigator icon, color, sort, and hide-tag automation is owned by TPS Global Context Menu. Companion only handles direct Notebook Navigator interactions.",
+    });
 
     new Setting(statusFlowSection)
       .setName("Status click flow")
@@ -222,12 +171,7 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
         });
       });
 
-    const tagPagesSection = createCollapsibleSection(
-      automationContainer,
-      "Tag Pages",
-      "Open a tag page when you click a tag in Notebook Navigator or a graph view. Companion only opens or creates the page on demand — it does not auto-sync tag content.",
-      false
-    );
+    tagPagesSection.createEl("h4", { text: "Tag Pages" });
 
     new Setting(tagPagesSection)
       .setName("Tag page folder")
@@ -268,12 +212,7 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
           });
       });
 
-    const propertyPagesSection = createCollapsibleSection(
-      automationContainer,
-      "Property Pages",
-      "Open or create a page for Notebook Navigator properties on demand. Companion only opens or creates the page on demand — it does not auto-sync property content.",
-      false
-    );
+    propertyPagesSection.createEl("h4", { text: "Property Pages" });
 
     new Setting(propertyPagesSection)
       .setName("Property page folder")
@@ -314,12 +253,6 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
           });
       });
 
-    const advancedSection = createCollapsibleSection(
-      automationContainer,
-      "Advanced Metadata",
-      "These are higher-impact write paths and integration settings. Change them only if you need Companion to own metadata beyond icon/color rules."
-    );
-
     new Setting(advancedSection)
       .setName("Upstream link keys")
       .setDesc("Comma-separated list of frontmatter keys (e.g. 'parent, project') that should trigger updates on the linked note when modified.")
@@ -339,7 +272,7 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
         );
       });
 
-    new Setting(advancedSection)
+    new Setting(debugContainer)
       .setName("Debug logging")
       .setDesc("Emit verbose diagnostics to Developer Console.")
       .addToggle((toggle) => {
@@ -349,23 +282,14 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
             this.plugin.settings.debugLogging = value;
             await this.plugin.saveSettings();
           });
-      });
-
-  }
-
-  private async persistRuleChange(applyActive = false): Promise<void> {
-    await this.plugin.saveSettings();
-    if (applyActive) {
-      await this.plugin.applyRulesToActiveFile(false);
-    }
+        });
   }
 
   private bindCommittedText: BindCommittedText = (
     text: TextComponent,
     initialValue: string,
     commit: (value: string) => Promise<void>,
-    refreshOnCommit = false,
-    applyToActiveFileOnCommit = false
+    refreshOnCommit = false
   ) => {
     let committedValue = initialValue ?? "";
     let draftValue = committedValue;
@@ -378,10 +302,6 @@ export class NotebookNavigatorCompanionSettingTab extends PluginSettingTab {
       await commit(draftValue);
       committedValue = draftValue;
       await this.plugin.saveSettings();
-
-      if (applyToActiveFileOnCommit) {
-        await this.plugin.applyRulesToActiveFile(false);
-      }
 
       if (refreshOnCommit) {
         this.render();

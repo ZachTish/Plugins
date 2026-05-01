@@ -113,7 +113,7 @@
       "profiles": [
         {
           "id": "1771631292783",
-          "name": "New Profile",
+          "name": "Dailynote",
           "match": "all",
           "conditions": [
             {
@@ -121,25 +121,6 @@
               "operator": "contains",
               "value": "dailynote",
               "key": "tags"
-            },
-            {
-              "type": "frontmatter",
-              "operator": "contains",
-              "value": "template",
-              "key": "tags"
-            }
-          ],
-          "hidden": true
-        },
-        {
-          "id": "1771631316887",
-          "name": "New Profile",
-          "match": "all",
-          "conditions": [
-            {
-              "type": "path",
-              "operator": "starts-with",
-              "value": "Notes"
             }
           ],
           "hidden": true
@@ -370,7 +351,7 @@
   "notebookNavigatorClearIconWhenNoMatch": true,
   "notebookNavigatorClearColorWhenNoMatch": true,
   "notebookNavigatorAutoRemoveHiddenWhenNoMatch": true,
-  "notebookNavigatorFrontmatterWriteExclusions": "re:(^|/)_[^/]*($|/|$)\nre: ^[^/]+\\.md$",
+  "notebookNavigatorFrontmatterWriteExclusions": "re:(^|/)_[^/]*($|/|$)",
   "notebookNavigatorRules": [
     {
       "id": "rule-1773783792901-0ogp1n8",
@@ -411,8 +392,8 @@
       "match": "all",
       "conditions": [
         {
-          "source": "path",
-          "field": "",
+          "source": "frontmatter",
+          "field": "folderPath",
           "operator": "!contains",
           "value": "Markdown"
         },
@@ -428,50 +409,76 @@
       "id": "rule-1771100744432-8j9wclf",
       "name": "",
       "enabled": true,
-      "property": "title",
-      "operator": "exists",
+      "property": "",
+      "operator": "is",
       "value": "",
-      "pathPrefix": "System/Archive",
+      "pathPrefix": "",
       "icon": "lucide:sun",
       "color": "#9ea44c",
       "match": "all",
       "conditions": [
         {
-          "source": "tag",
-          "field": "",
-          "operator": "contains",
-          "value": "dailynote"
-        },
-        {
           "source": "frontmatter",
           "field": "scheduled",
           "operator": "is-today",
           "value": ""
+        },
+        {
+          "source": "tag",
+          "field": "",
+          "operator": "contains",
+          "value": "dailynote"
         }
       ]
     },
     {
       "id": "rule-1772382812618-twnp90j",
-      "name": "",
+      "name": "past dailynotes",
       "enabled": true,
       "property": "title",
       "operator": "exists",
       "value": "",
-      "pathPrefix": "System/Archive",
+      "pathPrefix": "",
       "icon": "lucide:moon",
-      "color": "#524865",
+      "color": "#8656ae",
       "match": "all",
       "conditions": [
         {
-          "source": "tag",
-          "field": "",
+          "source": "frontmatter",
+          "field": "tags",
           "operator": "contains",
           "value": "dailynote"
         },
         {
           "source": "frontmatter",
           "field": "scheduled",
-          "operator": "!is-today",
+          "operator": "is-before-today",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "rule-1777671279327-5zl0tsu",
+      "name": "",
+      "enabled": true,
+      "property": "title",
+      "operator": "exists",
+      "value": "",
+      "pathPrefix": "",
+      "icon": "lucide:sunrise",
+      "color": "#8656ae",
+      "match": "all",
+      "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "tags",
+          "operator": "contains",
+          "value": "dailynote"
+        },
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "is-after-today",
           "value": ""
         }
       ]
@@ -483,11 +490,17 @@
       "property": "status",
       "operator": "is",
       "value": "complete",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "",
       "icon": "lucide:calendar-check",
       "color": "#324e33",
       "match": "all",
       "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "folderPath",
+          "operator": "contains",
+          "value": "Action Items"
+        },
         {
           "source": "frontmatter",
           "field": "scheduled",
@@ -509,11 +522,17 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "",
       "icon": "lucide:calendar",
       "color": "",
       "match": "all",
       "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "folderPath",
+          "operator": "contains",
+          "value": "Action Items"
+        },
         {
           "source": "frontmatter",
           "field": "scheduled",
@@ -529,11 +548,17 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
-      "icon": "lucide:lucide-minus-square",
+      "pathPrefix": "",
+      "icon": "lucide:minus-square",
       "color": "",
       "match": "all",
       "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "folderPath",
+          "operator": "contains",
+          "value": "Action Items"
+        },
         {
           "source": "frontmatter",
           "field": "status",
@@ -549,11 +574,17 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
-      "icon": "lucide:lucide-repeat",
+      "pathPrefix": "",
+      "icon": "lucide:repeat",
       "color": "",
       "match": "all",
       "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "folderPath",
+          "operator": "contains",
+          "value": "Action Items"
+        },
         {
           "source": "frontmatter",
           "field": "scheduled",
@@ -575,11 +606,17 @@
       "property": "status",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
-      "icon": "lucide:lucide-list-todo",
+      "pathPrefix": "",
+      "icon": "lucide:list-todo",
       "color": "",
       "match": "all",
       "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "folderPath",
+          "operator": "contains",
+          "value": "Action Items"
+        },
         {
           "source": "frontmatter",
           "field": "status",
@@ -601,11 +638,17 @@
       "property": "status",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "",
       "icon": "square",
       "color": "",
       "match": "all",
       "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "folderPath",
+          "operator": "contains",
+          "value": "Action Items"
+        },
         {
           "source": "frontmatter",
           "field": "status",
@@ -633,11 +676,17 @@
       "property": "status",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "",
       "icon": "lucide:check-square-2",
       "color": "",
       "match": "all",
       "conditions": [
+        {
+          "source": "frontmatter",
+          "field": "folderPath",
+          "operator": "contains",
+          "value": "Action Items"
+        },
         {
           "source": "frontmatter",
           "field": "status",
@@ -698,7 +747,7 @@
       "operator": "exists",
       "value": "",
       "pathPrefix": "",
-      "icon": "lucide:lucide-layout-list",
+      "icon": "lucide:layout-list",
       "color": "",
       "match": "all",
       "conditions": [
@@ -803,8 +852,8 @@
             "value": ""
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           }
@@ -851,8 +900,8 @@
             "value": "hide"
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           }
@@ -881,8 +930,8 @@
             "value": "dailynote"
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           },
@@ -911,8 +960,8 @@
         "match": "all",
         "conditions": [
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "contains",
             "value": "Action Items"
           },
@@ -953,8 +1002,8 @@
             "value": "low"
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           },
@@ -1061,8 +1110,8 @@
             "value": "archive"
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           }
@@ -1131,8 +1180,8 @@
         "match": "all",
         "conditions": [
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "contains",
             "value": "Action Items"
           },
@@ -1173,8 +1222,8 @@
             "value": "complete"
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           }
@@ -1251,8 +1300,8 @@
         "match": "all",
         "conditions": [
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "contains",
             "value": "Action Items"
           },
@@ -1287,8 +1336,8 @@
             "value": ""
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           }
@@ -1419,8 +1468,8 @@
             "value": "archive"
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "contains",
             "value": "Action Items"
           },
@@ -1431,8 +1480,8 @@
             "value": ""
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           }
@@ -1455,8 +1504,8 @@
         "match": "all",
         "conditions": [
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "contains",
             "value": "Action Items"
           },
@@ -1485,8 +1534,8 @@
             "value": ""
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           }
@@ -1563,8 +1612,8 @@
         "match": "all",
         "conditions": [
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "Action Items"
           },
@@ -1575,8 +1624,8 @@
             "value": "archive"
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "contains",
             "value": "Markdown"
           },
@@ -1587,8 +1636,8 @@
             "value": "dailynote"
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           },
@@ -1671,8 +1720,8 @@
         "match": "all",
         "conditions": [
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "Action Items"
           },
@@ -1695,8 +1744,8 @@
             "value": "low"
           },
           {
-            "source": "path",
-            "field": "",
+            "source": "frontmatter",
+            "field": "folderPath",
             "operator": "!contains",
             "value": "templates"
           }
@@ -1822,83 +1871,27 @@
       "tagName": "hide"
     },
     {
-      "id": "hide-rule-1773504837602",
-      "name": "opencheck",
+      "id": "tag-rule-1777670866165-tjeyit9",
+      "name": "stale dailynotes",
       "enabled": true,
       "match": "all",
       "conditions": [
         {
-          "source": "path",
+          "source": "tag",
           "field": "",
-          "operator": "!contains",
-          "value": "_"
+          "operator": "contains",
+          "value": "dailynote"
+        },
+        {
+          "source": "frontmatter",
+          "field": "scheduled",
+          "operator": "is-before-today",
+          "value": ""
         },
         {
           "source": "body",
           "field": "",
-          "operator": "has-open-checkboxes",
-          "value": ""
-        }
-      ],
-      "mode": "remove",
-      "tagName": "hide"
-    },
-    {
-      "id": "hide-rule-1773880443562",
-      "name": "templates",
-      "enabled": true,
-      "match": "all",
-      "conditions": [
-        {
-          "source": "path",
-          "field": "",
-          "operator": "contains",
-          "value": "Markdown"
-        },
-        {
-          "source": "path",
-          "field": "",
-          "operator": "!contains",
-          "value": "_"
-        }
-      ],
-      "mode": "remove",
-      "tagName": "template"
-    },
-    {
-      "id": "hide-rule-1773958255716",
-      "name": "New Hide Rule",
-      "enabled": true,
-      "match": "all",
-      "conditions": [
-        {
-          "source": "parent-frontmatter",
-          "field": "status",
-          "operator": "!is",
-          "value": "complete"
-        },
-        {
-          "source": "parent-frontmatter",
-          "field": "status",
-          "operator": "!is",
-          "value": "wont-do"
-        },
-        {
-          "source": "frontmatter",
-          "field": "childOf",
-          "operator": "is-not-empty",
-          "value": ""
-        },
-        {
-          "source": "frontmatter",
-          "field": "priority",
-          "operator": "!is",
-          "value": "high"
-        },
-        {
-          "source": "frontmatter",
-          "field": "parentOf",
-          "operator": "!exists",
+          "operator": "!has-open-checkboxes",
           "value": ""
         }
       ],
@@ -1906,33 +1899,27 @@
       "tagName": "hide"
     },
     {
-      "id": "hide-rule-1774109188995",
-      "name": "New Hide Rule",
+      "id": "tag-rule-1777671172368-aw1j9w2",
+      "name": "stale dailynotes",
       "enabled": true,
       "match": "all",
       "conditions": [
         {
           "source": "tag",
           "field": "",
-          "operator": "is-not-empty",
-          "value": ""
-        },
-        {
-          "source": "frontmatter",
-          "field": "parentOf",
-          "operator": "!exists",
-          "value": ""
-        },
-        {
-          "source": "path",
-          "field": "",
           "operator": "contains",
-          "value": "Action Items"
+          "value": "dailynote"
         },
         {
           "source": "frontmatter",
-          "field": "childOf",
-          "operator": "exists",
+          "field": "scheduled",
+          "operator": "is-after-today",
+          "value": ""
+        },
+        {
+          "source": "body",
+          "field": "",
+          "operator": "!has-open-checkboxes",
           "value": ""
         }
       ],
@@ -2076,7 +2063,7 @@
   "workspaceRibbonIcons": {
     "Calendar": "calendar"
   },
-  "enableCanvasBaseSplit": false,
+  "enableCanvasBaseSplit": true,
   "enableDailyNoteNav": true,
   "enableTopParentNav": true,
   "ignoreEmbeddedChildrenInTopLinks": true,

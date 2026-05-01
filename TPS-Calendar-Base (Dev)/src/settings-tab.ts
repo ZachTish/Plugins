@@ -26,6 +26,19 @@ const createSettingsGroup = (
   return group;
 };
 
+const createSettingsBlock = (
+  parent: HTMLElement,
+  title: string,
+  description?: string,
+): HTMLElement => {
+  const block = parent.createDiv({ cls: 'tps-calendar-settings-block' });
+  block.createEl('h4', { text: title });
+  if (description) {
+    block.createEl('p', { text: description, cls: 'setting-item-description' });
+  }
+  return block;
+};
+
 export class CalendarPluginSettingsTab extends PluginSettingTab {
   plugin: ObsidianCalendarPlugin;
   private settingsViewState = new Map<string, boolean>();
@@ -46,10 +59,30 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "TPS Calendar Settings" });
 
-    const featuresCategory = createSettingsGroup(containerEl, 'Daily Use', 'Core calendar behavior, sources, and note creation defaults.');
-    const automationCategory = createSettingsGroup(containerEl, 'Automation', 'Sync behavior, generated data, and background calendar processing.');
-    const rulesCategory = createSettingsGroup(containerEl, 'Rules', 'Matching rules and calendar-specific automation rules.');
-    const appearanceCategory = createSettingsGroup(containerEl, 'Appearance', 'Visual layout and rendering preferences.');
+    const calendarsSection = createTPSCollapsibleSection(
+      containerEl,
+      'Sources',
+      'Source feeds, quick import, and external-event filtering.',
+      false,
+    );
+    const generalBehaviorSection = createTPSCollapsibleSection(
+      containerEl,
+      'Essentials',
+      'Calendar defaults, note creation, navigation, and event behavior you are most likely to change.',
+      true,
+    );
+    const appearanceSettingsSection = createTPSCollapsibleSection(
+      containerEl,
+      'Appearance',
+      'Visual layout and rendering preferences.',
+      false,
+    );
+    const advancedSettingsSection = createTPSCollapsibleSection(
+      containerEl,
+      'Advanced & Frontmatter',
+      'Shared key names and lower-frequency advanced behavior.',
+      false,
+    );
 
     // Check for Controller override
     const controller = getPluginById(this.app, "tps-controller") as any;
@@ -63,13 +96,6 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
     }
 
     // 1. Calendars Section (Top Priority)
-    const calendarsSection = createTPSCollapsibleSection(
-      featuresCategory,
-      "Calendars & Sources",
-      "Source feeds and quick import. This is the highest-priority setup area for the calendar plugin.",
-      false
-    );
-
     new Setting(calendarsSection)
       .setName("Enable external calendar integration")
       .setDesc("Master toggle for external calendar sources and external event rendering.")
@@ -200,11 +226,10 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
     }
 
     // 2. General Settings
-    const generalSection = createTPSCollapsibleSection(
-      featuresCategory,
-      "General",
+    const generalSection = createSettingsBlock(
+      generalBehaviorSection,
+      "Creation & Navigation",
       "Primary interaction settings that most users are likely to change.",
-      false
     );
 
     new Setting(generalSection)
@@ -288,11 +313,10 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
           }),
       );
 
-    const viewBehaviorSection = createTPSCollapsibleSection(
-      rulesCategory,
+    const viewBehaviorSection = createSettingsBlock(
+      generalBehaviorSection,
       "Calendar View Defaults",
       "Default navigation and visible time-range behavior.",
-      false
     );
 
     new Setting(viewBehaviorSection)
@@ -448,11 +472,10 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
     });
 
     // 3. Event Handling (UI-related settings only)
-    const handlingSection = createTPSCollapsibleSection(
-      automationCategory,
+    const handlingSection = createSettingsBlock(
+      generalBehaviorSection,
       "Event Handling",
       "Linking and status behavior for calendar-created notes.",
-      false
     );
 
     let linkDetails: HTMLElement;
@@ -513,11 +536,10 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     // 4. Task Items
-    const taskItemsSection = createTPSCollapsibleSection(
-      featuresCategory,
+    const taskItemsSection = createSettingsBlock(
+      generalBehaviorSection,
       "Task Items",
       "Optional task rendering. Related settings stay hidden until the feature is enabled.",
-      false
     );
 
     new Setting(taskItemsSection)
@@ -580,12 +602,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     // 5. Appearance
-    const appearanceSection = createTPSCollapsibleSection(
-      appearanceCategory,
-      "Appearance",
-      "Lower-priority visual tuning and optional style rules.",
-      false
-    );
+    const appearanceSection = appearanceSettingsSection;
 
     new Setting(appearanceSection)
       .setName("Theme & Integration")
@@ -770,18 +787,12 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
       );
 
     // 5. Advanced / Developer
-    const advancedSection = createTPSCollapsibleSection(
-      rulesCategory,
-      "Advanced & Frontmatter",
-      "Shared key names and lower-frequency advanced behavior.",
-      false
-    );
+    const advancedSection = advancedSettingsSection;
 
-    const frontmatterKeysSection = createTPSCollapsibleSection(
+    const frontmatterKeysSection = createSettingsBlock(
       advancedSection,
       "Frontmatter Keys",
       "All calendar frontmatter key names are grouped here, including the note color/icon fields used for event rendering.",
-      false
     );
 
     const keys = [
@@ -807,15 +818,9 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
         );
     });
 
-    // 6. Debug
-    const debugSection = createTPSCollapsibleSection(
-      automationCategory,
-      "Debug",
-      "Low-frequency troubleshooting controls.",
-      false
-    );
+    const debugGroup = createSettingsGroup(containerEl, 'Debug', 'Troubleshooting output for this plugin only.');
 
-    new Setting(debugSection)
+    new Setting(debugGroup)
       .setName("Enable logging")
       .setDesc("Print detailed debug logs to the developer console (Ctrl+Shift+I). Disable when not needed.")
       .addToggle(toggle =>

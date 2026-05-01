@@ -89,6 +89,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   private keyboardHidden: boolean = false;
   private modalObserver: MutationObserver | null = null;
   private panelEmbeds = new WeakMap<HTMLElement, any>();
+  private dataviewTaskObservers = new WeakMap<HTMLElement, MutationObserver>();
   private lastEditorFocused: boolean = false;
   private queuedRefreshAllTimer: number | null = null;
   private queuedRefreshAllOptions: { resetExpanded?: boolean } | null = null;
@@ -1137,6 +1138,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       tabButton.className = `${EMBED_CLASS}__tab`;
       tabButton.textContent = this.getRuleDisplayLabel(rule);
       tabButton.setAttribute('role', 'tab');
+      this.fenceCanvasInteraction(tabButton);
       tabButton.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -1168,6 +1170,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
   ): Promise<void> {
     if (this.getRuleKind(rule) === 'dataviewjs') {
       await MarkdownRenderer.render(this.app, this.getRuleRenderMarkdown(rule), renderTarget, sourcePath, view as any);
+      await this.enableDataviewTaskInteractions(renderTarget);
       return;
     }
 
@@ -1198,6 +1201,307 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     if (!usedEmbedRegistry) {
       await MarkdownRenderer.render(this.app, this.getRuleRenderMarkdown(rule), renderTarget, sourcePath, view as any);
     }
+  }
+
+  private async enableDataviewTaskInteractions(renderTarget: HTMLElement): Promise<void> {
+    if (this.isCanvasNodeRenderTarget(renderTarget)) {
+      this.fenceCanvasInteractionDescendants(renderTarget);
+    }
+    await this.bindDataviewTaskRows(renderTarget);
+    this.observeDataviewTaskRows(renderTarget);
+  }
+
+  private isCanvasNodeRenderTarget(renderTarget: HTMLElement): boolean {
+    return !!renderTarget.closest(`.${EMBED_CLASS}--canvas-node`);
+  }
+
+  private fenceCanvasInteraction(element: HTMLElement | null): void {
+    if (!(element instanceof HTMLElement) || element.dataset.tpsAutoBaseEmbedCanvasFence === 'true') {
+      return;
+    }
+
+    const stopPropagation = (event: Event) => {
+      event.stopPropagation();
+    };
+
+    for (const eventName of ['pointerdown', 'mousedown', 'mouseup', 'touchstart', 'click', 'dblclick']) {
+      element.addEventListener(eventName, stopPropagation);
+    }
+
+    element.dataset.tpsAutoBaseEmbedCanvasFence = 'true';
+  }
+
+  private fenceCanvasInteractionDescendants(container: ParentNode): void {
+    const interactiveElements = Array.from(
+      container.querySelectorAll<HTMLElement>('button, a, input, textarea, select, label, [role="tab"]'),
+    );
+
+    for (const element of interactiveElements) {
+      this.fenceCanvasInteraction(element);
+    }
+  }
+
+  private getDataviewTaskRows(renderTarget: HTMLElement): HTMLElement[] {
+    return Array.from(
+      renderTarget.querySelectorAll<HTMLElement>('.task-list-item, .dataview-task-list-item'),
+    );
+  }
+
+  private async bindDataviewTaskRows(renderTarget: HTMLElement): Promise<void> {
+    for (const taskRow of this.getDataviewTaskRows(renderTarget)) {
+      await this.bindDataviewTaskRow(taskRow);
+    }
+  }
+
+  private observeDataviewTaskRows(renderTarget: HTMLElement): void {
+    if (this.dataviewTaskObservers.has(renderTarget)) {
+      return;
+    }
+
+    const observer = new MutationObserver(() => {
+      if (!renderTarget.isConnected) {
+        this.disconnectDataviewTaskObserver(renderTarget);
+        return;
+      }
+
+      if (this.isCanvasNodeRenderTarget(renderTarget)) {
+        this.fenceCanvasInteractionDescendants(renderTarget);
+      }
+
+      void this.bindDataviewTaskRows(renderTarget);
+    });
+
+    observer.observe(renderTarget, { childList: true, subtree: true });
+    this.dataviewTaskObservers.set(renderTarget, observer);
+
+    window.requestAnimationFrame(() => {
+      if (!renderTarget.isConnected) {
+        this.disconnectDataviewTaskObserver(renderTarget);
+        return;
+      }
+
+      if (this.isCanvasNodeRenderTarget(renderTarget)) {
+        this.fenceCanvasInteractionDescendants(renderTarget);
+      }
+
+      void this.bindDataviewTaskRows(renderTarget);
+    });
+  }
+
+  private disconnectDataviewTaskObserver(renderTarget: HTMLElement): void {
+    const observer = this.dataviewTaskObservers.get(renderTarget);
+    if (!observer) {
+      return;
+    }
+
+    observer.disconnect();
+    this.dataviewTaskObservers.delete(renderTarget);
+  }
+
+  private disconnectDataviewTaskObserversWithin(container: HTMLElement): void {
+    const renderTargets = Array.from(
+      container.querySelectorAll<HTMLElement>('.markdown-preview-view.markdown-rendered'),
+    );
+
+    for (const renderTarget of renderTargets) {
+      this.disconnectDataviewTaskObserver(renderTarget);
+    }
+  }
+
+  private async bindDataviewTaskRow(taskRow: HTMLElement): Promise<void> {
+    const checkbox = taskRow.querySelector<HTMLInputElement>('input.task-list-item-checkbox');
+    if (!(checkbox instanceof HTMLInputElement) || checkbox.type !== 'checkbox' || !checkbox.disabled) {
+      return;
+    }
+
+    const sourcePath = this.resolveRenderedTaskSourcePath(taskRow);
+    if (!sourcePath) return;
+
+    const sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
+    if (!(sourceFile instanceof TFile) || sourceFile.extension !== 'md') {
+      return;
+    }
+
+    const lineNumber = await this.findRenderedTaskSourceLine(sourceFile, taskRow);
+    if (lineNumber < 0) {
+      return;
+    }
+
+    taskRow.setAttribute('data-tps-task-context', 'true');
+    checkbox.disabled = false;
+    checkbox.dataset.tpsAutoBaseEmbedTaskPath = sourceFile.path;
+    checkbox.dataset.tpsAutoBaseEmbedTaskLine = String(lineNumber);
+    checkbox.dataset.tpsAutoBaseEmbedTaskChecked = checkbox.checked ? 'true' : 'false';
+
+    if (checkbox.dataset.tpsAutoBaseEmbedTaskBound === 'true') {
+      return;
+    }
+
+    checkbox.dataset.tpsAutoBaseEmbedTaskBound = 'true';
+    checkbox.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.handleDataviewTaskCheckboxClick(checkbox);
+    });
+  }
+
+  private async handleDataviewTaskCheckboxClick(checkbox: HTMLInputElement): Promise<void> {
+    const filePath = String(checkbox.dataset.tpsAutoBaseEmbedTaskPath || '').trim();
+    const rawLineNumber = Number.parseInt(String(checkbox.dataset.tpsAutoBaseEmbedTaskLine || ''), 10);
+    if (!filePath || !Number.isFinite(rawLineNumber)) {
+      return;
+    }
+
+    const sourceFile = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(sourceFile instanceof TFile) || sourceFile.extension !== 'md') {
+      return;
+    }
+
+    const nextChecked = checkbox.dataset.tpsAutoBaseEmbedTaskChecked !== 'true';
+    checkbox.disabled = true;
+
+    try {
+      const updated = await this.updateTaskLineCheckboxState(sourceFile, rawLineNumber, nextChecked);
+      if (!updated) {
+        return;
+      }
+
+      checkbox.dataset.tpsAutoBaseEmbedTaskChecked = nextChecked ? 'true' : 'false';
+      checkbox.checked = nextChecked;
+    } finally {
+      checkbox.disabled = false;
+    }
+  }
+
+  private async updateTaskLineCheckboxState(file: TFile, lineNumber: number, checked: boolean): Promise<boolean> {
+    const content = await this.app.vault.read(file);
+    const newline = content.includes('\r\n') ? '\r\n' : '\n';
+    const lines = content.split(/\r?\n/);
+    if (lineNumber < 0 || lineNumber >= lines.length) {
+      return false;
+    }
+
+    const originalLine = lines[lineNumber];
+    const updatedLine = this.applyTaskCheckboxStateToLine(originalLine, checked);
+    if (!updatedLine || updatedLine === originalLine) {
+      return false;
+    }
+
+    lines[lineNumber] = updatedLine;
+    await this.app.vault.modify(file, lines.join(newline));
+    return true;
+  }
+
+  private applyTaskCheckboxStateToLine(line: string, checked: boolean): string | null {
+    if (!this.isTaskCheckboxLine(line)) {
+      return null;
+    }
+
+    return line.replace(
+      /^(\s*(?:[-*+]|\d+\.)\s*)\[[^\]]\]/,
+      `$1[${checked ? 'x' : ' '}]`,
+    );
+  }
+
+  private isTaskCheckboxLine(line: string): boolean {
+    return /^\s*(?:[-*+]|\d+\.)\s*\[[^\]]\]/.test(line);
+  }
+
+  private resolveRenderedTaskSourcePath(taskRow: HTMLElement): string | null {
+    const noteLink = taskRow.querySelector<HTMLElement>('a.internal-link, [data-href], [href]');
+    if (!noteLink) {
+      return null;
+    }
+
+    const candidates = [
+      noteLink.getAttribute('data-href'),
+      noteLink.getAttribute('href'),
+      noteLink.textContent,
+    ];
+
+    for (const rawValue of candidates) {
+      const raw = String(rawValue || '').trim();
+      if (!raw) continue;
+
+      const cleaned = raw
+        .replace(/^obsidian:\/\/open\?file=/i, '')
+        .split('|')[0]
+        .split('#')[0]
+        .trim();
+      if (!cleaned) continue;
+
+      const decoded = decodeURIComponent(cleaned);
+      const directPath = decoded.endsWith('.md') ? decoded : `${decoded}.md`;
+      const directFile = this.app.vault.getAbstractFileByPath(directPath);
+      if (directFile instanceof TFile && directFile.extension === 'md') {
+        return directFile.path;
+      }
+
+      const resolved = this.app.metadataCache.getFirstLinkpathDest(decoded, '');
+      if (resolved instanceof TFile && resolved.extension === 'md') {
+        return resolved.path;
+      }
+    }
+
+    return null;
+  }
+
+  private async findRenderedTaskSourceLine(sourceFile: TFile, taskRow: HTMLElement): Promise<number> {
+    const renderedText = this.normalizeTaskTextForComparison(this.getRenderedTaskText(taskRow));
+    if (!renderedText) {
+      return -1;
+    }
+
+    const content = await this.app.vault.cachedRead(sourceFile);
+    const lines = content.split(/\r?\n/);
+    let fallbackLine = -1;
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (!this.isTaskCheckboxLine(line)) {
+        continue;
+      }
+
+      const normalizedLine = this.normalizeTaskTextForComparison(line);
+      if (!normalizedLine) {
+        continue;
+      }
+
+      if (normalizedLine === renderedText) {
+        return index;
+      }
+
+      if (fallbackLine < 0 && (normalizedLine.includes(renderedText) || renderedText.includes(normalizedLine))) {
+        fallbackLine = index;
+      }
+    }
+
+    return fallbackLine;
+  }
+
+  private getRenderedTaskText(taskRow: HTMLElement): string {
+    const noteLink = taskRow.querySelector<HTMLElement>('a.internal-link');
+    const linkText = noteLink?.textContent?.trim();
+    if (linkText) {
+      return linkText;
+    }
+
+    const clone = taskRow.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('input, .task-list-item-checkbox').forEach((element) => element.remove());
+    return clone.textContent?.trim() || '';
+  }
+
+  private normalizeTaskTextForComparison(text: string): string {
+    return String(text || '')
+      .replace(/^\s*(?:[-*+]|\d+\.)\s*\[[^\]]*\]\s*/, '')
+      .replace(/^\s*(?:[-*+]|\d+\.)\s*/, '')
+      .replace(/\[[^\]]+::[^\]]*\]/g, ' ')
+      .replace(/\[\[([^\]|]+\|)?([^\]]+)\]\]/g, '$2')
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+      .replace(/[#*_`>~]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
   }
 
   private getManualExpansionState(basePath: string): boolean | null {
@@ -2372,6 +2676,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
       headerObserver.disconnect();
       this.headerObservers.delete(panel);
     }
+    this.disconnectDataviewTaskObserversWithin(panel);
     const embed = this.panelEmbeds.get(panel);
     if (embed) {
       try {
@@ -2784,6 +3089,9 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         display: flex;
         flex-direction: column;
         gap: 6px;
+      }
+      .${EMBED_CLASS}__panel[hidden] {
+        display: none !important;
       }
       .${EMBED_CLASS}__tab-group {
         display: flex;
@@ -3590,7 +3898,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
    */
   private async buildCanvasNodePanel(
     nodeEl: HTMLElement,
-    overlay: HTMLElement,
+    container: HTMLElement,
     rule: BaseEmbedRule,
     sourcePath: string,
     expandedSet: Set<string>,
@@ -3623,6 +3931,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
       if (toggle) {
         toggle.textContent = isExpanded ? "▾" : "▸";
+        this.fenceCanvasInteraction(toggle);
         toggle.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -3639,6 +3948,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         });
       }
       if (bar) {
+        this.fenceCanvasInteraction(bar);
         bar.addEventListener("click", (event) => {
           const target = event.target as HTMLElement | null;
           if (target?.closest(`.${EMBED_CLASS}__toggle`)) return;
@@ -3671,7 +3981,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     renderTarget.setAttribute("data-mode", "preview");
     contentEl.appendChild(renderTarget);
 
-    overlay.appendChild(panel);
+    container.appendChild(panel);
 
     await this.renderRuleIntoTarget(rule, renderTarget, sourcePath, null, panel);
 

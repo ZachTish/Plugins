@@ -2,21 +2,12 @@ import { MarkdownView, Menu, Notice, Platform, Plugin, TFile, WorkspaceLeaf, set
 import { NotebookNavigatorCompanionSettingTab } from "./settings-tab";
 import {
   DEFAULT_SETTINGS,
-  HideRule,
-  IconColorRule,
   NotebookNavigatorCompanionSettings,
-  RuleEvaluationContext,
-  SortBucket,
-  createDefaultRule,
-  createDefaultSortBucket,
-  createDefaultSortSegment,
 } from "./types";
 import { Logger } from "./services/logger";
 import { SettingsManager } from "./services/settings-manager";
-import { RuleEngine, VisualRuleResult } from "./services/rule-engine";
 import { MetadataManager } from "./services/metadata-manager";
 import { FrontmatterWriteExclusionService } from "./services/frontmatter-write-exclusion-service";
-import { RuleApplicationService } from "./services/rule-application-service";
 import { TitleSyncService } from "./services/title-sync-service";
 import { TagPageManager } from "./services/tag-page-manager";
 import { PageFileTypeModal } from "./modals/page-file-type-modal";
@@ -28,12 +19,6 @@ const ROOT_TAG_PAGE = "__nn_tags_root__";
 const UNTAGGED_TAG_PAGE = "__untagged__";
 
 type CompanionApi = {
-  applyRulesToAllFiles: (silent?: boolean) => Promise<number>;
-  applyRulesToFile: (file: TFile) => Promise<void>;
-  applyRulesToActiveFile: (showNotice?: boolean) => Promise<boolean>;
-  resolveVisualOutputsForContext: (context: RuleEvaluationContext) => VisualRuleResult;
-  getSmartSortPreviewForActiveFile: () => string | null;
-  getRuleMatchForActiveFile: (rule: IconColorRule | HideRule) => boolean | null;
   tagPages: {
     openForTag: (tag: string) => Promise<void>;
     hasTagPage: (tag: string) => boolean;
@@ -53,36 +38,18 @@ type CompanionApi = {
   };
 };
 
-type AutoApplyTiming = {
-  quietMs: number;
-  minAgeMs: number;
-  maxWaitMs: number;
-  pollMs: number;
-};
-
 export default class NotebookNavigatorCompanionPlugin extends Plugin {
   settings: NotebookNavigatorCompanionSettings = DEFAULT_SETTINGS;
-  private readonly startupTimestamp = Date.now();
   private pendingNotebookNavigatorStatusIconContextMenu: { filePath: string; expiresAt: number } | null = null;
   private notebookNavigatorTagObserver: MutationObserver | null = null;
   private pendingTagPageMenuObserver: MutationObserver | null = null;
   private menuActionStyleEl: HTMLStyleElement | null = null;
   private refreshNotebookNavigatorTagAffordancesDebounced = () => {};
-  private static readonly AUTO_APPLY_TIMINGS: Record<string, AutoApplyTiming> = {
-    "startup-auto": { quietMs: 1200, minAgeMs: 1600, maxWaitMs: 8000, pollMs: 250 },
-    "file-open": { quietMs: 1000, minAgeMs: 1400, maxWaitMs: 7000, pollMs: 250 },
-    "metadata-change": { quietMs: 900, minAgeMs: 0, maxWaitMs: 5000, pollMs: 200 },
-    "modify-save": { quietMs: 700, minAgeMs: 0, maxWaitMs: 5000, pollMs: 200 },
-    "create": { quietMs: 1400, minAgeMs: 2200, maxWaitMs: 9000, pollMs: 250 },
-    "rename": { quietMs: 800, minAgeMs: 0, maxWaitMs: 5000, pollMs: 200 },
-  };
 
   logger!: Logger;
   settingsManager!: SettingsManager;
-  ruleEngine!: RuleEngine;
   metadataManager!: MetadataManager;
   exclusionService!: FrontmatterWriteExclusionService;
-  ruleApplicationService!: RuleApplicationService;
   titleSyncService!: TitleSyncService;
   tagPageManager!: TagPageManager;
   propertyPageManager!: PropertyPageManager;
@@ -102,77 +69,39 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       ?? null;
   }
 
-  private isUserInitiatedRuleReason(reason: string): boolean {
-    return reason === 'manual-active'
-      || reason === 'direct-file'
-      || reason === 'manual-status-refresh'
-      || reason === 'manual-all'
-      || reason === 'startup-auto';
-  }
-
-  private isAutomationWriteSettled(): boolean {
-    const gcm = this.getGcmPlugin();
-    if (typeof gcm?.isInitialSyncSettled === 'function') {
-      try {
-        return !!gcm.isInitialSyncSettled();
-      } catch {
-        // Fall through to controller API.
-      }
-    }
-
-    const controllerApi = this.getControllerPlugin()?.api;
-    if (typeof controllerApi?.isSyncSettled === 'function') {
-      try {
-        return !!controllerApi.isSyncSettled();
-      } catch {
-        return true;
-      }
-    }
-
-    return true;
-  }
-
   private getEffectiveSettings(): NotebookNavigatorCompanionSettings {
     const gcm = this.getGcmPlugin();
     const gcmSettings = gcm?.settings;
     if (!gcmSettings) {
-      const traceKey = `local:${this.settings.rules.length}:${this.settings.hideRules.length}:${this.settings.smartSort ? 'on' : 'off'}`;
+      const traceKey = `local:${String(this.settings.frontmatterWriteExclusions || '')}`;
       if (this.lastEffectiveSettingsTraceKey !== traceKey) {
         this.lastEffectiveSettingsTraceKey = traceKey;
         this.logger.debug("Using companion-local effective settings", {
-          rules: this.settings.rules.length,
-          hideRules: this.settings.hideRules.length,
-          smartSort: this.settings.smartSort,
+          frontmatterWriteExclusions: this.settings.frontmatterWriteExclusions,
         });
       }
       return this.settings;
     }
     const effectiveSettings = {
       ...this.settings,
-      frontmatterIconField: String(gcmSettings.notebookNavigatorIconField || this.settings.frontmatterIconField || 'icon'),
-      frontmatterColorField: String(gcmSettings.notebookNavigatorColorField || this.settings.frontmatterColorField || 'color'),
-      writeBasesIconFields: gcmSettings.notebookNavigatorWriteBasesIconFields === true,
-      basesIconMarkdownField: String(gcmSettings.notebookNavigatorBasesIconMarkdownField || this.settings.basesIconMarkdownField || 'iconDisplay'),
-      basesIconUriField: String(gcmSettings.notebookNavigatorBasesIconUriField || this.settings.basesIconUriField || 'iconDisplayUri'),
-      noteCheckboxIconColor: String(gcmSettings.notebookNavigatorNoteCheckboxIconColor || this.settings.noteCheckboxIconColor || ''),
-      clearIconWhenNoMatch: gcmSettings.notebookNavigatorClearIconWhenNoMatch === true,
-      clearColorWhenNoMatch: gcmSettings.notebookNavigatorClearColorWhenNoMatch === true,
-      autoRemoveHiddenWhenNoMatch: gcmSettings.notebookNavigatorAutoRemoveHiddenWhenNoMatch !== false,
       frontmatterWriteExclusions: String(gcmSettings.notebookNavigatorFrontmatterWriteExclusions || this.settings.frontmatterWriteExclusions || ''),
-      rules: Array.isArray(gcmSettings.notebookNavigatorRules) ? gcmSettings.notebookNavigatorRules : this.settings.rules,
-      smartSort: gcmSettings.notebookNavigatorSmartSort || this.settings.smartSort,
-      hideRules: Array.isArray(gcmSettings.notebookNavigatorHideRules) ? gcmSettings.notebookNavigatorHideRules : this.settings.hideRules,
     };
-    const traceKey = `gcm:${effectiveSettings.rules.length}:${effectiveSettings.hideRules.length}:${effectiveSettings.smartSort ? 'on' : 'off'}`;
+    const traceKey = `gcm:${effectiveSettings.frontmatterWriteExclusions}`;
     if (this.lastEffectiveSettingsTraceKey !== traceKey) {
       this.lastEffectiveSettingsTraceKey = traceKey;
       this.logger.debug("Using GCM-overlay effective settings", {
-        rules: effectiveSettings.rules.length,
-        hideRules: effectiveSettings.hideRules.length,
-        smartSort: effectiveSettings.smartSort,
+        frontmatterWriteExclusions: effectiveSettings.frontmatterWriteExclusions,
       });
     }
     return effectiveSettings;
+  }
+
+  private getEffectiveNavigatorVisualSettings(): { frontmatterColorField: string; noteCheckboxIconColor: string } {
+    const gcmSettings = this.getGcmPlugin()?.settings;
+    return {
+      frontmatterColorField: String(gcmSettings?.notebookNavigatorColorField || 'color').trim() || 'color',
+      noteCheckboxIconColor: String(gcmSettings?.notebookNavigatorNoteCheckboxIconColor || '').trim(),
+    };
   }
 
   async onload(): Promise<void> {
@@ -183,20 +112,10 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     this.settingsManager = new SettingsManager(this, this.logger);
     this.settings = await this.settingsManager.loadSettings();
 
-    this.ruleEngine = new RuleEngine(this.app);
     this.metadataManager = new MetadataManager(this.app, this.logger);
     this.exclusionService = new FrontmatterWriteExclusionService(
       this.logger,
       () => this.getEffectiveSettings(),
-    );
-    this.ruleApplicationService = new RuleApplicationService(
-      this.app,
-      this.ruleEngine,
-      this.metadataManager,
-      this.logger,
-      () => this.getEffectiveSettings(),
-      this.exclusionService,
-      (key) => this.isProtectedFrontmatterKey(key),
     );
     this.titleSyncService = new TitleSyncService(
       this.app,
@@ -207,7 +126,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     );
     this.tagPageManager = new TagPageManager(this.app, () => this.settings);
     this.propertyPageManager = new PropertyPageManager(this.app, () => this.settings);
-    this.styleService = new StyleService(this.app, () => this.getEffectiveSettings());
+    this.styleService = new StyleService(this.app, () => this.getEffectiveNavigatorVisualSettings());
     this.vaultWalker = new VaultWalker(this.logger);
     this.refreshNotebookNavigatorTagAffordancesDebounced = this.debounce(() => this.refreshNotebookNavigatorTagAffordances(), 80);
 
@@ -218,30 +137,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     this.registerEvents();
     this.setupPluginApi();
     this.startNotebookNavigatorTagAffordanceObserver();
-
-    if (this.settings.applyOnStartup) {
-      if (this.isInMobileStartupGracePeriod()) {
-        this.logger.info("Skipping startup vault scan during mobile startup grace period");
-      } else {
-        // Wait for the workspace (and therefore metadataCache) to be fully
-        // populated before running the startup scan. Calling it directly in
-        // onload() means getFileCache() returns null for most files, so rule
-        // context is built with empty frontmatter/backlinks and wrong values
-        // (or null clears) get written to icon/color/sort frontmatter.
-        // The optional startupDelayMs is kept as an additional grace period on
-        // top of onLayoutReady (e.g. for Templater to finish its own writes).
-        this.app.workspace.onLayoutReady(() => {
-          const delay = Math.max(0, this.settings.startupDelayMs || 0);
-          if (delay > 0) {
-            window.setTimeout(() => {
-              void this.applyRulesToAllFiles(true, "startup-auto");
-            }, delay);
-          } else {
-            void this.applyRulesToAllFiles(true, "startup-auto");
-          }
-        });
-      }
-    }
 
     this.logger.info("Notebook Navigator Companion loaded");
   }
@@ -266,92 +161,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     if (activeFile) {
       this.styleService.updateActiveViewStyle(activeFile);
     }
-  }
-
-  async applyRulesToActiveFile(showNotice = false): Promise<boolean> {
-    const file = this.getActiveMarkdownFile();
-    if (!file) {
-      if (showNotice) {
-        new Notice("No active markdown file.");
-      }
-      return false;
-    }
-
-    const changed = await this.applyRulesToFileInternal(file, "manual-active", true);
-    if (showNotice) {
-      new Notice(changed ? "Companion rules applied." : "No companion rule changes.");
-    }
-    return changed;
-  }
-
-  async applyRulesToAllFiles(silent = false, reason = "manual-all"): Promise<number> {
-    if (!this.settings.enabled) {
-      if (!silent) {
-        new Notice("Notebook Navigator Companion automation is disabled.");
-      }
-      return 0;
-    }
-
-    const files = this.app.vault.getMarkdownFiles();
-    const result = await this.vaultWalker.walk(
-      files,
-      async (file) => this.applyRulesToFileInternal(file, reason, true),
-    );
-
-    if (!silent) {
-      new Notice(`Companion processed ${result.total} files, updated ${result.changed}.`);
-    }
-    return result.changed;
-  }
-
-  async applyRulesToFile(file: TFile): Promise<void> {
-    await this.applyRulesToFileInternal(file, "direct-file", true);
-  }
-
-  getSmartSortPreviewForActiveFile(): string | null {
-    const file = this.getActiveMarkdownFile();
-    if (!file) return null;
-    const context = this.buildContextForFile(file, true);
-    const settings = this.getEffectiveSettings();
-    if (!context || !settings.smartSort.enabled) return null;
-    return this.ruleEngine.composeSortKey(settings.smartSort, context);
-  }
-
-  createDefaultSortBucket(): SortBucket {
-    return createDefaultSortBucket();
-  }
-
-  createDefaultSortSegment() {
-    return createDefaultSortSegment();
-  }
-
-  createDefaultRule(): IconColorRule {
-    return createDefaultRule();
-  }
-
-  createDefaultHideRule(): HideRule {
-    return {
-      id: `hide-rule-${Date.now()}`,
-      name: "New Hide Rule",
-      enabled: true,
-      match: "all",
-      conditions: [],
-      mode: "add",
-      tagName: "hide",
-    };
-  }
-
-  getRuleMatchForActiveFile(rule: IconColorRule | HideRule): boolean | null {
-    const file = this.getActiveMarkdownFile();
-    if (!file) return null;
-    const context = this.buildContextForFile(file, true);
-    if (!context) return null;
-    return this.ruleEngine.matchesRule(rule, context);
-  }
-
-  resolveVisualOutputsForContext(context: RuleEvaluationContext): VisualRuleResult {
-    const settings = this.getEffectiveSettings();
-    return this.ruleEngine.resolveVisualOutputs(settings.rules || [], context);
   }
 
   private registerEvents(): void {
@@ -562,9 +371,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       this.app.workspace.on("file-open", (file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
         this.styleService.updateActiveViewStyle(file);
-        if (this.settings.autoApplyOnFileOpen) {
-          void this.applyRulesToFileInternal(file, "file-open", false);
-        }
       }),
     );
 
@@ -584,9 +390,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
 
         const delay = Math.max(0, this.settings.metadataDebounceMs || 0);
         this.metadataManager.scheduleDebounced(file.path, delay, async () => {
-          if (this.settings.autoApplyOnMetadataChange) {
-            await this.applyRulesToFileInternal(file, "metadata-change", false);
-          }
           const activeFile = this.getActiveMarkdownFile();
           if (this.settings.syncFilenameFromTitle && activeFile && activeFile.path === file.path) {
             await this.titleSyncService.handleTitleSync(file);
@@ -598,10 +401,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
-
-        this.metadataManager.scheduleDebounced(`${file.path}::modify-save`, 250, async () => {
-          await this.applyRulesToFileInternal(file, "modify-save", false);
-        });
       }),
     );
 
@@ -612,7 +411,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
           if (this.settings.syncTitleFromFilename) {
             await this.titleSyncService.handleFilenameUpdate(file);
           }
-          await this.applyRulesToFileInternal(file, "rename", true);
         });
       }),
     );
@@ -620,9 +418,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("create", (file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
-        this.metadataManager.scheduleDebounced(file.path, 2200, async () => {
-          await this.applyRulesToFileInternal(file, "create", true);
-        });
       }),
     );
   }
@@ -1175,12 +970,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     };
 
     const api: CompanionApi = {
-      applyRulesToAllFiles: (silent?: boolean) => this.applyRulesToAllFiles(!!silent),
-      applyRulesToFile: (file: TFile) => this.applyRulesToFile(file),
-      applyRulesToActiveFile: (showNotice?: boolean) => this.applyRulesToActiveFile(!!showNotice),
-      resolveVisualOutputsForContext: (context: RuleEvaluationContext) => this.resolveVisualOutputsForContext(context),
-      getSmartSortPreviewForActiveFile: () => this.getSmartSortPreviewForActiveFile(),
-      getRuleMatchForActiveFile: (rule: IconColorRule | HideRule) => this.getRuleMatchForActiveFile(rule),
       tagPages,
       propertyPages,
     };
@@ -1212,116 +1001,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     }
 
     return true;
-  }
-
-  private async applyRulesToFileInternal(
-    file: TFile,
-    reason: string,
-    force: boolean,
-  ): Promise<boolean> {
-    if (!(file instanceof TFile) || file.extension !== "md") return false;
-    if (!this.isUserInitiatedRuleReason(reason) && !this.isAutomationWriteSettled()) {
-      this.logger.debug("Skipping companion auto-write until vault sync settles", { file: file.path, reason });
-      return false;
-    }
-
-    const targetFile = await this.resolveStableTargetFile(file, reason);
-    if (!targetFile) {
-      return false;
-    }
-
-    const bypassCreationGrace =
-      reason === "file-open" ||
-      reason === "metadata-change" ||
-      reason === "modify-save" ||
-      reason === "rename" ||
-      reason === "create" ||
-      reason === "manual-active" ||
-      reason === "direct-file" ||
-      reason === "manual-all" ||
-      reason === "startup-auto";
-    const changed = await this.ruleApplicationService.applyRulesToFile(targetFile, {
-      reason,
-      force,
-      bypassCreationGrace,
-    });
-    this.styleService.updateActiveViewStyle(targetFile);
-    return changed;
-  }
-
-  private async resolveStableTargetFile(file: TFile, reason: string): Promise<TFile | null> {
-    const timing = NotebookNavigatorCompanionPlugin.AUTO_APPLY_TIMINGS[reason];
-    if (!timing) {
-      return this.getLiveMarkdownFile(file.path);
-    }
-
-    return this.waitForStableFile(file.path, reason, timing);
-  }
-
-  private async waitForStableFile(
-    path: string,
-    reason: string,
-    timing: AutoApplyTiming,
-  ): Promise<TFile | null> {
-    let liveFile = this.getLiveMarkdownFile(path);
-    if (!liveFile) return null;
-
-    let lastSignature = this.getFileSignature(liveFile);
-    let lastObservedChangeAt = Date.now() - Math.max(0, Date.now() - liveFile.stat.mtime);
-    const startTime = Date.now();
-
-    while (Date.now() - startTime <= timing.maxWaitMs) {
-      liveFile = this.getLiveMarkdownFile(path);
-      if (!liveFile) return null;
-
-      const nextSignature = this.getFileSignature(liveFile);
-      if (nextSignature !== lastSignature) {
-        lastSignature = nextSignature;
-        lastObservedChangeAt = Date.now();
-      }
-
-      const ageMs = Math.min(
-        Date.now() - liveFile.stat.mtime,
-        Date.now() - liveFile.stat.ctime,
-      );
-      const quietForMs = Date.now() - lastObservedChangeAt;
-
-      if (ageMs >= timing.minAgeMs && quietForMs >= timing.quietMs) {
-        return liveFile;
-      }
-
-      await this.sleep(timing.pollMs);
-    }
-
-    this.logger.debug("Skipped automatic rule application because the file did not settle in time", {
-      file: path,
-      reason,
-      quietMs: timing.quietMs,
-      minAgeMs: timing.minAgeMs,
-      maxWaitMs: timing.maxWaitMs,
-    });
-    return null;
-  }
-
-  private getLiveMarkdownFile(path: string): TFile | null {
-    const live = this.app.vault.getAbstractFileByPath(path);
-    return live instanceof TFile && live.extension === "md" ? live : null;
-  }
-
-  private getFileSignature(file: TFile): string {
-    return `${file.stat.mtime}:${file.stat.ctime}:${file.stat.size}`;
-  }
-
-  private async sleep(ms: number): Promise<void> {
-    await new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-  }
-
-  private buildContextForFile(
-    file: TFile,
-    includeBacklinks: boolean,
-  ): RuleEvaluationContext | null {
-    if (!(file instanceof TFile) || file.extension !== "md") return null;
-    return this.ruleApplicationService.buildRuleContext(file, undefined, includeBacklinks);
   }
 
   private getActiveMarkdownFile(): TFile | null {
@@ -1458,7 +1137,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
             });
             if (!changed) return;
 
-            await this.applyRulesToFileInternal(file, "manual-status-refresh", true);
             this.styleService.updateActiveViewStyle(file);
           });
       });
@@ -1540,7 +1218,6 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     });
     if (!changed) return;
 
-    await this.applyRulesToFileInternal(file, "manual-status-refresh", true);
     this.styleService.updateActiveViewStyle(file);
   }
 
@@ -1578,8 +1255,5 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     return protectedKeys.has(normalized);
   }
 
-  private isInMobileStartupGracePeriod(): boolean {
-    if (!Platform.isMobile) return false;
-    return Date.now() - this.startupTimestamp < 45_000;
-  }
 }
+

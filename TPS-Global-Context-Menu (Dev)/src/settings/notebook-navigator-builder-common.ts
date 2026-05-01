@@ -1,8 +1,8 @@
-import type { RuleCondition, RuleConditionSource, RuleMatchMode, SmartRuleOperator, SortValueMapping } from '../../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
+import type { RuleCondition, RuleConditionSource, RuleMatchMode, SmartRuleOperator, SortValueMapping } from '../types';
 
 export const NOTEBOOK_NAVIGATOR_RULE_SOURCE_OPTIONS: Array<{ value: RuleConditionSource; label: string }> = [
   { value: 'frontmatter', label: 'Frontmatter' },
-  { value: 'path', label: 'Folder path' },
+  { value: 'path', label: 'Actual file path' },
   { value: 'extension', label: 'Extension' },
   { value: 'name', label: 'Note name' },
   { value: 'tag', label: 'Tag' },
@@ -14,8 +14,11 @@ export const NOTEBOOK_NAVIGATOR_RULE_SOURCE_OPTIONS: Array<{ value: RuleConditio
   { value: 'parent-frontmatter', label: 'Parent frontmatter' },
   { value: 'parent-tag', label: 'Parent tag' },
   { value: 'parent-name', label: 'Parent name' },
-  { value: 'parent-path', label: 'Parent path' },
+  { value: 'parent-path', label: 'Actual parent file path' },
 ];
+
+export const NOTEBOOK_NAVIGATOR_FOLDERPATH_GUIDANCE =
+  'Use Frontmatter + field folderPath for notebook location rules in a root-vault layout. Actual file path only checks the real folder on disk.';
 
 export function normalizeConditionSource(value: unknown): RuleConditionSource {
   const normalized = String(value || '').trim() as RuleConditionSource;

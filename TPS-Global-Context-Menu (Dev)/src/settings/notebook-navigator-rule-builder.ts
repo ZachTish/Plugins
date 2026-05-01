@@ -1,6 +1,8 @@
-import { App, ButtonComponent, Modal, Notice, Setting, TextComponent, getIconIds, setIcon } from 'obsidian';
+import { App, ButtonComponent, Modal, Notice, Setting, TFile, TextComponent, getIconIds, setIcon } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from '../main';
-import type { IconColorRule, RuleCondition, RuleConditionSource, RuleMatchMode, RuleOperator, SmartRuleOperator } from '../../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
+import type { IconColorRule, RuleCondition, RuleConditionSource, RuleMatchMode, RuleOperator, SmartRuleOperator } from '../types';
+import { applyRulesToFile, doesRuleMatchFile, normalizeNotebookNavigatorIconValue } from '../utils/rule-resolver';
+import { NOTEBOOK_NAVIGATOR_FOLDERPATH_GUIDANCE, NOTEBOOK_NAVIGATOR_RULE_SOURCE_OPTIONS } from './notebook-navigator-builder-common';
 
 type RuleEditorMode = 'simple' | 'conditions';
 
@@ -11,23 +13,6 @@ type RuleBuilderOptions = {
   onStructureChange: () => void;
   onRefreshConsumers: () => Promise<void>;
 };
-
-const RULE_SOURCE_OPTIONS: Array<{ value: RuleConditionSource; label: string }> = [
-  { value: 'frontmatter', label: 'Frontmatter' },
-  { value: 'path', label: 'Folder path' },
-  { value: 'extension', label: 'Extension' },
-  { value: 'name', label: 'Note name' },
-  { value: 'tag', label: 'Tag' },
-  { value: 'tag-note-name', label: 'Tag note name' },
-  { value: 'body', label: 'Body text' },
-  { value: 'backlink', label: 'Backlink' },
-  { value: 'date-created', label: 'Created date' },
-  { value: 'date-modified', label: 'Modified date' },
-  { value: 'parent-frontmatter', label: 'Parent frontmatter' },
-  { value: 'parent-tag', label: 'Parent tag' },
-  { value: 'parent-name', label: 'Parent name' },
-  { value: 'parent-path', label: 'Parent path' },
-];
 
 const SIMPLE_OPERATORS: RuleOperator[] = ['is', '!is', 'contains', '!contains', 'exists', '!exists'];
 
@@ -59,6 +44,10 @@ export class NotebookNavigatorRuleBuilder {
       cls: 'setting-item-description',
       text: 'Build first-match icon/color rules visually. Use simple mode for one property check or advanced mode for mixed conditions.',
     });
+    containerEl.createEl('p', {
+      cls: 'setting-item-description',
+      text: NOTEBOOK_NAVIGATOR_FOLDERPATH_GUIDANCE,
+    });
 
     const toolbar = containerEl.createDiv({ cls: 'tps-gcm-rule-builder-toolbar' });
     const filterInput = toolbar.createEl('input', {
@@ -82,13 +71,13 @@ export class NotebookNavigatorRuleBuilder {
     new ButtonComponent(toolbar)
       .setButtonText('Apply Active Note')
       .onClick(async () => {
-        await this.applyCompanionMethod('applyRulesToActiveFile', false);
+        await this.applyRulesToActiveNote();
       });
 
     new ButtonComponent(toolbar)
       .setButtonText('Apply All Notes')
       .onClick(async () => {
-        await this.applyCompanionMethod('applyRulesToAllFiles', false);
+        await this.applyRulesToAllNotes();
       });
 
     const visibleRules = this.getRules()
@@ -109,9 +98,6 @@ export class NotebookNavigatorRuleBuilder {
 
   private renderRuleCard(parent: HTMLElement, rule: IconColorRule, index: number): void {
     const details = parent.createEl('details', { cls: 'tps-gcm-rule-card' });
-    if (index === 0 || !this.filterQuery) {
-      details.open = true;
-    }
 
     const summary = details.createEl('summary', { cls: 'tps-gcm-rule-card-summary' });
     const iconPreview = summary.createSpan({ cls: 'tps-gcm-rule-card-summary-icon' });
@@ -128,13 +114,9 @@ export class NotebookNavigatorRuleBuilder {
 
     const body = details.createDiv({ cls: 'tps-gcm-rule-card-body' });
 
-    const previewState = this.getActiveRulePreview(rule);
-    if (previewState) {
-      body.createDiv({
-        cls: 'tps-gcm-rule-card-preview',
-        text: previewState,
-      });
-    }
+    const previewEl = body.createDiv({ cls: 'tps-gcm-rule-card-preview' });
+    previewEl.setText('Active note preview: checking...');
+    void this.updateActiveRulePreview(rule, previewEl);
 
     new Setting(body)
       .setName('Display name')
@@ -176,6 +158,7 @@ export class NotebookNavigatorRuleBuilder {
 
     const criteriaSection = body.createDiv({ cls: 'tps-gcm-rule-card-section' });
     criteriaSection.createEl('h5', { text: 'Match Criteria' });
+    this.renderReliabilityNotes(criteriaSection, rule);
     if (this.getEditorMode(rule) === 'conditions') {
       this.renderConditionEditor(criteriaSection, rule, syncSummary);
     } else {
@@ -208,7 +191,7 @@ export class NotebookNavigatorRuleBuilder {
   private renderSimpleEditor(parent: HTMLElement, rule: IconColorRule, syncSummary: () => void): void {
     new Setting(parent)
       .setName('Frontmatter property')
-      .setDesc('Use `folderpath` to match against the note folder path.')
+      .setDesc('Use `folderpath` to match stored frontmatter.folderPath first, then fall back to the real file path.')
       .addText((text) => {
         text.setPlaceholder('status');
         text.setValue(rule.property || '');
@@ -243,19 +226,17 @@ export class NotebookNavigatorRuleBuilder {
         });
       });
 
-    new Setting(parent)
-      .setName('Path prefix filter')
-      .setDesc('Optional folder prefix that must also match.')
-      .addText((text) => {
-        text.setPlaceholder('Projects/Active');
-        text.setValue(rule.pathPrefix || '');
-        this.bindText(text, async (value) => {
-          rule.pathPrefix = value.trim();
-        });
-      });
+    this.renderPathPrefixEditor(parent, rule, syncSummary, 'Optional folder prefix that must also match.');
   }
 
   private renderConditionEditor(parent: HTMLElement, rule: IconColorRule, syncSummary: () => void): void {
+    this.renderPathPrefixEditor(
+      parent,
+      rule,
+      syncSummary,
+      'Optional folder prefix applied before the condition group. This scope is matched separately from the conditions below.',
+    );
+
     new Setting(parent)
       .setName('Condition match mode')
       .setDesc('Choose whether all conditions must match or any one condition can match.')
@@ -284,7 +265,7 @@ export class NotebookNavigatorRuleBuilder {
       const sourceSetting = new Setting(row).setClass('tps-gcm-no-border');
       sourceSetting.setName('Source');
       sourceSetting.addDropdown((dropdown) => {
-        RULE_SOURCE_OPTIONS.forEach((option) => dropdown.addOption(option.value, option.label));
+        NOTEBOOK_NAVIGATOR_RULE_SOURCE_OPTIONS.forEach((option) => dropdown.addOption(option.value, option.label));
         dropdown.setValue(this.normalizeConditionSource(condition.source)).onChange(async (value) => {
           condition.source = this.normalizeConditionSource(value);
           if (!this.usesConditionField(condition.source)) {
@@ -381,7 +362,7 @@ export class NotebookNavigatorRuleBuilder {
       .setButtonText('Browse Icons')
       .onClick(() => {
         new RuleIconPickerModal(this.options.app, rule.icon, async (value) => {
-          rule.icon = value;
+          rule.icon = normalizeNotebookNavigatorIconValue(value, { keepLucidePrefix: true });
           syncOutputPreview();
           await this.persist(false);
         }).open();
@@ -390,7 +371,7 @@ export class NotebookNavigatorRuleBuilder {
       text.setPlaceholder('lucide:file-text');
       text.setValue(rule.icon || '');
       this.bindText(text, async (value) => {
-        rule.icon = value.trim();
+        rule.icon = normalizeNotebookNavigatorIconValue(value, { keepLucidePrefix: true });
         syncOutputPreview();
       });
     });
@@ -405,7 +386,7 @@ export class NotebookNavigatorRuleBuilder {
         button.addClass('is-active');
       }
       button.addEventListener('click', async () => {
-        rule.icon = `lucide:${iconId}`;
+        rule.icon = normalizeNotebookNavigatorIconValue(`lucide:${iconId}`, { keepLucidePrefix: true });
         syncOutputPreview();
         await this.persist(true);
       });
@@ -453,6 +434,20 @@ export class NotebookNavigatorRuleBuilder {
     });
   }
 
+  private renderPathPrefixEditor(parent: HTMLElement, rule: IconColorRule, syncSummary: () => void, description: string): void {
+    new Setting(parent)
+      .setName('Actual path prefix filter')
+      .setDesc(`${description} This always checks the real file path on disk.`)
+      .addText((text) => {
+        text.setPlaceholder('Projects/Active');
+        text.setValue(rule.pathPrefix || '');
+        this.bindText(text, async (value) => {
+          rule.pathPrefix = value.trim();
+          syncSummary();
+        });
+      });
+  }
+
   private createActionButton(parent: HTMLElement, text: string, disabled: boolean, onClick: () => Promise<void>): void {
     const button = new ButtonComponent(parent)
       .setButtonText(text)
@@ -494,24 +489,50 @@ export class NotebookNavigatorRuleBuilder {
     }
   }
 
-  private async applyCompanionMethod(method: 'applyRulesToActiveFile' | 'applyRulesToAllFiles', silent: boolean): Promise<void> {
-    const companion = (this.options.app as any)?.plugins?.getPlugin?.('tps-notebook-navigator-companion')
-      ?? (this.options.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-    if (!companion?.[method]) {
-      new Notice('Notebook Navigator Companion is not available.');
+  private async applyRulesToActiveNote(): Promise<void> {
+    const file = this.options.app.workspace.getActiveFile();
+    if (!(file instanceof TFile) || file.extension !== 'md') {
+      new Notice('No active markdown file.');
       return;
     }
-    await companion[method](silent);
+
+    await applyRulesToFile(this.options.app, file, 'gcm-settings-active');
+    this.refreshCompanionStyles(file);
   }
 
-  private getActiveRulePreview(rule: IconColorRule): string | null {
+  private async applyRulesToAllNotes(): Promise<void> {
+    const files = this.options.app.vault.getMarkdownFiles();
+    for (const file of files) {
+      await applyRulesToFile(this.options.app, file, 'gcm-settings-all');
+    }
+
+    const activeFile = this.options.app.workspace.getActiveFile();
+    if (activeFile instanceof TFile && activeFile.extension === 'md') {
+      this.refreshCompanionStyles(activeFile);
+    }
+  }
+
+  private async updateActiveRulePreview(rule: IconColorRule, previewEl: HTMLElement): Promise<void> {
+    const file = this.options.app.workspace.getActiveFile();
+    if (!(file instanceof TFile) || file.extension !== 'md') {
+      previewEl.remove();
+      return;
+    }
+
+    const frontmatter = (this.options.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
+    const matches = await doesRuleMatchFile(this.options.app, file, rule, frontmatter);
+    if (!previewEl.isConnected) return;
+    previewEl.setText(`Active note preview: ${matches ? 'matches' : 'does not match'}.`);
+  }
+
+  private refreshCompanionStyles(file: TFile): void {
     const companion = (this.options.app as any)?.plugins?.getPlugin?.('tps-notebook-navigator-companion')
       ?? (this.options.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-    const matches = companion?.getRuleMatchForActiveFile?.(rule);
-    if (matches == null) {
-      return null;
+    try {
+      companion?.styleService?.updateActiveViewStyle?.(file);
+    } catch {
+      // Best-effort style refresh only.
     }
-    return `Active note preview: ${matches ? 'matches' : 'does not match'}.`;
   }
 
   private getRules(): IconColorRule[] {
@@ -558,23 +579,29 @@ export class NotebookNavigatorRuleBuilder {
 
   private convertRuleToConditionMode(rule: IconColorRule): void {
     const property = String(rule.property || '').trim();
+    const pathPrefix = String(rule.pathPrefix || '').trim();
     const conditions: RuleCondition[] = [];
     if (property) {
+      const isFolderPathProperty = property.toLowerCase() === 'folderpath';
       conditions.push({
-        source: property.toLowerCase() === 'folderpath' ? 'path' : 'frontmatter',
-        field: property.toLowerCase() === 'folderpath' ? '' : property,
+        source: 'frontmatter',
+        field: isFolderPathProperty ? 'folderPath' : property,
         operator: this.simpleToSmartOperator(rule.operator),
         value: String(rule.value || ''),
       });
     }
-    if (String(rule.pathPrefix || '').trim()) {
+    if (!property && pathPrefix) {
       conditions.push({
         source: 'path',
         field: '',
         operator: 'starts',
-        value: String(rule.pathPrefix || '').trim(),
+        value: pathPrefix,
       });
+      rule.pathPrefix = '';
     }
+    rule.property = '';
+    rule.operator = 'is';
+    rule.value = '';
     rule.match = 'all';
     rule.conditions = conditions;
   }
@@ -588,7 +615,8 @@ export class NotebookNavigatorRuleBuilder {
     rule.value = '';
     rule.pathPrefix = '';
     if (frontmatterCondition) {
-      if (frontmatterCondition.source === 'path') {
+      const field = String(frontmatterCondition.field || '').trim().toLowerCase();
+      if (frontmatterCondition.source === 'path' || field === 'folderpath') {
         rule.property = 'folderpath';
       } else {
         rule.property = String(frontmatterCondition.field || '').trim() || 'status';
@@ -626,7 +654,7 @@ export class NotebookNavigatorRuleBuilder {
 
   private normalizeConditionSource(value: unknown): RuleConditionSource {
     const normalized = String(value || '').trim() as RuleConditionSource;
-    return RULE_SOURCE_OPTIONS.some((option) => option.value === normalized) ? normalized : 'frontmatter';
+    return NOTEBOOK_NAVIGATOR_RULE_SOURCE_OPTIONS.some((option) => option.value === normalized) ? normalized : 'frontmatter';
   }
 
   private normalizeMatchMode(value: unknown): RuleMatchMode {
@@ -669,6 +697,32 @@ export class NotebookNavigatorRuleBuilder {
   private getDefaultOperator(source: RuleConditionSource): SmartRuleOperator {
     if (source === 'path') return 'contains';
     return 'is';
+  }
+
+  private renderReliabilityNotes(parent: HTMLElement, rule: IconColorRule): void {
+    for (const note of this.getReliabilityNotes(rule)) {
+      parent.createEl('p', {
+        cls: 'setting-item-description',
+        text: `Reliability note: ${note}`,
+      });
+    }
+  }
+
+  private getReliabilityNotes(rule: IconColorRule): string[] {
+    const notes = new Set<string>();
+    if (String(rule.pathPrefix || '').trim()) {
+      notes.add('Actual path prefix filters use the real filesystem path, not frontmatter.folderPath.');
+    }
+
+    if ((rule.conditions || []).some((condition) => condition.source === 'path' || condition.source === 'parent-path')) {
+      notes.add('Advanced path conditions use the real filesystem path. Use Frontmatter + field folderPath for root-vault organization.');
+    }
+
+    if (this.getEditorMode(rule) === 'simple' && String(rule.property || '').trim().toLowerCase() === 'folderpath') {
+      notes.add('Simple folderpath matching reads frontmatter.folderPath first, then falls back to the real file path.');
+    }
+
+    return Array.from(notes);
   }
 
   private usesConditionField(source: RuleConditionSource): boolean {
@@ -724,34 +778,89 @@ export class NotebookNavigatorRuleBuilder {
   }
 
   private normalizeIconIdForPreview(rawIcon: string): string {
-    const icon = String(rawIcon || '').trim();
-    if (!icon) return '';
-    if (icon.startsWith('lucide:')) return icon.slice('lucide:'.length).trim();
-    if (icon.startsWith('lucide-')) return icon.slice('lucide-'.length).trim();
-    return icon;
+    return normalizeNotebookNavigatorIconValue(rawIcon);
   }
 
   private getRuleSummary(rule: IconColorRule): string {
     if (Array.isArray(rule.conditions) && rule.conditions.length > 0) {
-      return `${rule.conditions.length} conditions (${this.normalizeMatchMode(rule.match)})`;
+      const summaryParts = [`${rule.conditions.length} conditions (${this.normalizeMatchMode(rule.match)})`];
+      const pathScope = this.getPathScopeSummary(rule);
+      if (pathScope) {
+        summaryParts.push(pathScope);
+      }
+      return summaryParts.join(' - ');
     }
     const property = String(rule.property || '').trim() || '(property)';
     const value = rule.operator === 'exists' || rule.operator === '!exists' ? '' : ` ${String(rule.value || '').trim()}`;
-    return `${property} ${rule.operator}${value}`.trim();
+    const summaryParts = [`${property} ${rule.operator}${value}`.trim()];
+    const pathPrefix = String(rule.pathPrefix || '').trim();
+    if (pathPrefix) {
+      summaryParts.push(`in ${pathPrefix}`);
+    }
+    return summaryParts.join(' - ');
+  }
+
+  private getPathScopeSummary(rule: IconColorRule): string {
+    const simplePathPrefix = String(rule.pathPrefix || '').trim();
+    if (simplePathPrefix) {
+      return `actual path starts ${simplePathPrefix}`;
+    }
+
+    const folderPathCondition = (rule.conditions || []).find((condition) => {
+      if (condition.source !== 'frontmatter' || !this.usesConditionValue(condition.operator)) {
+        return false;
+      }
+      return String(condition.field || '').trim().toLowerCase() === 'folderpath'
+        && String(condition.value || '').trim().length > 0;
+    });
+
+    if (folderPathCondition) {
+      return `folderPath ${folderPathCondition.operator} ${String(folderPathCondition.value || '').trim()}`;
+    }
+
+    const pathCondition = (rule.conditions || []).find((condition) => {
+      if ((condition.source !== 'path' && condition.source !== 'parent-path') || !this.usesConditionValue(condition.operator)) {
+        return false;
+      }
+      return String(condition.value || '').trim().length > 0;
+    });
+
+    if (!pathCondition) {
+      return '';
+    }
+
+    const label = pathCondition.source === 'parent-path' ? 'actual parent path' : 'actual path';
+    return `${label} ${pathCondition.operator} ${String(pathCondition.value || '').trim()}`;
+  }
+
+  private getRuleSearchText(rule: IconColorRule, ruleNumber: number): string {
+    const conditionSearchTerms = (rule.conditions || []).flatMap((condition) => [
+      String(condition.source || ''),
+      String(condition.field || ''),
+      String(condition.operator || ''),
+      String(condition.value || ''),
+    ]);
+
+    return [
+      `rule ${ruleNumber}`,
+      String(rule.name || ''),
+      this.getRuleSummary(rule),
+      String(rule.property || ''),
+      String(rule.operator || ''),
+      String(rule.value || ''),
+      String(rule.pathPrefix || ''),
+      String(rule.icon || ''),
+      String(rule.color || ''),
+      rule.enabled ? 'enabled' : 'disabled',
+      this.getEditorMode(rule) === 'conditions' ? 'advanced' : 'simple',
+      ...conditionSearchTerms,
+    ].join(' ').toLowerCase();
   }
 
   private matchesFilter(rule: IconColorRule, ruleNumber: number, rawQuery: string): boolean {
     const query = String(rawQuery || '').trim().toLowerCase();
     if (!query) return true;
-    const haystack = [
-      `rule ${ruleNumber}`,
-      String(rule.name || ''),
-      this.getRuleSummary(rule),
-      String(rule.icon || ''),
-      String(rule.color || ''),
-      rule.enabled ? 'enabled' : 'disabled',
-      this.getEditorMode(rule) === 'conditions' ? 'advanced' : 'simple',
-    ].join(' ').toLowerCase();
+    const haystack = this.getRuleSearchText(rule, ruleNumber);
     return haystack.includes(query);
   }
 }
@@ -846,9 +955,6 @@ class RuleIconPickerModal extends Modal {
   }
 
   private normalizeIconId(rawIcon: string): string {
-    const icon = String(rawIcon || '').trim();
-    if (icon.startsWith('lucide:')) return icon.slice('lucide:'.length).trim();
-    if (icon.startsWith('lucide-')) return icon.slice('lucide-'.length).trim();
-    return icon;
+    return normalizeNotebookNavigatorIconValue(rawIcon);
   }
 }

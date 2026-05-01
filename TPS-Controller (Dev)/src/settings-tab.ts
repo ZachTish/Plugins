@@ -20,6 +20,15 @@ const createSettingsGroup = (parent: HTMLElement, title: string, description?: s
     return group;
 };
 
+const createSettingsBlock = (parent: HTMLElement, title: string, description?: string): HTMLElement => {
+    const block = parent.createDiv({ cls: 'tps-controller-settings-block' });
+    block.createEl('h4', { text: title });
+    if (description) {
+        block.createEl('p', { text: description, cls: 'setting-item-description' });
+    }
+    return block;
+};
+
 export class TPSControllerSettingTab extends PluginSettingTab {
     plugin: TPSControllerPlugin;
     private settingsViewState = new Map<string, boolean>();
@@ -42,27 +51,77 @@ export class TPSControllerSettingTab extends PluginSettingTab {
 
         containerEl.createEl('h2', { text: 'TPS Controller' });
 
-        const calendarsGroup = createSettingsGroup(containerEl, 'Calendars', 'Device role, external calendar sources, and sync behavior.');
-        const remindersGroup = createSettingsGroup(containerEl, 'Reminders', 'Reminder evaluation, rules, snooze, and notification delivery.');
-        const advancedGroup = createSettingsGroup(containerEl, 'Advanced', 'Companion automation, diagnostics, and recovery.');
+        const essentialsSection = createTPSCollapsibleSection(
+            containerEl,
+            'Essentials',
+            'Core controller behavior: device role, sync cadence, and reminder engine basics.',
+            true
+        );
+        const calendarsSection = createTPSCollapsibleSection(
+            containerEl,
+            'Calendars',
+            'Calendar sources and shared calendar field names.',
+            false
+        );
+        const reminderRulesSection = createTPSCollapsibleSection(
+            containerEl,
+            'Reminder Rules',
+            'Reminder evaluation, notification behavior, and the rule list itself.',
+            false
+        );
+        const reminderInputsSection = createTPSCollapsibleSection(
+            containerEl,
+            'Reminder Inputs',
+            'Global ignore lists, Kanban task parsing, and snooze behavior.',
+            false
+        );
+        const integrationsSection = createTPSCollapsibleSection(
+            containerEl,
+            'Integrations',
+            'Companion scans and editor drag/drop behavior.',
+            false
+        );
 
-        this.renderDeviceRole(calendarsGroup);
-        this.renderExternalCalendarsSection(calendarsGroup);
-        this.renderCalendarSyncSettings(calendarsGroup, debouncedSave);
-        this.renderFrontmatterKeysSection(calendarsGroup, debouncedSave);
-        this.renderReminderSection(remindersGroup, debouncedSave);
-        this.renderAdvancedSection(advancedGroup, debouncedSave);
-        this.renderEditorDropSection(advancedGroup, debouncedSave);
+        this.renderDeviceRole(essentialsSection);
+        this.renderCalendarSyncSettings(essentialsSection, debouncedSave);
+        this.renderExternalCalendarsSection(calendarsSection);
+        this.renderFrontmatterKeysSection(calendarsSection, debouncedSave);
+        this.renderReminderSection(reminderRulesSection, reminderInputsSection, debouncedSave);
+        this.renderAdvancedSection(integrationsSection, debouncedSave);
+        this.renderEditorDropSection(integrationsSection, debouncedSave);
+
+        const debugGroup = createSettingsGroup(containerEl, 'Debug', 'Troubleshooting output and recovery actions.');
+
+        new Setting(debugGroup)
+            .setName('Enable Logging')
+            .setDesc('Print detailed logs to console.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.enableLogging)
+                .onChange(async (value) => {
+                    this.plugin.settings.enableLogging = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(debugGroup)
+            .setName('Reset Alert State')
+            .setDesc('Clear all stored alert tracking (will re-trigger all reminders).')
+            .addButton(btn => btn
+                .setButtonText('Reset')
+                .setWarning()
+                .onClick(async () => {
+                    this.plugin.settings.alertState = {};
+                    await this.plugin.saveSettings();
+                    new Notice('Alert state cleared.');
+                }));
 
         this.restoreSettingsViewState(containerEl);
     }
 
     private renderDeviceRole(parent: HTMLElement): void {
-        const section = createTPSCollapsibleSection(
+        const section = createSettingsBlock(
             parent,
             'Device Role',
             'Choose whether this device runs suite-level automation or stays in normal user mode.',
-            false
         );
 
         const roleDesc = section.createDiv({ cls: 'tps-controller-role-desc' });
@@ -95,11 +154,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
     }
 
     private renderExternalCalendarsSection(parent: HTMLElement): void {
-        const section = createTPSCollapsibleSection(
+        const section = createSettingsBlock(
             parent,
             'External Calendars',
             'Calendar sources and auto-create destinations.',
-            false
         );
         const calendarsContainer = section.createDiv();
         this.renderExternalCalendars(calendarsContainer);
@@ -132,11 +190,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
     }
 
     private renderCalendarSyncSettings(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
-        const section = createTPSCollapsibleSection(
+        const section = createSettingsBlock(
             parent,
             'Sync Settings',
             'Global sync behavior for external calendars.',
-            false
         );
 
         new Setting(section)
@@ -239,11 +296,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
     }
 
     private renderEditorDropSection(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
-        const section = createTPSCollapsibleSection(
+        const section = createSettingsBlock(
             parent,
             'Editor Drag And Drop',
             'Configure what happens when task cards are dropped onto markdown notes.',
-            false
         );
 
         new Setting(section)
@@ -285,11 +341,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
     }
 
     private renderFrontmatterKeysSection(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
-        const section = createTPSCollapsibleSection(
+        const section = createSettingsBlock(
             parent,
             'Frontmatter Keys',
             'Shared calendar field names. Only change these if you use custom property names.',
-            false
         );
 
         const fmKeys: { key: keyof typeof this.plugin.settings; label: string; placeholder: string }[] = [
@@ -318,13 +373,8 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         }
     }
 
-    private renderReminderSection(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
-        const section = createTPSCollapsibleSection(
-            parent,
-            'Reminder Engine',
-            'Polling, rules, and notification delivery.',
-            false
-        );
+    private renderReminderSection(rulesParent: HTMLElement, detailsParent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
+        const section = rulesParent;
 
         new Setting(section)
             .setName('Enable Reminders')
@@ -340,6 +390,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
         if (!(this.plugin.settings.enableReminders ?? true)) {
             section.createEl('p', {
                 text: 'Reminders are disabled. Enable the master toggle to show reminder configuration.',
+                cls: 'setting-item-description'
+            });
+            detailsParent.createEl('p', {
+                text: 'Reminder support settings stay hidden until reminders are enabled.',
                 cls: 'setting-item-description'
             });
             return;
@@ -390,11 +444,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        const ignoreSection = createTPSCollapsibleSection(
-            section,
+        const ignoreSection = createSettingsBlock(
+            detailsParent,
             'Global Ignore Lists',
             'Shared filters applied before individual reminder rules.',
-            false
         );
 
         new Setting(ignoreSection)
@@ -430,20 +483,18 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        const kanbanSection = createTPSCollapsibleSection(
-            section,
+        const kanbanSection = createSettingsBlock(
+            detailsParent,
             'Kanban Task Reminders',
             'How checkbox cards in Kanban board notes are interpreted for reminders.',
-            false
         );
 
         this.renderKanbanTaskSettings(kanbanSection);
 
-        const snoozeSection = createTPSCollapsibleSection(
-            section,
+        const snoozeSection = createSettingsBlock(
+            detailsParent,
             'Snooze',
             'Snooze property and quick-action presets.',
-            false
         );
 
         new Setting(snoozeSection)
@@ -457,11 +508,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     void debouncedSave();
                 }));
 
-        const snoozePresetsEl = createTPSCollapsibleSection(
+        const snoozePresetsEl = createSettingsBlock(
             snoozeSection,
             'Presets',
             'Quick snooze durations shown in the reminder UI.',
-            false
         );
         this.renderSnoozeOptions(snoozePresetsEl);
         new Setting(snoozePresetsEl)
@@ -524,7 +574,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        const parseSection = createTPSCollapsibleSection(parent, 'Parsing', 'Date and property sources for Kanban cards.', false);
+        const parseSection = createSettingsBlock(parent, 'Parsing', 'Date and property sources for Kanban cards.');
 
         new Setting(parseSection)
             .setName('Inline Properties')
@@ -556,7 +606,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        const aliasesSection = createTPSCollapsibleSection(parent, 'Property Aliases', 'Custom property name mappings.', false);
+        const aliasesSection = createSettingsBlock(parent, 'Property Aliases', 'Custom property name mappings.');
         const parseCsv = (value: string): string[] =>
             value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
@@ -593,7 +643,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        const statusSection = createTPSCollapsibleSection(parent, 'Status Values', 'Status property and completion mappings.', false);
+        const statusSection = createSettingsBlock(parent, 'Status Values', 'Status property and completion mappings.');
 
         new Setting(statusSection)
             .setName('Status Property')
@@ -631,11 +681,10 @@ export class TPSControllerSettingTab extends PluginSettingTab {
     }
 
     private renderAdvancedSection(parent: HTMLElement, debouncedSave: ReturnType<typeof debounce>): void {
-        const compSection = createTPSCollapsibleSection(
+        const compSection = createSettingsBlock(
             parent,
             'Companion Automation',
-            'Optional integration that lets Controller trigger companion scans.',
-            false
+            'Optional integration that lets Controller trigger Companion scans.',
         );
 
         new Setting(compSection)
@@ -682,34 +731,6 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                     }));
         }
 
-        const debugSection = createTPSCollapsibleSection(
-            parent,
-            'Debug & Recovery',
-            'Troubleshooting controls and state management.',
-            false
-        );
-
-        new Setting(debugSection)
-            .setName('Enable Logging')
-            .setDesc('Print detailed logs to console.')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.enableLogging)
-                .onChange(async (value) => {
-                    this.plugin.settings.enableLogging = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(debugSection)
-            .setName('Reset Alert State')
-            .setDesc('Clear all stored alert tracking (will re-trigger all reminders).')
-            .addButton(btn => btn
-                .setButtonText('Reset')
-                .setWarning()
-                .onClick(async () => {
-                    this.plugin.settings.alertState = {};
-                    await this.plugin.saveSettings();
-                    new Notice('Alert state cleared.');
-                }));
     }
 
     private captureSettingsViewState(containerEl: HTMLElement): void {

@@ -149,6 +149,7 @@
   "dualPaneOrientation": "horizontal",
   "showTooltips": true,
   "showTooltipPath": true,
+  "showTooltipWordCount": false,
   "desktopBackground": "separate",
   "useFloatingToolbars": true,
   "interfaceIcons": {
@@ -160,12 +161,12 @@
   "calendarTemplateFolder": "",
   "confirmBeforeDelete": true,
   "deleteAttachments": "ask",
-  "moveFileConflicts": "ask",
+  "moveFileConflicts": "rename",
   "externalIconProviders": {
-    "material-icons": true,
-    "fontawesome-solid": true,
-    "bootstrap-icons": true,
-    "simple-icons": true
+    "material-icons": false,
+    "fontawesome-solid": false,
+    "bootstrap-icons": false,
+    "simple-icons": false
   },
   "checkForUpdatesOnStart": true,
   "pinNavigationBanner": true,
@@ -208,7 +209,7 @@
   "showTagIcons": true,
   "showAllTagsFolder": true,
   "showUntagged": true,
-  "scopeTagsToCurrentContext": false,
+  "scopeTagsToCurrentContext": true,
   "tagSortOrder": "frequency-desc",
   "inheritTagColors": true,
   "keepEmptyTagsProperty": true,
@@ -230,7 +231,6 @@
   "filterPinnedByFolder": true,
   "showPinnedGroupHeader": true,
   "showPinnedIcon": true,
-  "optimizeNoteHeight": true,
   "compactItemHeight": 24,
   "compactItemHeightScaleText": true,
   "showQuickActions": true,
@@ -602,7 +602,7 @@
     "#404040",
     "#404040"
   ],
-  "lastShownVersion": "2.6.2",
+  "lastShownVersion": "2.6.3",
   "rootFolderOrder": [],
   "rootTagOrder": [],
   "rootPropertyOrder": []

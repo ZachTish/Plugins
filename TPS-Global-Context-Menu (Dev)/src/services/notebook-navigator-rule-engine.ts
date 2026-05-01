@@ -1,7 +1,8 @@
-import { App, TFile } from "obsidian";
+import { App, TFile } from 'obsidian';
 import { parseDateFromFilename } from '../../../TPS-Calendar-Base (Dev)/src/utils/daily-file-date';
-import { getPluginById } from '../core/type-guards';
-import {
+import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
+import { getPluginById } from '../core';
+import type {
   HideRule,
   IconColorRule,
   RuleCondition,
@@ -13,10 +14,23 @@ import {
   SortValueMapping,
   SortBucket,
   SortCriteria,
-  ConditionGroup,
   RelationshipLineageNode,
-} from "../types";
-import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
+} from '../types';
+
+export type {
+  HideRule,
+  IconColorRule,
+  RuleCondition,
+  RuleConditionSource,
+  RuleEvaluationContext,
+  SmartRuleOperator,
+  SmartSortSettings,
+  SortSegmentRule,
+  SortValueMapping,
+  SortBucket,
+  SortCriteria,
+  RelationshipLineageNode,
+} from '../types';
 
 export interface RuleFieldResult {
   matched: boolean;
@@ -36,76 +50,33 @@ export class RuleEngine {
     this.app = app;
   }
 
-  private static readonly MS_PER_DAY = 24 * 60 * 60 * 1000;
   private static readonly DATE_SORT_FIELDS = new Set([
-    "scheduled",
-    "due",
-    "date",
-    "start",
-    "startdate",
-    "end",
-    "enddate",
-    "deadline",
-    "created",
-    "datecreated",
-    "modified",
-    "datemodified",
-    "updated",
-    "dateupdated"
+    'scheduled',
+    'due',
+    'date',
+    'start',
+    'startdate',
+    'end',
+    'enddate',
+    'deadline',
+    'created',
+    'datecreated',
+    'modified',
+    'datemodified',
+    'updated',
+    'dateupdated',
   ]);
 
-  private getDailyNoteDateFormat(): string | undefined {
-    return getDailyNoteResolver(this.app).displayFormat;
-  }
-
-  private parseComparableDate(value: string): any | null {
-    const text = String(value ?? "").trim();
-    if (!text) {
-      return null;
-    }
-
-    const userFormat = this.getDailyNoteDateFormat();
-
-    try {
-      const fromFilename = parseDateFromFilename(text, userFormat);
-      if (fromFilename && fromFilename.isValid && fromFilename.isValid()) {
-        return fromFilename;
-      }
-    } catch {
-      // Fall through to direct moment parsing.
-    }
-
-    // @ts-ignore
-    const m = window.moment(text, [
-      // @ts-ignore
-      window.moment.ISO_8601,
-      ...(userFormat ? [userFormat] : []),
-      "YYYY-MM-DD",
-      "YYYY-MM-DD HH:mm",
-      "YYYY-MM-DD HH:mm:ss",
-      "YYYY-MM-DDTHH:mm:ss",
-      "YYYY/MM/DD HH:mm:ss",
-      "YYYY/MM/DD HH:mm",
-      "YYYY/MM/DD"
-    ], true);
-
-    return m.isValid() ? m : null;
-  }
-
   resolveVisualOutputs(rules: IconColorRule[], context: RuleEvaluationContext): VisualRuleResult {
-    const icon: RuleFieldResult = { matched: false, value: "", ruleId: null };
-    const color: RuleFieldResult = { matched: false, value: "", ruleId: null };
+    const icon: RuleFieldResult = { matched: false, value: '', ruleId: null };
+    const color: RuleFieldResult = { matched: false, value: '', ruleId: null };
 
     for (const rule of rules) {
-      if (!rule.enabled) {
-        continue;
-      }
-      if (!this.matchesRule(rule, context)) {
-        continue;
-      }
+      if (!rule.enabled) continue;
+      if (!this.matchesRule(rule, context)) continue;
 
       if (!icon.matched) {
-        const iconValue = String(rule.icon || "").trim();
+        const iconValue = String(rule.icon || '').trim();
         if (iconValue) {
           icon.matched = true;
           icon.value = iconValue;
@@ -114,7 +85,7 @@ export class RuleEngine {
       }
 
       if (!color.matched) {
-        const colorValue = String(rule.color || "").trim();
+        const colorValue = String(rule.color || '').trim();
         if (colorValue) {
           color.matched = true;
           color.value = colorValue;
@@ -131,8 +102,8 @@ export class RuleEngine {
   }
 
   composeSortKey(settings: SmartSortSettings, context: RuleEvaluationContext): string {
-    const separator = String(settings.separator || "").trim() || "_";
-    if (settings.relationshipGrouping === "children-under-parent") {
+    const separator = String(settings.separator || '').trim() || '_';
+    if (settings.relationshipGrouping === 'children-under-parent') {
       return this.composeRelationshipSortKey(settings, context, separator);
     }
 
@@ -148,37 +119,28 @@ export class RuleEngine {
       ? context.relationshipLineage
       : [this.createRelationshipNodeFromContext(context)];
 
-    // If there is no parent in the lineage, fallback to base behavior.
     if (lineage.length <= 1) {
       return this.composeBaseSortKey(settings, context, separator);
     }
 
-    // Immediate parent is the element before the leaf in the lineage
     const leafIndex = lineage.length - 1;
     const parentIndex = leafIndex - 1;
     const parentContext = this.createContextForRelationshipNode(lineage, parentIndex, context);
 
-    // Find matched bucket for the parent (so children follow the parent's bucket rules)
     const parentBucketInfo = this.getMatchedBucketForContext(settings, parentContext);
-
-    // If parent didn't match any bucket, fall back to composing the file's own base key
     if (!parentBucketInfo) {
       return this.composeBaseSortKey(settings, context, separator);
     }
 
     const { bucket: parentBucket } = parentBucketInfo;
-
-    // Parent full prefix (includes bucket index + parent criteria + optional basename)
     const parentParts = this.composeBaseSortParts(settings, parentContext, separator);
 
-    // Child ordering within the parent: apply the parent's bucket.sortCriteria to the child's context
     const childContext = this.createContextForRelationshipNode(lineage, leafIndex, context);
     const childCriteriaParts: string[] = [];
     for (const criteria of parentBucket.sortCriteria) {
       const raw = this.getSortCriteriaValue(criteria, childContext);
-      const normalized = this.normalizeSortKeyPart(raw, separator) || this.normalizeSortKeyPart(String(raw || ""), separator);
-      // ensure there is always a placeholder so sibling ordering is deterministic
-      childCriteriaParts.push(normalized || (criteria.direction === "desc" ? this.invertSortValue("999") : "000"));
+      const normalized = this.normalizeSortKeyPart(raw, separator) || this.normalizeSortKeyPart(String(raw || ''), separator);
+      childCriteriaParts.push(normalized || (criteria.direction === 'desc' ? this.invertSortValue('999') : '000'));
     }
 
     const identity =
@@ -186,12 +148,7 @@ export class RuleEngine {
       this.normalizeSortKeyPart(context.file.basename, separator) ||
       `node${leafIndex}`;
 
-    // Parent should sort before its children — append a marker to guarantee ordering
-    const parentMarker = "0";
-    const childMarker = "1";
-
-    // Build final key: parentParts + parentMarker for parent; for child: parentParts + childCriteriaParts + childMarker + identity
-    // For the current file (leaf), return the child form so it appears under the parent prefix.
+    const childMarker = '1';
     const finalParts = [...parentParts, ...childCriteriaParts, childMarker, identity];
     return finalParts.join(separator);
   }
@@ -229,10 +186,10 @@ export class RuleEngine {
       tags: node.tags,
       parent: parent
         ? {
-          file: parent.file,
-          frontmatter: parent.frontmatter,
-          tags: parent.tags,
-        }
+            file: parent.file,
+            frontmatter: parent.frontmatter,
+            tags: parent.tags,
+          }
         : undefined,
       relationshipLineage: lineage.slice(0, index + 1),
       body: index === lineage.length - 1 ? originalContext.body : undefined,
@@ -255,7 +212,6 @@ export class RuleEngine {
   ): string[] {
     const parts: string[] = [];
 
-    // Find the first matching bucket
     let matchedBucket: SortBucket | null = null;
     let bucketIndex = -1;
 
@@ -271,14 +227,9 @@ export class RuleEngine {
       }
     }
 
-    // Add bucket index as the first part (zero-padded to 3 digits)
-    // For A-Z sorting: lower index = higher priority = lower sort value = appears first
-    // Example: Bucket 0 (highest priority) → "000" (sorts to top in A-Z)
-    //          Bucket 12 (lowest priority) → "012" (sorts to bottom in A-Z)
     if (matchedBucket) {
-      parts.push(String(bucketIndex).padStart(3, "0"));
+      parts.push(String(bucketIndex).padStart(3, '0'));
 
-      // Apply sort criteria from the matched bucket
       for (const criteria of matchedBucket.sortCriteria) {
         const rawValue = this.getSortCriteriaValue(criteria, context);
         const normalizedValue = this.normalizeSortKeyPart(rawValue, separator);
@@ -287,8 +238,7 @@ export class RuleEngine {
         }
       }
     } else {
-      // No bucket matched - use a high bucket number to sort unmatched items last
-      parts.push("999");
+      parts.push('999');
     }
 
     if (settings.appendBasename) {
@@ -305,110 +255,90 @@ export class RuleEngine {
     const hasConditions = Array.isArray(bucket.conditions) && bucket.conditions.length > 0;
     const hasGroups = Array.isArray(bucket.conditionGroups) && bucket.conditionGroups.length > 0;
 
-    // If no conditions or groups, match everything
     if (!hasConditions && !hasGroups) {
       return true;
     }
 
-    // Evaluate flat conditions
     const flatConditionsMatch = hasConditions
       ? this.matchesConditionGroup(bucket.conditions, bucket.match, context)
-      : (bucket.match === "all"); // If no flat conditions, treat as true for "all", false for "any"
+      : (bucket.match === 'all');
 
-    // Evaluate condition groups
     const groupResults = hasGroups
-      ? bucket.conditionGroups!.map(group =>
-        this.matchesConditionGroup(group.conditions, group.match, context)
-      )
+      ? bucket.conditionGroups!.map((group) => this.matchesConditionGroup(group.conditions, group.match, context))
       : [];
 
-    // Combine flat conditions and groups based on bucket's match mode
-    if (bucket.match === "all") {
-      // All conditions AND all groups must match
-      return flatConditionsMatch && (groupResults.length === 0 || groupResults.every(r => r));
-    } else {
-      // Any condition OR any group must match
-      const anyGroupMatches = groupResults.some(r => r);
-      return (hasConditions && flatConditionsMatch) || anyGroupMatches;
+    if (bucket.match === 'all') {
+      return flatConditionsMatch && (groupResults.length === 0 || groupResults.every((result) => result));
     }
+
+    const anyGroupMatches = groupResults.some((result) => result);
+    return (hasConditions && flatConditionsMatch) || anyGroupMatches;
   }
 
   private getSortCriteriaValue(criteria: SortCriteria, context: RuleEvaluationContext): string {
     const values = this.getValuesForConditionSource(criteria.source, context, criteria.field);
-    const first = values.find((value) => String(value || "").trim().length > 0) ?? "";
+    const first = values.find((value) => String(value || '').trim().length > 0) ?? '';
 
-    // Apply mappings first
     const mapped = this.applyMapping(first, criteria.mappings);
     if (mapped) {
-      return criteria.direction === "desc" ? this.invertSortValue(mapped) : mapped;
+      return criteria.direction === 'desc' ? this.invertSortValue(mapped) : mapped;
     }
 
-    // Handle date type
-    if (criteria.type === "date") {
+    if (criteria.type === 'date') {
       const normalizedDateValue = this.normalizeDateSortValue(criteria, first);
       if (normalizedDateValue) {
-        return criteria.direction === "desc" ? this.invertSortValue(normalizedDateValue) : normalizedDateValue;
+        return criteria.direction === 'desc' ? this.invertSortValue(normalizedDateValue) : normalizedDateValue;
       }
 
-      // Try to extract date from basename if this is a date field
       if (this.isDateCriteria(criteria)) {
         const basenameDateValue = this.normalizeDateSortValue(criteria, context.file.basename);
         if (basenameDateValue) {
-          return criteria.direction === "desc" ? this.invertSortValue(basenameDateValue) : basenameDateValue;
+          return criteria.direction === 'desc' ? this.invertSortValue(basenameDateValue) : basenameDateValue;
         }
       }
 
-      // Use missing value placement
-      const missingValue = criteria.missingValuePlacement === "first" ? "0000-00-00" : "9999-12-31";
-      return criteria.direction === "desc" ? this.invertSortValue(missingValue) : missingValue;
+      const missingValue = criteria.missingValuePlacement === 'first' ? '0000-00-00' : '9999-12-31';
+      return criteria.direction === 'desc' ? this.invertSortValue(missingValue) : missingValue;
     }
 
-    // Handle other types
     if (first) {
-      // If sorting by update/modified time, prevent infinite write loops by using day precision only
       if (
-        criteria.source === "date-modified" ||
-        (criteria.source === "frontmatter" &&
+        criteria.source === 'date-modified' ||
+        (criteria.source === 'frontmatter' &&
           criteria.field &&
-          (criteria.field.toLowerCase().includes("modified") ||
-            criteria.field.toLowerCase().includes("updated")))
+          (criteria.field.toLowerCase().includes('modified') || criteria.field.toLowerCase().includes('updated')))
       ) {
         const truncated = first.substring(0, 10);
-        return criteria.direction === "desc" ? this.invertSortValue(truncated) : truncated;
+        return criteria.direction === 'desc' ? this.invertSortValue(truncated) : truncated;
       }
 
-      return criteria.direction === "desc" ? this.invertSortValue(first) : first;
+      return criteria.direction === 'desc' ? this.invertSortValue(first) : first;
     }
 
-    // Missing value handling
-    const missingValue = criteria.missingValuePlacement === "first" ? "000" : "999";
-    return criteria.direction === "desc" ? this.invertSortValue(missingValue) : missingValue;
+    const missingValue = criteria.missingValuePlacement === 'first' ? '000' : '999';
+    return criteria.direction === 'desc' ? this.invertSortValue(missingValue) : missingValue;
   }
 
   private isDateCriteria(criteria: SortCriteria): boolean {
-    if (criteria.source !== "frontmatter") {
+    if (criteria.source !== 'frontmatter') {
       return false;
     }
-    const field = String(criteria.field || "").trim().toLowerCase();
-    return RuleEngine.DATE_SORT_FIELDS.has(field) || criteria.type === "date";
+    const field = String(criteria.field || '').trim().toLowerCase();
+    return RuleEngine.DATE_SORT_FIELDS.has(field) || criteria.type === 'date';
   }
 
   private invertSortValue(value: string): string {
-    // For descending sort, we need to invert the string so it sorts in reverse
-    // For dates and numbers, we can use character code inversion
-    return value.split("").map(char => {
+    return value.split('').map((char) => {
       const code = char.charCodeAt(0);
-      if (code >= 48 && code <= 57) { // 0-9
-        return String.fromCharCode(105 - code); // Invert digits
+      if (code >= 48 && code <= 57) {
+        return String.fromCharCode(105 - code);
       }
       return char;
-    }).join("");
+    }).join('');
   }
 
   matchesRule(rule: IconColorRule | HideRule, context: RuleEvaluationContext): boolean {
-    // pathPrefix is always an early exit — it gates the rule regardless of whether
-    // the rule uses legacy property matching or the conditions array.
-    const prefix = "pathPrefix" in rule ? rule.pathPrefix : "";
+    const prefix = 'pathPrefix' in rule ? rule.pathPrefix : '';
     if (!this.matchesPathPrefix(context.file.path, prefix)) {
       return false;
     }
@@ -417,20 +347,23 @@ export class RuleEngine {
       return this.matchesConditionGroup(rule.conditions, rule.match, context);
     }
 
-    if (!("property" in rule) || !rule.property) {
+    if (!('property' in rule) || !rule.property) {
       return false;
     }
-    const property = String(rule.property || "").trim();
+    const property = String(rule.property || '').trim();
     if (!property) {
       return false;
     }
 
-    if (property.toLowerCase() === "folderpath") {
-      const pathValues = this.getValuesForConditionSource("path", context, "");
+    if (property.toLowerCase() === 'folderpath') {
+      const storedValues = this.toComparableValues(this.getFrontmatterValue(context.frontmatter, property));
+      const pathValues = storedValues.length > 0
+        ? storedValues
+        : this.getValuesForConditionSource('path', context, '');
       return this.matchesValues(pathValues, rule.operator, rule.value, false);
     }
 
-    if (rule.operator === "exists") {
+    if (rule.operator === 'exists') {
       return this.hasFrontmatterKey(context.frontmatter, property);
     }
 
@@ -440,28 +373,28 @@ export class RuleEngine {
 
   getFolderPath(filePath: string): string {
     const normalizedPath = normalizePath(filePath);
-    const slashIndex = normalizedPath.lastIndexOf("/");
+    const slashIndex = normalizedPath.lastIndexOf('/');
     if (slashIndex < 0) {
-      return "";
+      return '';
     }
     return normalizedPath.slice(0, slashIndex);
   }
 
   getValuesForConditionSource(source: RuleConditionSource, context: RuleEvaluationContext, field: string): string[] {
-    if (source === "path") {
+    if (source === 'path') {
       const folderPath = this.getFolderPath(context.file.path);
       return folderPath ? [folderPath] : [];
     }
 
-    if (source === "extension") {
-      const extension = String(context.file.extension || "").trim();
+    if (source === 'extension') {
+      const extension = String(context.file.extension || '').trim();
       return extension ? [extension] : [];
     }
 
-    if (source === "name") {
+    if (source === 'name') {
       const values = new Set<string>();
-      const fileName = String(context.file.name || "").trim();
-      const basename = String(context.file.basename || "").trim();
+      const fileName = String(context.file.name || '').trim();
+      const basename = String(context.file.basename || '').trim();
       if (fileName) {
         values.add(fileName);
       }
@@ -471,12 +404,12 @@ export class RuleEngine {
       return Array.from(values);
     }
 
-    if (source === "tag") {
+    if (source === 'tag') {
       return this.collectTags(context);
     }
 
-    if (source === "tag-note-name") {
-      const noteNameTag = this.normalizeTag(context.file.basename || context.file.name || "");
+    if (source === 'tag-note-name') {
+      const noteNameTag = this.normalizeTag(context.file.basename || context.file.name || '');
       if (!noteNameTag) {
         return [];
       }
@@ -484,39 +417,37 @@ export class RuleEngine {
       return tags.has(noteNameTag) ? [noteNameTag] : [];
     }
 
-    if (source === "parent-tag") {
+    if (source === 'parent-tag') {
       return Array.isArray(context.parent?.tags) ? context.parent!.tags : [];
     }
 
-    if (source === "body") {
-      // Return the note body content if available
+    if (source === 'body') {
       return context.body ? [context.body] : [];
     }
 
-    if (source === "parent-name") {
+    if (source === 'parent-name') {
       const parentFile = context.parent?.file;
       if (!parentFile) return [];
       const values = new Set<string>();
-      const fileName = String(parentFile.name || "").trim();
-      const basename = String(parentFile.basename || "").trim();
+      const fileName = String(parentFile.name || '').trim();
+      const basename = String(parentFile.basename || '').trim();
       if (fileName) values.add(fileName);
       if (basename) values.add(basename);
       return Array.from(values);
     }
 
-    if (source === "parent-path") {
-      const parentPath = String(context.parent?.file?.path || "").trim();
+    if (source === 'parent-path') {
+      const parentPath = String(context.parent?.file?.path || '').trim();
       if (!parentPath) return [];
       const folderPath = this.getFolderPath(parentPath);
       return folderPath ? [folderPath] : [];
     }
 
-    if (source === "backlink") {
+    if (source === 'backlink') {
       const allBacklinks = context.backlinks || [];
-      const targetField = (field || "").trim();
+      const targetField = (field || '').trim();
 
       if (!targetField) {
-        // Return all backlinks (paths + basenames) if no field specified
         const values = new Set<string>();
         for (const path of allBacklinks) {
           values.add(path);
@@ -528,8 +459,7 @@ export class RuleEngine {
         return Array.from(values);
       }
 
-      // Filter backlinks to only include those that link via the specified frontmatter property
-      const validPaths = allBacklinks.filter(sourcePath => {
+      const validPaths = allBacklinks.filter((sourcePath) => {
         const sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
         if (!(sourceFile instanceof TFile)) {
           return false;
@@ -540,13 +470,11 @@ export class RuleEngine {
           return false;
         }
 
-        return cache.frontmatterLinks.some(link => {
-          // Check if this link belongs to the target property
+        return cache.frontmatterLinks.some((link) => {
           if (!link.key || link.key.toLowerCase() !== targetField.toLowerCase()) {
             return false;
           }
 
-          // Check if the link points to our current file
           const dest = this.app.metadataCache.getFirstLinkpathDest(link.link, sourcePath);
           const isMatch = dest && dest.path === context.file.path;
 
@@ -554,8 +482,6 @@ export class RuleEngine {
         });
       });
 
-      // Return both full paths AND basenames to allow easier matching
-      // e.g. "Folder/My Note.md" -> ["Folder/My Note.md", "My Note"]
       const values = new Set<string>();
       for (const path of validPaths) {
         values.add(path);
@@ -568,30 +494,30 @@ export class RuleEngine {
       return Array.from(values);
     }
 
-    if (source === "date-created") {
+    if (source === 'date-created') {
       // @ts-ignore
-      return [window.moment(context.file.stat.ctime).format()];
+      return [window.moment((context.file as any).stat?.ctime ?? 0).format()];
     }
 
-    if (source === "date-modified") {
+    if (source === 'date-modified') {
       // @ts-ignore
-      return [window.moment(context.file.stat.mtime).format()];
+      return [window.moment((context.file as any).stat?.mtime ?? 0).format()];
     }
 
-    if (source === "parent-frontmatter") {
-      const key = String(field || "").trim();
+    if (source === 'parent-frontmatter') {
+      const key = String(field || '').trim();
       if (!key) return [];
-      if (key.toLowerCase() === "folderpath") {
-        return this.getValuesForConditionSource("parent-path", context, "");
-      }
       const directParentValues = this.toComparableValues(this.getFrontmatterValue(context.parent?.frontmatter ?? null, key));
       if (directParentValues.length > 0) {
         return directParentValues;
       }
+      if (key.toLowerCase() === 'folderpath') {
+        return this.getValuesForConditionSource('parent-path', context, '');
+      }
       const parentFile = context.parent?.file;
-      if (parentFile instanceof TFile) {
-        const normalizedField = String(key || "").trim().toLowerCase();
-        if (["scheduled", "date", "day"].includes(normalizedField)) {
+      if (parentFile) {
+        const normalizedField = String(key || '').trim().toLowerCase();
+        if (['scheduled', 'date', 'day'].includes(normalizedField)) {
           const derived = this.getDailyNoteDateKeyFromFile(parentFile);
           return derived ? [derived] : [];
         }
@@ -599,13 +525,9 @@ export class RuleEngine {
       return [];
     }
 
-    const key = String(field || "").trim();
+    const key = String(field || '').trim();
     if (!key) {
       return [];
-    }
-
-    if (key.toLowerCase() === "folderpath") {
-      return this.getValuesForConditionSource("path", context, "");
     }
 
     const directValues = this.toComparableValues(this.getFrontmatterValue(context.frontmatter, key));
@@ -613,15 +535,19 @@ export class RuleEngine {
       return directValues;
     }
 
+    if (key.toLowerCase() === 'folderpath') {
+      return this.getValuesForConditionSource('path', context, '');
+    }
+
     return this.getDerivedDateFieldValues(context, key);
   }
 
-  private matchesConditionGroup(conditions: RuleCondition[], matchMode: "all" | "any", context: RuleEvaluationContext): boolean {
+  private matchesConditionGroup(conditions: RuleCondition[], matchMode: 'all' | 'any', context: RuleEvaluationContext): boolean {
     if (conditions.length === 0) {
       return false;
     }
 
-    if (matchMode === "any") {
+    if (matchMode === 'any') {
       return conditions.some((condition) => this.matchesCondition(condition, context));
     }
 
@@ -635,58 +561,58 @@ export class RuleEngine {
     }
 
     const source = condition.source;
-    if (source === "frontmatter") {
-      const field = String(condition.field || "").trim();
+    if (source === 'frontmatter') {
+      const field = String(condition.field || '').trim();
       if (!field) {
         return false;
       }
 
-      if (field.toLowerCase() === "folderpath") {
-        const folderValues = this.getValuesForConditionSource("path", context, "");
+      if (field.toLowerCase() === 'folderpath') {
+        const folderValues = this.getValuesForConditionSource('path', context, '');
         return this.matchesValues(folderValues, operator, condition.value, false);
       }
 
-      if ((operator === "exists" || operator === "!exists") && !String(condition.value || "").trim()) {
+      if ((operator === 'exists' || operator === '!exists') && !String(condition.value || '').trim()) {
         const hasField = this.hasFrontmatterKey(context.frontmatter, field);
-        return operator === "exists" ? hasField : !hasField;
+        return operator === 'exists' ? hasField : !hasField;
       }
 
-      if (operator === "is-not-empty") {
-        const values = this.getValuesForConditionSource("frontmatter", context, field);
-        return values.length > 0 && values.some(v => String(v || "").trim().length > 0);
+      if (operator === 'is-not-empty') {
+        const values = this.getValuesForConditionSource('frontmatter', context, field);
+        return values.length > 0 && values.some((value) => String(value || '').trim().length > 0);
       }
 
-      const values = this.getValuesForConditionSource("frontmatter", context, field);
+      const values = this.getValuesForConditionSource('frontmatter', context, field);
       return this.matchesValues(values, operator, condition.value, true);
     }
 
-    if (source === "parent-frontmatter") {
-      const field = String(condition.field || "").trim();
+    if (source === 'parent-frontmatter') {
+      const field = String(condition.field || '').trim();
       if (!field) {
         return false;
       }
 
-      if (field.toLowerCase() === "folderpath") {
-        const folderValues = this.getValuesForConditionSource("parent-path", context, "");
+      if (field.toLowerCase() === 'folderpath') {
+        const folderValues = this.getValuesForConditionSource('parent-path', context, '');
         return this.matchesValues(folderValues, operator, condition.value, false);
       }
 
-      if ((operator === "exists" || operator === "!exists") && !String(condition.value || "").trim()) {
+      if ((operator === 'exists' || operator === '!exists') && !String(condition.value || '').trim()) {
         const hasField = this.hasFrontmatterKey(context.parent?.frontmatter ?? null, field);
-        return operator === "exists" ? hasField : !hasField;
+        return operator === 'exists' ? hasField : !hasField;
       }
 
-      if (operator === "is-not-empty") {
-        const values = this.getValuesForConditionSource("parent-frontmatter", context, field);
-        return values.length > 0 && values.some(v => String(v || "").trim().length > 0);
+      if (operator === 'is-not-empty') {
+        const values = this.getValuesForConditionSource('parent-frontmatter', context, field);
+        return values.length > 0 && values.some((value) => String(value || '').trim().length > 0);
       }
 
-      const values = this.getValuesForConditionSource("parent-frontmatter", context, field);
+      const values = this.getValuesForConditionSource('parent-frontmatter', context, field);
       return this.matchesValues(values, operator, condition.value, true);
     }
 
     const values = this.getValuesForConditionSource(source, context, condition.field);
-    const trimTarget = source !== "path" && source !== "parent-path";
+    const trimTarget = source !== 'path' && source !== 'parent-path';
     return this.matchesValues(values, operator, condition.value, trimTarget);
   }
 
@@ -700,7 +626,7 @@ export class RuleEngine {
       }
     }
 
-    const frontmatterTags = this.getFrontmatterValue(context.frontmatter, "tags");
+    const frontmatterTags = this.getFrontmatterValue(context.frontmatter, 'tags');
     if (Array.isArray(frontmatterTags)) {
       for (const rawTag of frontmatterTags) {
         const normalized = this.normalizeTag(rawTag);
@@ -708,7 +634,7 @@ export class RuleEngine {
           tags.add(normalized);
         }
       }
-    } else if (typeof frontmatterTags === "string") {
+    } else if (typeof frontmatterTags === 'string') {
       for (const rawTag of frontmatterTags.split(/[\s,]+/)) {
         const normalized = this.normalizeTag(rawTag);
         if (normalized) {
@@ -721,11 +647,11 @@ export class RuleEngine {
   }
 
   private normalizeTag(raw: unknown): string {
-    const value = String(raw ?? "").trim();
+    const value = String(raw ?? '').trim();
     if (!value) {
-      return "";
+      return '';
     }
-    return value.replace(/^#+/, "").toLowerCase();
+    return value.replace(/^#+/, '').toLowerCase();
   }
 
   private matchesPathPrefix(filePath: string, pathPrefix: string): boolean {
@@ -783,8 +709,8 @@ export class RuleEngine {
   }
 
   private getDerivedDateFieldValues(context: RuleEvaluationContext, field: string): string[] {
-    const normalizedField = String(field || "").trim().toLowerCase();
-    if (!["scheduled", "date", "day"].includes(normalizedField)) {
+    const normalizedField = String(field || '').trim().toLowerCase();
+    if (!['scheduled', 'date', 'day'].includes(normalizedField)) {
       return [];
     }
 
@@ -801,18 +727,19 @@ export class RuleEngine {
       return value.flatMap((item) => this.toComparableValues(item));
     }
 
-    if (typeof value === "string") {
+    if (typeof value === 'string') {
       const trimmed = value.trim();
       return trimmed ? [trimmed] : [];
     }
 
-    if (typeof value === "number" || typeof value === "boolean") {
+    if (typeof value === 'number' || typeof value === 'boolean') {
       return [String(value)];
     }
 
     if (value instanceof Date && !Number.isNaN(value.getTime())) {
       const localDay = new Date(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
-      return [window.moment(localDay).format("YYYY-MM-DD")];
+      // @ts-ignore
+      return [window.moment(localDay).format('YYYY-MM-DD')];
     }
 
     try {
@@ -824,34 +751,28 @@ export class RuleEngine {
 
   private matchesValues(values: string[], operator: SmartRuleOperator, rawTarget: string, trimTarget: boolean): boolean {
     const trimmedValues = values
-      .map((value) => String(value ?? "").trim())
+      .map((value) => String(value ?? '').trim())
       .filter(Boolean);
 
-    const trimmedTarget = trimTarget ? String(rawTarget ?? "").trim() : String(rawTarget ?? "");
+    const trimmedTarget = trimTarget ? String(rawTarget ?? '').trim() : String(rawTarget ?? '');
 
-    if (operator === "within-next-days" || operator === "!within-next-days") {
-      return this.matchesWithinNextDays(trimmedValues, trimmedTarget, operator === "!within-next-days");
+    if (operator === 'within-next-days' || operator === '!within-next-days') {
+      return this.matchesWithinNextDays(trimmedValues, trimmedTarget, operator === '!within-next-days');
     }
 
-    if (operator === "has-open-checkboxes" || operator === "!has-open-checkboxes") {
+    if (operator === 'has-open-checkboxes' || operator === '!has-open-checkboxes') {
       const gcm = getPluginById(this.app, 'tps-global-context-menu') as any;
       const gcmHasOpen = gcm?.api?.hasOpenCheckboxes;
       let hasOpen: boolean;
       if (gcmHasOpen) {
-        hasOpen = gcmHasOpen(trimmedValues.join("\n"));
+        hasOpen = gcmHasOpen(trimmedValues.join('\n'));
       } else {
-        const controller = getPluginById(this.app, 'tps-controller') as any;
-        const service = controller?.api?.checkboxPatternService;
-        if (service) {
-          hasOpen = service.hasOpenCheckboxes(trimmedValues.join("\n"));
-        } else {
-          hasOpen = trimmedValues.some((value) => /^\s*(?:[-*+]|\d+\.)\s*\[ \]/.test(value));
-        }
+        hasOpen = trimmedValues.some((value) => /^\s*(?:[-*+]|\d+\.)\s*\[ \]/.test(value));
       }
-      return operator === "has-open-checkboxes" ? hasOpen : !hasOpen;
+      return operator === 'has-open-checkboxes' ? hasOpen : !hasOpen;
     }
 
-    if (operator === "is-today" || operator === "!is-today") {
+    if (operator === 'is-today' || operator === '!is-today') {
       // @ts-ignore
       const today = window.moment().startOf('day');
 
@@ -859,10 +780,10 @@ export class RuleEngine {
         const m = this.parseComparableDate(value);
         return !!m && m.isSame(today, 'day');
       });
-      return operator === "is-today" ? isToday : !isToday;
+      return operator === 'is-today' ? isToday : !isToday;
     }
 
-    if (operator === "is-before-today" || operator === "!is-before-today") {
+    if (operator === 'is-before-today' || operator === '!is-before-today') {
       // @ts-ignore
       const today = window.moment().startOf('day');
 
@@ -870,10 +791,10 @@ export class RuleEngine {
         const m = this.parseComparableDate(value);
         return !!m && m.isBefore(today, 'day');
       });
-      return operator === "is-before-today" ? isBefore : !isBefore;
+      return operator === 'is-before-today' ? isBefore : !isBefore;
     }
 
-    if (operator === "is-after-today" || operator === "!is-after-today") {
+    if (operator === 'is-after-today' || operator === '!is-after-today') {
       // @ts-ignore
       const today = window.moment().startOf('day');
 
@@ -881,24 +802,24 @@ export class RuleEngine {
         const m = this.parseComparableDate(value);
         return !!m && m.isAfter(today, 'day');
       });
-      return operator === "is-after-today" ? isAfter : !isAfter;
+      return operator === 'is-after-today' ? isAfter : !isAfter;
     }
 
-    if (operator === "is-not-empty") {
-      return trimmedValues.length > 0 && trimmedValues.some(v => v.length > 0);
+    if (operator === 'is-not-empty') {
+      return trimmedValues.length > 0 && trimmedValues.some((value) => value.length > 0);
     }
 
     const normalizedValues = trimmedValues.map((value) => value.toLowerCase());
     const target = trimmedTarget.toLowerCase();
 
-    if (operator === "exists") {
+    if (operator === 'exists') {
       if (!target) {
         return normalizedValues.length > 0;
       }
       return normalizedValues.some((value) => value.includes(target));
     }
 
-    if (operator === "!exists") {
+    if (operator === '!exists') {
       if (!target) {
         return normalizedValues.length === 0;
       }
@@ -909,27 +830,27 @@ export class RuleEngine {
       return false;
     }
 
-    if (operator === "is") {
+    if (operator === 'is') {
       return normalizedValues.some((value) => value === target);
     }
 
-    if (operator === "!is") {
+    if (operator === '!is') {
       return normalizedValues.every((value) => value !== target);
     }
 
-    if (operator === "contains") {
+    if (operator === 'contains') {
       return normalizedValues.some((value) => value.includes(target));
     }
 
-    if (operator === "!contains") {
+    if (operator === '!contains') {
       return normalizedValues.every((value) => !value.includes(target));
     }
 
-    if (operator === "starts") {
+    if (operator === 'starts') {
       return normalizedValues.some((value) => value.startsWith(target));
     }
 
-    if (operator === "!starts") {
+    if (operator === '!starts') {
       return normalizedValues.every((value) => !value.startsWith(target));
     }
 
@@ -938,25 +859,25 @@ export class RuleEngine {
 
   private normalizeSmartOperator(operator: string): SmartRuleOperator | null {
     if (
-      operator === "is" ||
-      operator === "contains" ||
-      operator === "exists" ||
-      operator === "!is" ||
-      operator === "!contains" ||
-      operator === "!exists" ||
-      operator === "is-not-empty" ||
-      operator === "starts" ||
-      operator === "!starts" ||
-      operator === "within-next-days" ||
-      operator === "!within-next-days" ||
-      operator === "has-open-checkboxes" ||
-      operator === "!has-open-checkboxes" ||
-      operator === "is-today" ||
-      operator === "!is-today" ||
-      operator === "is-before-today" ||
-      operator === "!is-before-today" ||
-      operator === "is-after-today" ||
-      operator === "!is-after-today"
+      operator === 'is' ||
+      operator === 'contains' ||
+      operator === 'exists' ||
+      operator === '!is' ||
+      operator === '!contains' ||
+      operator === '!exists' ||
+      operator === 'is-not-empty' ||
+      operator === 'starts' ||
+      operator === '!starts' ||
+      operator === 'within-next-days' ||
+      operator === '!within-next-days' ||
+      operator === 'has-open-checkboxes' ||
+      operator === '!has-open-checkboxes' ||
+      operator === 'is-today' ||
+      operator === '!is-today' ||
+      operator === 'is-before-today' ||
+      operator === '!is-before-today' ||
+      operator === 'is-after-today' ||
+      operator === '!is-after-today'
     ) {
       return operator;
     }
@@ -987,7 +908,7 @@ export class RuleEngine {
   }
 
   private parseDayCount(raw: string): number | null {
-    const text = String(raw || "").trim();
+    const text = String(raw || '').trim();
     if (!text) {
       return null;
     }
@@ -1006,7 +927,7 @@ export class RuleEngine {
   }
 
   private parseDateLikeTimestamp(raw: string): number | null {
-    const value = String(raw || "").trim();
+    const value = String(raw || '').trim();
     if (!value) {
       return null;
     }
@@ -1029,18 +950,14 @@ export class RuleEngine {
       }
     }
 
-    // Keep sort-date parsing aligned with reminder/rule date parsing so
-    // human-formatted daily-note dates (e.g. "Friday, March 20th 2026")
-    // don't get treated as missing values.
     const comparable = this.parseComparableDate(unquoted);
-    if (comparable && typeof comparable.valueOf === "function") {
-      const ts = Number(comparable.valueOf());
-      if (Number.isFinite(ts)) {
-        return ts;
+    if (comparable && typeof comparable.valueOf === 'function') {
+      const timestamp = Number(comparable.valueOf());
+      if (Number.isFinite(timestamp)) {
+        return timestamp;
       }
     }
 
-    // Treat plain date-only strings as local calendar dates to avoid UTC-day drift.
     const localDateOnlyMatch = unquoted.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/);
     if (localDateOnlyMatch) {
       const year = Number.parseInt(localDateOnlyMatch[1], 10);
@@ -1051,7 +968,6 @@ export class RuleEngine {
       }
     }
 
-    // Treat naive datetime strings as local wall-clock time.
     const localDateTimeMatch = unquoted.match(/^(\d{4})[-/](\d{2})[-/](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
     if (localDateTimeMatch) {
       const year = Number.parseInt(localDateTimeMatch[1], 10);
@@ -1059,7 +975,7 @@ export class RuleEngine {
       const day = Number.parseInt(localDateTimeMatch[3], 10);
       const hours = Number.parseInt(localDateTimeMatch[4], 10);
       const minutes = Number.parseInt(localDateTimeMatch[5], 10);
-      const seconds = Number.parseInt(localDateTimeMatch[6] || "0", 10);
+      const seconds = Number.parseInt(localDateTimeMatch[6] || '0', 10);
       if (
         Number.isFinite(year) &&
         Number.isFinite(month) &&
@@ -1074,7 +990,7 @@ export class RuleEngine {
 
     const candidates = [unquoted];
     if (/^\d{4}-\d{2}-\d{2}\s+\d/.test(unquoted)) {
-      candidates.push(unquoted.replace(/\s+/, "T"));
+      candidates.push(unquoted.replace(/\s+/, 'T'));
     }
 
     for (const candidate of candidates) {
@@ -1096,7 +1012,7 @@ export class RuleEngine {
 
   private getSortSegmentValue(segment: SortSegmentRule, context: RuleEvaluationContext): string {
     const values = this.getValuesForConditionSource(segment.source, context, segment.field);
-    const first = values.find((value) => String(value || "").trim().length > 0) ?? "";
+    const first = values.find((value) => String(value || '').trim().length > 0) ?? '';
     const mapped = this.applyMapping(first, segment.mappings);
     if (mapped) {
       return mapped;
@@ -1118,84 +1034,81 @@ export class RuleEngine {
       return first;
     }
 
-    const fallback = String(segment.fallback || "").trim();
+    const fallback = String(segment.fallback || '').trim();
     return fallback;
   }
 
   private applyMapping(value: string, mappings: SortValueMapping[]): string {
-    const normalizedValue = String(value || "").trim().toLowerCase();
+    const normalizedValue = String(value || '').trim().toLowerCase();
     if (!normalizedValue) {
-      return "";
+      return '';
     }
 
     for (const mapping of mappings) {
-      const input = String(mapping.input || "").trim().toLowerCase();
+      const input = String(mapping.input || '').trim().toLowerCase();
       if (!input) {
         continue;
       }
       if (input === normalizedValue) {
-        return String(mapping.output || "").trim();
+        return String(mapping.output || '').trim();
       }
     }
 
-    return "";
+    return '';
   }
 
   private normalizeDateSortValue(segmentOrCriteria: SortSegmentRule | SortCriteria, rawValue: string): string {
-    const value = String(rawValue || "").trim();
+    const value = String(rawValue || '').trim();
     if (!value) {
-      return "";
+      return '';
     }
 
-    // Check if it's a SortCriteria (has 'type' property) or SortSegmentRule (has 'fallback' property)
     const isCriteria = 'type' in segmentOrCriteria;
     const source = segmentOrCriteria.source;
-    const field = String(segmentOrCriteria.field || "").trim().toLowerCase();
+    const field = String(segmentOrCriteria.field || '').trim().toLowerCase();
 
-    if (source !== "frontmatter" && source !== "date-modified" && source !== "date-created") {
-      return "";
+    if (source !== 'frontmatter' && source !== 'date-modified' && source !== 'date-created') {
+      return '';
     }
 
     const shouldParseAsDate = isCriteria
-      ? (segmentOrCriteria.type === "date" || RuleEngine.DATE_SORT_FIELDS.has(field) || this.looksLikeDateValue(value))
+      ? (segmentOrCriteria.type === 'date' || RuleEngine.DATE_SORT_FIELDS.has(field) || this.looksLikeDateValue(value))
       : (RuleEngine.DATE_SORT_FIELDS.has(field) || this.looksLikeDateValue(value));
 
     if (!shouldParseAsDate) {
-      return "";
+      return '';
     }
 
     const timestamp = this.parseDateLikeTimestamp(value);
     if (timestamp == null) {
-      return "";
+      return '';
     }
 
     const result = this.formatSortTimestamp(timestamp);
 
-    // If sorting by update/modified time, prevent infinite write loops by using day precision only
-    // Writing the sort key updates the modified time, which triggers re-evaluation, which creates a new sort key (if using seconds), which triggers write...
-    if (source === "date-modified" || field.includes("modified") || field.includes("updated")) {
-      return result.substring(0, 10); // YYYY-MM-DD
+    if (source === 'date-modified' || field.includes('modified') || field.includes('updated')) {
+      return result.substring(0, 10);
     }
 
     return result;
   }
 
   private isDateFrontmatterSegment(segment: SortSegmentRule): boolean {
-    if (segment.source !== "frontmatter") {
+    if (segment.source !== 'frontmatter') {
       return false;
     }
 
-    const field = String(segment.field || "").trim().toLowerCase();
+    const field = String(segment.field || '').trim().toLowerCase();
     return RuleEngine.DATE_SORT_FIELDS.has(field);
   }
 
   private looksLikeDateValue(rawValue: string): boolean {
-    const value = String(rawValue || "").trim();
+    const value = String(rawValue || '').trim();
     if (!value) {
       return false;
     }
 
-    const normalized = value.replace(/^['"]|['"]$/g, "");
+    const normalized = value.replace(/^['"]|['"]$/g, '');
     return (
       /^\d{4}-\d{2}-\d{2}/.test(normalized) ||
       /^\d{4}\/\d{2}\/\d{2}/.test(normalized) ||
@@ -1215,34 +1128,125 @@ export class RuleEngine {
   }
 
   private pad2(value: number): string {
-    return String(value).padStart(2, "0");
+    return String(value).padStart(2, '0');
   }
 
   private normalizeSortKeyPart(rawPart: string, separator: string): string {
-    const part = String(rawPart || "").trim();
+    const part = String(rawPart || '').trim();
     if (!part) {
-      return "";
+      return '';
     }
 
     const separatorSafe = escapeRegExp(separator);
-    const separatorPattern = new RegExp(separatorSafe, "g");
+    const separatorPattern = new RegExp(separatorSafe, 'g');
 
     return part
-      .replace(/[\r\n\t]+/g, " ")
-      .replace(/\s+/g, "-")
-      .replace(separatorPattern, "-")
-      .replace(/^[-_]+|[-_]+$/g, "");
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/\s+/g, '-')
+      .replace(separatorPattern, '-')
+      .replace(/^[-_]+|[-_]+$/g, '');
+  }
+
+  private getDailyNoteDateFormat(): string | undefined {
+    return getDailyNoteResolver(this.app).displayFormat;
+  }
+
+  private parseComparableDate(value: string): any | null {
+    const text = String(value ?? '').trim();
+    if (!text) {
+      return null;
+    }
+
+    const userFormat = this.getDailyNoteDateFormat();
+
+    try {
+      const fromFilename = parseDateFromFilename(text, userFormat);
+      if (fromFilename && fromFilename.isValid && fromFilename.isValid()) {
+        return fromFilename;
+      }
+    } catch {
+      // Fall through to direct moment parsing.
+    }
+
+    // @ts-ignore
+    const m = window.moment(text, [
+      // @ts-ignore
+      window.moment.ISO_8601,
+      ...(userFormat ? [userFormat] : []),
+      'YYYY-MM-DD',
+      'YYYY-MM-DD HH:mm',
+      'YYYY-MM-DD HH:mm:ss',
+      'YYYY-MM-DDTHH:mm:ss',
+      'YYYY/MM/DD HH:mm:ss',
+      'YYYY/MM/DD HH:mm',
+      'YYYY/MM/DD',
+    ], true);
+
+    if (m.isValid()) {
+      return m;
+    }
+
+    const localDateOnlyMatch = text.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/);
+    if (localDateOnlyMatch) {
+      const year = Number.parseInt(localDateOnlyMatch[1], 10);
+      const month = Number.parseInt(localDateOnlyMatch[2], 10);
+      const day = Number.parseInt(localDateOnlyMatch[3], 10);
+      if (Number.isFinite(year) && Number.isFinite(month) && Number.isFinite(day)) {
+        // Date-only values should compare as local calendar days.
+        // Relying on ISO parsing can shift them across day boundaries.
+        // @ts-ignore
+        const localDate = window.moment(new Date(year, month - 1, day, 0, 0, 0, 0));
+        if (localDate?.isValid?.()) {
+          return localDate;
+        }
+      }
+    }
+
+    const localDateTimeMatch = text.match(/^(\d{4})[-/](\d{2})[-/](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+    if (localDateTimeMatch) {
+      const year = Number.parseInt(localDateTimeMatch[1], 10);
+      const month = Number.parseInt(localDateTimeMatch[2], 10);
+      const day = Number.parseInt(localDateTimeMatch[3], 10);
+      const hours = Number.parseInt(localDateTimeMatch[4], 10);
+      const minutes = Number.parseInt(localDateTimeMatch[5], 10);
+      const seconds = Number.parseInt(localDateTimeMatch[6] || '0', 10);
+      if (
+        Number.isFinite(year) &&
+        Number.isFinite(month) &&
+        Number.isFinite(day) &&
+        Number.isFinite(hours) &&
+        Number.isFinite(minutes) &&
+        Number.isFinite(seconds)
+      ) {
+        // @ts-ignore
+        const localDateTime = window.moment(new Date(year, month - 1, day, hours, minutes, seconds, 0));
+        if (localDateTime?.isValid?.()) {
+          return localDateTime;
+        }
+      }
+    }
+
+    const fallbackTimestamp = Date.parse(text);
+    if (!Number.isNaN(fallbackTimestamp)) {
+      // @ts-ignore
+      const fallback = window.moment(fallbackTimestamp);
+      if (fallback?.isValid?.()) {
+        return fallback;
+      }
+    }
+
+    return null;
   }
 }
 
 function normalizePath(path: string): string {
-  return String(path || "")
-    .replace(/\\/g, "/")
-    .replace(/\/+/g, "/")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
+  return String(path || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '');
 }
 
 function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

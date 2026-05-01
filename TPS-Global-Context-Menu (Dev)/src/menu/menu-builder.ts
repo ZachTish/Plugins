@@ -11,6 +11,7 @@ import { resolveCustomProperties } from '../resolve-profiles';
 import { ViewModeService } from '../services/view-mode-service';
 import { parseLinksFromFrontmatterValue } from '../services/link-target-service';
 import { promptAndCreateSubitemForParent } from '../services/subitem-creation-service';
+import { normalizeNotebookNavigatorIconValue } from '../utils/rule-resolver';
 
 export class MenuBuilder {
   private plugin: TPSGlobalContextMenuPlugin;
@@ -83,7 +84,7 @@ export class MenuBuilder {
     const frontmatter = (this.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
     const rawIcon = typeof frontmatter.icon === 'string' ? frontmatter.icon.trim() : '';
     const rawColor = typeof frontmatter.color === 'string' ? frontmatter.color.trim() : '';
-    const icon = rawIcon.replace(/^lucide:/i, '') || 'file-text';
+    const icon = normalizeNotebookNavigatorIconValue(rawIcon) || 'file-text';
     return {
       icon,
       color: rawColor || undefined,

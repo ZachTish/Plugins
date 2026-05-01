@@ -8,11 +8,36 @@ import {
 } from "obsidian";
 import type AutoBaseEmbedPlugin from "./main";
 import type { BaseEmbedRule, BaseEmbedConditions, EmbedRuleKind } from "./settings-model";
+import { createTPSSettingsGroup } from "./utils/settings-layout";
 
 const DEFAULT_DATAVIEWJS_CODE = [
   'const current = dv.current();',
   'dv.paragraph(`Viewing ${current.file.name}`);',
 ].join('\n');
+
+const createCollapsibleSection = (
+  parent: HTMLElement,
+  title: string,
+  description?: string,
+  defaultOpen = false,
+): HTMLElement => {
+  const details = parent.createEl('details', { cls: 'tps-collapsible-section' });
+  if (defaultOpen) {
+    details.setAttr('open', 'true');
+  }
+
+  const summary = details.createEl('summary', { cls: 'tps-collapsible-section-summary' });
+  summary.createSpan({ cls: 'tps-collapsible-section-title', text: title });
+
+  if (description) {
+    details.createEl('p', {
+      cls: 'tps-collapsible-section-description',
+      text: description,
+    });
+  }
+
+  return details.createDiv({ cls: 'tps-collapsible-section-content' });
+};
 
 class BaseFileSuggestModal extends FuzzySuggestModal<TFile> {
   onChoose: (file: TFile) => void;
@@ -160,24 +185,8 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "TPS Auto Base Embed" });
 
-    const createMainCategory = (title: string, description?: string): HTMLElement => {
-      const group = containerEl.createDiv({ cls: 'tps-settings-flat-group' });
-      group.style.marginBottom = '18px';
-      group.style.padding = '14px 16px';
-      group.style.border = '1px solid var(--background-modifier-border)';
-      group.style.borderRadius = '12px';
-      group.style.background = 'var(--background-secondary)';
-      group.createEl('h3', { text: title });
-      if (description) {
-        group.createEl('p', { text: description, cls: 'setting-item-description' });
-      }
-      return group;
-    };
-
-    const featuresCategory = createMainCategory('Display and Interaction', 'How embeds appear, expand, and behave inside notes and canvases.');
-    const automationCategory = createMainCategory('Rendering', 'Where and how embeds are mounted in supported surfaces.');
-    const matchingRulesCategory = createMainCategory('Rules', 'Which bases embed into which files, plus exclusions and matching logic.');
-    const maintenanceCategory = createMainCategory('Maintenance', 'Utility actions and lower-frequency diagnostic controls.');
+    const featuresCategory = createCollapsibleSection(containerEl, 'Essentials', 'The core switches you are most likely to change when setting up or troubleshooting embeds.', true);
+    const matchingRulesCategory = createCollapsibleSection(containerEl, 'Rules', 'Which bases embed into which files, plus exclusions and matching logic.', false);
 
     new Setting(featuresCategory)
       .setName("Enable auto base embed")
@@ -215,20 +224,8 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(featuresCategory)
-      .setName("Debug logging")
-      .setDesc("Enable TPS Auto Base Embed console messages for scroll, reuse, mount, and fallback diagnostics.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(!!this.plugin.settings.debugLogging)
-          .onChange(async (value) => {
-            this.plugin.settings.debugLogging = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    automationCategory.createEl("p", {
-      text: "Render placement is now configured on each base embed rule, so different bases can appear after the title, after the content, or as a hovering overlay in the same note.",
+    featuresCategory.createEl("p", {
+      text: "Render placement is configured per rule, so different bases can appear after the title, after the content, or as a hovering overlay in the same note.",
       cls: "setting-item-description",
     });
 
@@ -341,6 +338,21 @@ export class AutoBaseEmbedSettingTab extends PluginSettingTab {
       text: "Note: the Base is rendered using the current note as the source path, so filters like this.file.name resolve correctly.",
       cls: "setting-item-description",
     });
+
+    const debugCategory = createTPSSettingsGroup(containerEl, 'Debug', 'Troubleshooting output for this plugin only.');
+
+    new Setting(debugCategory)
+      .setName("Debug logging")
+      .setDesc("Enable TPS Auto Base Embed console messages for scroll, reuse, mount, and fallback diagnostics.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(!!this.plugin.settings.debugLogging)
+          .onChange(async (value) => {
+            this.plugin.settings.debugLogging = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
     this.restoreSettingsViewState(containerEl);
   }
 

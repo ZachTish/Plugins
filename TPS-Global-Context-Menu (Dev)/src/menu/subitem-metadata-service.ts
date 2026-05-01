@@ -8,6 +8,7 @@ import {
   evaluateIconColorRules,
   isRuleWriteExcluded,
   isValidCssColor,
+  normalizeNotebookNavigatorIconValue,
 } from '../utils/rule-resolver';
 import * as logger from '../logger';
 import { parseLinksFromFrontmatterValue, resolveLinkTargetToFile } from '../services/link-target-service';
@@ -253,7 +254,7 @@ export class SubitemMetadataService {
   }
 
   private normalizeIconId(id: string): string {
-    return id.replace(/^lucide[:\-]/i, '');
+    return normalizeNotebookNavigatorIconValue(id);
   }
 
   private trySetIcon(iconEl: HTMLElement, candidates: string[]): boolean {
@@ -275,12 +276,15 @@ export class SubitemMetadataService {
 
   private resolveFrontmatterIcon(file: TFile, frontmatter: Record<string, any>): string {
     const pickString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
-    const fromIconField = pickString(frontmatter?.icon);
+    const fromIconField = normalizeNotebookNavigatorIconValue(pickString(frontmatter?.icon), { keepLucidePrefix: true });
     if (fromIconField) return fromIconField;
 
     const configuredIconField = pickString(this.plugin.settings.notebookNavigatorIconField);
     if (configuredIconField) {
-      const configuredValue = pickString(this.getFrontmatterValueCaseInsensitive(frontmatter, configuredIconField));
+      const configuredValue = normalizeNotebookNavigatorIconValue(
+        pickString(this.getFrontmatterValueCaseInsensitive(frontmatter, configuredIconField)),
+        { keepLucidePrefix: true },
+      );
       if (configuredValue) return configuredValue;
     }
 
@@ -293,7 +297,7 @@ export class SubitemMetadataService {
 
     const context = buildRuleContext(this.app, file, frontmatter);
     const visual = evaluateIconColorRules(this.app, localRules, context);
-    return pickString(visual?.icon?.value);
+    return normalizeNotebookNavigatorIconValue(pickString(visual?.icon?.value), { keepLucidePrefix: true });
   }
 
   private ensureSubitemIconVisible(iconEl: HTMLElement): void {

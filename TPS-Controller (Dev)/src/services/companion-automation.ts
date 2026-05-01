@@ -1,9 +1,7 @@
 import * as logger from "../logger";
 import type { TPSControllerSettings } from "../types";
 
-interface CompanionPluginAPI {
-    applyRulesToAllFiles?(silent?: boolean): Promise<void | number>;
-}
+interface CompanionPluginAPI {}
 
 /**
  * Manages the companion plugin startup scan and recurring sync interval.

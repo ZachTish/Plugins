@@ -1,6 +1,7 @@
-import { App, ButtonComponent, Notice, Setting, TextComponent } from 'obsidian';
+import { App, ButtonComponent, Notice, Setting, TFile, TextComponent } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from '../main';
-import type { HideRule, RuleCondition } from '../../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
+import type { HideRule, RuleCondition } from '../types';
+import { applyRulesToFile } from '../utils/rule-resolver';
 import {
   NOTEBOOK_NAVIGATOR_RULE_SOURCE_OPTIONS,
   createDefaultCondition,
@@ -69,13 +70,13 @@ export class NotebookNavigatorHideBuilder {
     new ButtonComponent(toolbar)
       .setButtonText('Apply Active Note')
       .onClick(async () => {
-        await this.applyCompanionMethod('applyRulesToActiveFile', false);
+        await this.applyRulesToActiveNote();
       });
 
     new ButtonComponent(toolbar)
       .setButtonText('Apply All Notes')
       .onClick(async () => {
-        await this.applyCompanionMethod('applyRulesToAllFiles', false);
+        await this.applyRulesToAllNotes();
       });
 
     const visibleRules = this.getRules()
@@ -96,7 +97,6 @@ export class NotebookNavigatorHideBuilder {
 
   private renderRuleCard(parent: HTMLElement, rule: HideRule, index: number): void {
     const details = parent.createEl('details', { cls: 'tps-gcm-rule-card' });
-    if (index === 0 || !this.filterQuery) details.open = true;
 
     const summary = details.createEl('summary', { cls: 'tps-gcm-rule-card-summary' });
     const badge = summary.createSpan({ cls: 'tps-gcm-rule-chip' });
@@ -357,14 +357,21 @@ export class NotebookNavigatorHideBuilder {
     if (structureChanged) this.options.onStructureChange();
   }
 
-  private async applyCompanionMethod(method: 'applyRulesToActiveFile' | 'applyRulesToAllFiles', silent: boolean): Promise<void> {
-    const companion = (this.options.app as any)?.plugins?.getPlugin?.('tps-notebook-navigator-companion')
-      ?? (this.options.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-    if (!companion?.[method]) {
-      new Notice('Notebook Navigator Companion is not available.');
+  private async applyRulesToActiveNote(): Promise<void> {
+    const file = this.options.app.workspace.getActiveFile();
+    if (!(file instanceof TFile) || file.extension !== 'md') {
+      new Notice('No active markdown file.');
       return;
     }
-    await companion[method](silent);
+
+    await applyRulesToFile(this.options.app, file, 'gcm-settings-active');
+  }
+
+  private async applyRulesToAllNotes(): Promise<void> {
+    const files = this.options.app.vault.getMarkdownFiles();
+    for (const file of files) {
+      await applyRulesToFile(this.options.app, file, 'gcm-settings-all');
+    }
   }
 
   private matchesFilter(rule: HideRule, ruleNumber: number, rawQuery: string): boolean {

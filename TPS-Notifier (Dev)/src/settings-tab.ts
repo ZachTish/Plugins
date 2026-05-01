@@ -67,18 +67,14 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
             cls: 'setting-item-description'
         });
 
-        const featuresCategory = createSettingsGroup(containerEl, 'Core Delivery', 'Main transport toggles and the ntfy connection used by other TPS automation.');
-        const automationCategory = createSettingsGroup(containerEl, 'Connection', 'Server, topic, and delivery priority.');
-        const maintenanceCategory = createSettingsGroup(containerEl, 'Diagnostics and Testing', 'Logging and manual test delivery tools.');
-
-        const features = createCollapsibleSection(
-            featuresCategory,
-            'Core Features',
-            'High-level toggles. Disable features here to hide lower-level configuration.',
-            false
+        const deliverySection = createCollapsibleSection(
+            containerEl,
+            'Essentials',
+            'The core transport and connection settings you are most likely to change.',
+            true
         );
 
-        new Setting(features)
+        new Setting(deliverySection)
             .setName('Enable delivery transport')
             .setDesc('Master toggle for outbound notification delivery.')
             .addToggle(toggle => toggle
@@ -89,7 +85,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
                     this.display();
                 }));
 
-        new Setting(features)
+        new Setting(deliverySection)
             .setName('Enable manual composer command')
             .setDesc('Registers the “Send Custom Notification” command in the command palette.')
             .addToggle(toggle => toggle
@@ -100,15 +96,10 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
                     this.display();
                 }));
 
-        const connection = createCollapsibleSection(
-            automationCategory,
-            'Connection',
-            'Server, topic, and delivery priority. These are the settings you are most likely to change.',
-            false
-        );
+        const connectionSection = deliverySection;
 
         if (this.plugin.settings.enabled ?? true) {
-            new Setting(connection)
+            new Setting(connectionSection)
                 .setName('ntfy Server')
                 .setDesc('The ntfy server URL (e.g., https://ntfy.sh)')
                 .addText(text => text
@@ -119,7 +110,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
                         void debouncedSave();
                     }));
 
-            new Setting(connection)
+            new Setting(connectionSection)
                 .setName('ntfy Topic')
                 .setDesc('Your unique topic name')
                 .addText(text => text
@@ -130,7 +121,7 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
                         void debouncedSave();
                     }));
 
-            new Setting(connection)
+            new Setting(connectionSection)
                 .setName('Priority')
                 .setDesc('Notification priority (1-5)')
                 .addSlider(slider => slider
@@ -142,38 +133,21 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }));
         } else {
-            connection.createEl('p', {
+            connectionSection.createEl('p', {
                 text: 'Delivery transport is disabled. Enable it above to configure server/topic settings.',
                 cls: 'setting-item-description'
             });
         }
 
-        const diagnostics = createCollapsibleSection(
-            maintenanceCategory,
-            'Diagnostics & Debug',
-            'Optional tools for verifying delivery and troubleshooting.',
-            false
-        );
-
-        new Setting(diagnostics)
-            .setName('Enable Logging')
-            .setDesc('Log detailed info to console')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.enableLogging)
-                .onChange(async (value) => {
-                    this.plugin.settings.enableLogging = value;
-                    await this.plugin.saveSettings();
-                }));
-
         if ((this.plugin.settings.enabled ?? true) && (this.plugin.settings.enableManualComposer ?? true)) {
-            const composer = createCollapsibleSection(
-                maintenanceCategory,
-                'Manual Composer',
+            const composerSection = createCollapsibleSection(
+                containerEl,
+                'Manual / Test Tools',
                 'Command and test payload tooling for manual sends.',
                 false
             );
 
-            new Setting(composer)
+            new Setting(composerSection)
                 .setName('Send Test Notification')
                 .setDesc('Send a test notification to verify connection')
                 .addButton(button => button
@@ -191,6 +165,19 @@ export class TPSMessagerSettingTab extends PluginSettingTab {
                         button.setDisabled(false);
                     }));
         }
+
+        const debugGroup = createSettingsGroup(containerEl, 'Debug', 'Troubleshooting output for this plugin only.');
+
+        new Setting(debugGroup)
+            .setName('Enable Logging')
+            .setDesc('Log detailed info to console')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.enableLogging)
+                .onChange(async (value) => {
+                    this.plugin.settings.enableLogging = value;
+                    await this.plugin.saveSettings();
+                }));
+
         this.restoreSettingsViewState(containerEl);
     }
 

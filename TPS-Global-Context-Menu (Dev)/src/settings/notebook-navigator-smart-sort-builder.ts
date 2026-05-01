@@ -1,7 +1,9 @@
-import { App, ButtonComponent, Notice, Setting, TextComponent } from 'obsidian';
+import { App, ButtonComponent, Notice, Setting, TFile, TextComponent } from 'obsidian';
 import type TPSGlobalContextMenuPlugin from '../main';
-import type { RuleCondition, SortBucket, SortCriteria, SortFieldType, SmartSortSettings } from '../../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
+import type { RuleCondition, SortBucket, SortCriteria, SortFieldType, SmartSortSettings } from '../types';
+import { applyRulesToFile, getSmartSortPreviewForFile } from '../utils/rule-resolver';
 import {
+  NOTEBOOK_NAVIGATOR_FOLDERPATH_GUIDANCE,
   NOTEBOOK_NAVIGATOR_RULE_SOURCE_OPTIONS,
   createDefaultCondition,
   getConditionPlaceholder,
@@ -26,18 +28,18 @@ type SmartSortBuilderOptions = {
 
 const PRIORITY_MAPPING = 'high=001, medium=002, low=003';
 const STATUS_MAPPING = 'todo=001, working=002, holding=003, complete=004, wont-do=005';
-const SORT_SOURCE_OPTIONS = [
-  'frontmatter',
-  'parent-frontmatter',
-  'name',
-  'parent-name',
-  'path',
-  'parent-path',
-  'tag',
-  'parent-tag',
-  'tag-note-name',
-  'extension',
-] as const;
+const SORT_SOURCE_OPTIONS: Array<{ value: SortCriteria['source']; label: string }> = [
+  { value: 'frontmatter', label: 'Frontmatter' },
+  { value: 'parent-frontmatter', label: 'Parent frontmatter' },
+  { value: 'name', label: 'Note name' },
+  { value: 'parent-name', label: 'Parent name' },
+  { value: 'path', label: 'Actual file path' },
+  { value: 'parent-path', label: 'Actual parent file path' },
+  { value: 'tag', label: 'Tag' },
+  { value: 'parent-tag', label: 'Parent tag' },
+  { value: 'tag-note-name', label: 'Tag note name' },
+  { value: 'extension', label: 'Extension' },
+];
 const SORT_TYPE_OPTIONS: SortFieldType[] = ['date', 'status', 'priority', 'text', 'number'];
 
 export class NotebookNavigatorSmartSortBuilder {
@@ -54,14 +56,16 @@ export class NotebookNavigatorSmartSortBuilder {
       cls: 'setting-item-description',
       text: 'Build smart sort buckets visually. Buckets are checked top-to-bottom and the first match wins.',
     });
+    containerEl.createEl('p', {
+      cls: 'setting-item-description',
+      text: NOTEBOOK_NAVIGATOR_FOLDERPATH_GUIDANCE,
+    });
 
-    const preview = this.getSmartSortPreview();
-    if (preview) {
-      containerEl.createDiv({
-        cls: 'tps-gcm-rule-card-preview',
-        text: `Active note key preview: ${preview}`,
-      });
-    }
+    const previewEl = containerEl.createDiv({
+      cls: 'tps-gcm-rule-card-preview',
+      text: 'Active note key preview: checking...',
+    });
+    void this.updateActivePreview(previewEl);
 
     this.renderSettingsBlock(containerEl, this.getSettings());
 
@@ -87,13 +91,13 @@ export class NotebookNavigatorSmartSortBuilder {
     new ButtonComponent(toolbar)
       .setButtonText('Apply Active Note')
       .onClick(async () => {
-        await this.applyCompanionMethod('applyRulesToActiveFile', false);
+        await this.applyRulesToActiveNote();
       });
 
     new ButtonComponent(toolbar)
       .setButtonText('Apply All Notes')
       .onClick(async () => {
-        await this.applyCompanionMethod('applyRulesToAllFiles', false);
+        await this.applyRulesToAllNotes();
       });
 
     const visibleBuckets = this.getBuckets()
@@ -175,7 +179,6 @@ export class NotebookNavigatorSmartSortBuilder {
 
   private renderBucketCard(parent: HTMLElement, bucket: SortBucket, index: number): void {
     const details = parent.createEl('details', { cls: 'tps-gcm-rule-card' });
-    if (index === 0 || !this.filterQuery) details.open = true;
 
     const summary = details.createEl('summary', { cls: 'tps-gcm-rule-card-summary' });
     summary.createSpan({ cls: 'tps-gcm-rule-chip', text: String(index + 1) });
@@ -211,6 +214,7 @@ export class NotebookNavigatorSmartSortBuilder {
 
     const conditionsSection = body.createDiv({ cls: 'tps-gcm-rule-card-section' });
     conditionsSection.createEl('h5', { text: 'Bucket Match Criteria' });
+    this.renderReliabilityNotes(conditionsSection, bucket);
     new Setting(conditionsSection)
       .setName('Condition match mode')
       .addDropdown((dropdown) => dropdown
@@ -340,7 +344,7 @@ export class NotebookNavigatorSmartSortBuilder {
 
       const row = card.createDiv({ cls: 'tps-gcm-condition-row' });
       new Setting(row).setClass('tps-gcm-no-border').setName('Source').addDropdown((dropdown) => {
-        SORT_SOURCE_OPTIONS.forEach((source) => dropdown.addOption(source, source));
+        SORT_SOURCE_OPTIONS.forEach((source) => dropdown.addOption(source.value, source.label));
         dropdown.setValue(this.normalizeSortSource(criterion.source)).onChange(async (value) => {
           criterion.source = this.normalizeSortSource(value);
           if (criterion.source !== 'frontmatter' && criterion.source !== 'parent-frontmatter') {
@@ -550,7 +554,7 @@ export class NotebookNavigatorSmartSortBuilder {
 
   private normalizeSortSource(value: unknown): SortCriteria['source'] {
     const normalized = String(value || '').trim() as SortCriteria['source'];
-    return SORT_SOURCE_OPTIONS.includes(normalized as (typeof SORT_SOURCE_OPTIONS)[number]) ? normalized : 'frontmatter';
+    return SORT_SOURCE_OPTIONS.some((option) => option.value === normalized) ? normalized : 'frontmatter';
   }
 
   private normalizeSortType(value: unknown): SortFieldType {
@@ -560,7 +564,57 @@ export class NotebookNavigatorSmartSortBuilder {
 
   private getConditionSummary(conditions: RuleCondition[], match: unknown): string {
     const count = Array.isArray(conditions) ? conditions.length : 0;
-    return count === 0 ? 'matches all notes' : `${count} condition${count === 1 ? '' : 's'} (${normalizeMatchMode(match)})`;
+    if (count === 0) {
+      return 'matches all notes';
+    }
+
+    const scope = this.getScopeSummary(conditions);
+    return scope
+      ? `${count} condition${count === 1 ? '' : 's'} (${normalizeMatchMode(match)}) - ${scope}`
+      : `${count} condition${count === 1 ? '' : 's'} (${normalizeMatchMode(match)})`;
+  }
+
+  private renderReliabilityNotes(parent: HTMLElement, bucket: SortBucket): void {
+    for (const note of this.getReliabilityNotes(bucket)) {
+      parent.createEl('p', {
+        cls: 'setting-item-description',
+        text: `Reliability note: ${note}`,
+      });
+    }
+  }
+
+  private getReliabilityNotes(bucket: SortBucket): string[] {
+    const notes = new Set<string>();
+    if ((bucket.conditions || []).some((condition) => condition.source === 'path' || condition.source === 'parent-path')) {
+      notes.add('Bucket path conditions use the real filesystem path. Use Frontmatter + field folderPath for root-vault organization.');
+    }
+    if ((bucket.sortCriteria || []).some((criterion) => criterion.source === 'path' || criterion.source === 'parent-path')) {
+      notes.add('Sort criteria using path sources read the real filesystem path, not frontmatter.folderPath.');
+    }
+    return Array.from(notes);
+  }
+
+  private getScopeSummary(conditions: RuleCondition[]): string {
+    const folderPathCondition = (conditions || []).find((condition) =>
+      condition.source === 'frontmatter'
+      && String(condition.field || '').trim().toLowerCase() === 'folderpath'
+      && usesConditionValue(condition.operator)
+      && String(condition.value || '').trim().length > 0,
+    );
+    if (folderPathCondition) {
+      return `folderPath ${folderPathCondition.operator} ${String(folderPathCondition.value || '').trim()}`;
+    }
+
+    const actualPathCondition = (conditions || []).find((condition) =>
+      (condition.source === 'path' || condition.source === 'parent-path')
+      && usesConditionValue(condition.operator)
+      && String(condition.value || '').trim().length > 0,
+    );
+    if (!actualPathCondition) {
+      return '';
+    }
+
+    return `${actualPathCondition.source === 'parent-path' ? 'actual parent path' : 'actual path'} ${actualPathCondition.operator} ${String(actualPathCondition.value || '').trim()}`;
   }
 
   private getCriteriaSummary(criteria: SortCriteria[]): string {
@@ -568,10 +622,18 @@ export class NotebookNavigatorSmartSortBuilder {
     return count === 0 ? 'basename fallback only' : `${count} sort criterion${count === 1 ? '' : 'criteria'}`;
   }
 
-  private getSmartSortPreview(): string | null {
-    const companion = (this.options.app as any)?.plugins?.getPlugin?.('tps-notebook-navigator-companion')
-      ?? (this.options.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-    return companion?.getSmartSortPreviewForActiveFile?.() ?? null;
+  private async updateActivePreview(previewEl: HTMLElement): Promise<void> {
+    const file = this.options.app.workspace.getActiveFile();
+    if (!(file instanceof TFile) || file.extension !== 'md') {
+      previewEl.setText('Active note key preview: no active markdown file.');
+      return;
+    }
+
+    const preview = await getSmartSortPreviewForFile(this.options.app, file);
+    if (!previewEl.isConnected) return;
+    previewEl.setText(preview
+      ? `Active note key preview: ${preview}`
+      : 'Active note key preview: no sort key would be written.');
   }
 
   private async persist(structureChanged: boolean): Promise<void> {
@@ -580,14 +642,21 @@ export class NotebookNavigatorSmartSortBuilder {
     if (structureChanged) this.options.onStructureChange();
   }
 
-  private async applyCompanionMethod(method: 'applyRulesToActiveFile' | 'applyRulesToAllFiles', silent: boolean): Promise<void> {
-    const companion = (this.options.app as any)?.plugins?.getPlugin?.('tps-notebook-navigator-companion')
-      ?? (this.options.app as any)?.plugins?.plugins?.['tps-notebook-navigator-companion'];
-    if (!companion?.[method]) {
-      new Notice('Notebook Navigator Companion is not available.');
+  private async applyRulesToActiveNote(): Promise<void> {
+    const file = this.options.app.workspace.getActiveFile();
+    if (!(file instanceof TFile) || file.extension !== 'md') {
+      new Notice('No active markdown file.');
       return;
     }
-    await companion[method](silent);
+
+    await applyRulesToFile(this.options.app, file, 'gcm-settings-active');
+  }
+
+  private async applyRulesToAllNotes(): Promise<void> {
+    const files = this.options.app.vault.getMarkdownFiles();
+    for (const file of files) {
+      await applyRulesToFile(this.options.app, file, 'gcm-settings-all');
+    }
   }
 
   private matchesFilter(bucket: SortBucket, bucketNumber: number, rawQuery: string): boolean {
