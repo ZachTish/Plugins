@@ -474,11 +474,6 @@
       "tag": false,
       "property": false
     },
-    "_templates/Action Item Template.md": {
-      "folder": true,
-      "tag": false,
-      "property": false
-    },
     "_templates/Daily Note Template.md": {
       "folder": true,
       "tag": false,

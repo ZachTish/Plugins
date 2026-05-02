@@ -2058,7 +2058,7 @@
   "archiveFolderPath": "Archive",
   "archiveFolderMode": "monthly",
   "archiveUseDailyFolder": false,
-  "lastArchiveTagSweepDate": "2026-05-01",
+  "lastArchiveTagSweepDate": "2026-05-02",
   "workspaceRibbonButtons": false,
   "workspaceRibbonIcons": {
     "Calendar": "calendar"

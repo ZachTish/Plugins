@@ -75,7 +75,10 @@ import {
 } from "./utils/external-calendar-destination";
 import { normalizeCalendarIconName } from "./utils/calendar-presentation";
 import { resolveMainAreaLeaf } from "./utils/workspace-leaf";
-import { RuleEvaluationContext } from "../../TPS-Notebook-Navigator-Companion (Dev)/src/types";
+import {
+  evaluateIconColorRules,
+  type RuleEvaluationContext,
+} from "../../TPS-Global-Context-Menu (Dev)/src/utils/rule-resolver";
 
 export const CalendarViewType = "calendar";
 
@@ -4311,11 +4314,11 @@ export class CalendarView extends BasesView {
   }
 
   private computeTaskVisualStyleFromRules(file: TFile, task: ParsedTaskItem): { iconName: string | null; colorValue: string | null } {
-    const companion = this.getNotebookNavigatorCompanion();
-    const useApiResolver = typeof companion?.api?.resolveVisualOutputsForContext === "function";
-    const useEngineResolver = typeof companion?.ruleEngine?.resolveVisualOutputs === "function";
-    const rules = Array.isArray(companion?.settings?.rules) ? companion.settings.rules : [];
-    if ((!useApiResolver && !useEngineResolver) || !companion?.settings?.enabled || rules.length === 0) {
+    const gcm = (this.app as any)?.plugins?.plugins?.["tps-global-context-menu"]
+      ?? (this.app as any)?.plugins?.plugins?.["TPS-Global-Context-Menu (Dev)"]
+      ?? null;
+    const rules = Array.isArray(gcm?.settings?.notebookNavigatorRules) ? gcm.settings.notebookNavigatorRules : [];
+    if (!gcm?.settings?.enabled || rules.length === 0) {
       return { iconName: null, colorValue: null };
     }
 
@@ -4398,9 +4401,7 @@ export class CalendarView extends BasesView {
     };
 
     try {
-      const visual = useApiResolver
-        ? companion.api.resolveVisualOutputsForContext(taskContext)
-        : companion.ruleEngine.resolveVisualOutputs(rules, taskContext);
+      const visual = evaluateIconColorRules(this.app, rules, taskContext);
       const iconName = String(visual?.icon?.value || "").trim() || null;
       const colorValue = String(visual?.color?.value || "").trim() || null;
       this.taskVisualStyleCache.set(file.path, {

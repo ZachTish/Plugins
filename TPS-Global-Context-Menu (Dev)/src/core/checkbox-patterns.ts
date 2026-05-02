@@ -59,6 +59,9 @@ export function getCheckboxPatterns(app: App): typeof CheckboxPatterns {
     if (_cachedPatterns === undefined) {
         _cachedPatterns = resolveControllerPatterns(app) ?? CheckboxPatterns;
     }
+    if (_cachedPatterns === null || _cachedPatterns === undefined) {
+        return CheckboxPatterns;
+    }
     return _cachedPatterns;
 }
 

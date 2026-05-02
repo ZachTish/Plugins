@@ -3,7 +3,7 @@
   "syncTitleFromFilename": false,
   "syncFilenameFromTitle": false,
   "statusClickFlow": [],
-  "tagPageFolder": "",
+  "tagPageFolder": "_tags",
   "tagPageFileType": "canvas",
   "createTagPageOnOpen": true,
   "propertyPageFolder": "_properties",

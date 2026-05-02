@@ -105,6 +105,10 @@ export function useCalendarEvents({
           : (calEntry.backgroundColor || "var(--background-modifier-border)");
       const backgroundColor = effectiveColor;
       const borderColor = calEntry.borderColor || (isAdditionalDateSource ? "var(--background-modifier-border)" : backgroundColor);
+      const taskColor = calEntry.isTask && !isAdditionalDateSource ? backgroundColor : "";
+      const eventMinHeightValue = calEntry.isTask && !isAllDayTask(calEntry)
+        ? Math.max(0, Math.min(minEventHeight, 10))
+        : minEventHeight;
 
       const allDaySource = allDayProperty
         ? tryGetValue(calEntry.entry, allDayProperty)
@@ -173,8 +177,9 @@ export function useCalendarEvents({
           iconName: calEntry.iconName,
           iconColor: calEntry.iconColor,
           status: calEntry.status,
-          priorityColor: isAdditionalDateSource ? "" : backgroundColor,
-          minEventHeight,
+          priorityColor: calEntry.isTask || isAdditionalDateSource ? "" : backgroundColor,
+          taskColor,
+          minEventHeight: eventMinHeightValue,
           isExternal: calEntry.isExternal,
           isAdditionalDateSource,
           externalEvent: calEntry.externalEvent,
@@ -222,3 +227,7 @@ export function useCalendarEvents({
 
 // Re-export helpers used by other modules in CalendarReactView
 export { normalizeValue, isDateValue, tryGetValue };
+
+function isAllDayTask(entry: CalendarEntry): boolean {
+  return !!entry.isTask && !entry.taskTimed;
+}

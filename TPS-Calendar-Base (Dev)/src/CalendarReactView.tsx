@@ -583,6 +583,7 @@ const compareRenderedCalendarEvents = (left: any, right: any): number => {
   if (!left && !right) return 0;
   if (!left) return 1;
   if (!right) return -1;
+
   return compareCalendarOrderValues(
     {
       sortKey: left.extendedProps?.sortKey,
@@ -1865,8 +1866,15 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
       }
 
       const priorityColor = (event.extendedProps.priorityColor as string | undefined) ?? "";
+      const taskColor = (event.extendedProps.taskColor as string | undefined) ?? "";
+      const isTaskEvent = !!event.extendedProps?.isTask;
       const isAdditionalDateSource = !!event.extendedProps?.isAdditionalDateSource;
-      if (priorityColor) {
+      if (isTaskEvent && taskColor) {
+        element.style.setProperty("--priority-color", taskColor);
+        element.style.setProperty("background", taskColor, "important");
+        element.style.setProperty("background-image", "none", "important");
+        element.style.setProperty("border-color", taskColor, "important");
+      } else if (priorityColor) {
         element.style.setProperty("--priority-color", priorityColor);
         element.style.setProperty("background", priorityColor, "important");
         element.style.setProperty(
