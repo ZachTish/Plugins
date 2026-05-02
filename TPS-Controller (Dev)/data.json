@@ -17,7 +17,7 @@
       "autoCreateTag": "hca",
       "autoCreateTemplate": "",
       "autoCreateMode": "task-list",
-      "autoCreateTaskListPath": "02 Lists/Hca Calendar.md"
+      "autoCreateTaskListPath": "/Hca Calendar.md"
     },
     {
       "id": "calendar-1770138596600-4208",
@@ -30,7 +30,7 @@
       "autoCreateTag": "exercise",
       "autoCreateTemplate": "",
       "autoCreateMode": "task-list",
-      "autoCreateTaskListPath": "02 Lists/Workouts.md"
+      "autoCreateTaskListPath": "/Workouts.md"
     }
   ],
   "syncBackfillDays": 5,

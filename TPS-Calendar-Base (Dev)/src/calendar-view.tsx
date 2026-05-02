@@ -191,6 +191,7 @@ export class CalendarView extends BasesView {
   private pendingSessionHeadingRefreshPaths: Set<string> = new Set();
   private lastSessionHeadingsFetch: number = 0;
   private taskVisualStyleCache: Map<string, { key: string; iconName: string | null; colorValue: string | null }> = new Map();
+  private syncingTaskVisualPaths: Set<string> = new Set();
   private cachedExternalSuppressionState: {
     suppressedExternalEventIds: Set<string>;
     suppressedExternalUidStartByUid: Map<string, number[]>;
@@ -4283,8 +4284,8 @@ export class CalendarView extends BasesView {
   }
 
   private applyTaskVisualInlineProperties(line: string, iconName: string | null, colorValue: string | null): string {
-    const iconRe = /\s*\[(icon|iconname|icon-name)::\s*[^\]]+\]/i;
-    const colorRe = /\s*\[(color|iconcolor|icon-color)::\s*[^\]]+\]/i;
+    const iconRe = /\s*\[(icon|iconname|icon-name)::\s*[^\]]*\]/i;
+    const colorRe = /\s*\[(color|iconcolor|icon-color)::\s*[^\]]*\]/i;
     let updated = String(line || "");
 
     if (iconName && iconName.trim()) {
@@ -4295,7 +4296,7 @@ export class CalendarView extends BasesView {
     }
 
     if (colorValue && colorValue.trim()) {
-      const prop = `[color:: ${colorValue.trim()}]`;
+      const prop = `[color:: ${this.serializeTaskInlineColorValue(colorValue)}]`;
       updated = colorRe.test(updated) ? updated.replace(colorRe, ` ${prop}`) : `${updated} ${prop}`;
     } else {
       updated = updated.replace(colorRe, "");
@@ -4304,13 +4305,34 @@ export class CalendarView extends BasesView {
     return updated.replace(/\s{2,}/g, " ").trimEnd();
   }
 
+  private serializeTaskInlineColorValue(colorValue: string): string {
+    const value = String(colorValue || "").trim();
+    if (!value) return "";
+
+    const normalizedHex = this.normalizeTaskInlineHexColor(value);
+    return normalizedHex || value;
+  }
+
+  private normalizeTaskInlineHexColor(value: string): string | null {
+    const raw = String(value || "").trim();
+    const match = raw.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (!match) return null;
+
+    const hex = match[1];
+    if (hex.length === 3) {
+      return hex.split("").map((char) => char + char).join("").toLowerCase();
+    }
+
+    return hex.toLowerCase();
+  }
+
   private getTaskStatusFromMarker(marker: string): string {
     const normalized = String(marker || "").trim();
     if (/^[xX]$/.test(normalized)) return "complete";
     if (normalized === "-") return "wont-do";
     if (normalized === "/") return "working";
     if (normalized === "?") return "holding";
-    return "todo";
+    return "open";
   }
 
   private computeTaskVisualStyleFromRules(file: TFile, task: ParsedTaskItem): { iconName: string | null; colorValue: string | null } {
@@ -4623,6 +4645,60 @@ export class CalendarView extends BasesView {
     return true;
   }
 
+  private async applyNotebookNavigatorRulesToFile(file: TFile, reason = "calendar-task-sync"): Promise<boolean> {
+    const gcmApi = (this.app as any)?.plugins?.getPlugin?.("tps-global-context-menu")?.api
+      ?? (this.app as any)?.plugins?.plugins?.["TPS-Global-Context-Menu (Dev)"]?.api
+      ?? null;
+    if (typeof gcmApi?.applyRulesToFile !== "function") return false;
+
+    try {
+      const result = await gcmApi.applyRulesToFile(file, reason);
+      return result !== false;
+    } catch {
+      return false;
+    }
+  }
+
+  private async syncTaskVisualPropertiesForFile(file: TFile): Promise<boolean> {
+    if (this.syncingTaskVisualPaths.has(file.path)) return false;
+    this.syncingTaskVisualPaths.add(file.path);
+
+    try {
+      const content = await this.app.vault.read(file);
+      const tasks = parseTasksFromContent(content, file.path, this.isKanbanBoardFile(file), null);
+      if (!tasks.length) {
+        return await this.applyNotebookNavigatorRulesToFile(file, "calendar-task-sync-empty");
+      }
+
+      const lines = content.split("\n");
+      let changed = false;
+
+      for (const task of tasks) {
+        if (task.lineNumber < 0 || task.lineNumber >= lines.length) continue;
+        const currentLine = lines[task.lineNumber];
+        const resolved = this.computeTaskVisualStyleFromRules(file, task);
+        const nextLine = this.applyTaskVisualInlineProperties(currentLine, resolved.iconName, resolved.colorValue);
+        if (nextLine === currentLine) continue;
+        lines[task.lineNumber] = nextLine;
+        changed = true;
+      }
+
+      if (changed) {
+        await this.app.vault.modify(file, lines.join("\n"));
+      }
+
+      const frontmatterChanged = await this.applyNotebookNavigatorRulesToFile(file, changed ? "calendar-task-sync" : "calendar-task-sync-frontmatter");
+      if (!changed && !frontmatterChanged) return false;
+
+      this.taskVisualStyleCache.delete(file.path);
+      this.lastTaskItemsFetch = 0;
+      await this.refreshTaskItemsForFile(file);
+      return true;
+    } finally {
+      this.syncingTaskVisualPaths.delete(file.path);
+    }
+  }
+
   private async setTaskLinkedNote(task: ParsedTaskItem, fallbackPath: string, linkedFile: TFile): Promise<void> {
     const updated = await this.mutateTaskItemLine(task, fallbackPath, (line, hostFile) => {
       const linkTarget = buildParentLinkTarget(this.app, hostFile.path, linkedFile);
@@ -4675,7 +4751,7 @@ export class CalendarView extends BasesView {
   ): Promise<boolean> {
     const escaped = propertyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return await this.mutateTaskItemLine(task, fallbackPath, (line) => {
-      const propertyRe = new RegExp(`\\s*\\[${escaped}::\\s*[^\\]]+\\]`, "i");
+      const propertyRe = new RegExp(`\\s*\\[${escaped}::\\s*[^\\]]*\\]`, "i");
       if (!value || !String(value).trim()) {
         return line.replace(propertyRe, "");
       }
@@ -4768,6 +4844,7 @@ export class CalendarView extends BasesView {
     const dateField = settings.taskDateField;
     const entries: CalendarEntry[] = [];
     const doneStatuses = new Set(this.buildDoneStatuses());
+    const seenTaskEventKeys = new Set<string>();
 
     for (const task of this.cachedRawTaskItems) {
       if (!settings.showCompletedTaskItems && task.isCompleted) continue;
@@ -4832,6 +4909,19 @@ export class CalendarView extends BasesView {
       if (taskStatus) {
         cssClasses.push(`bases-calendar-event-status-${taskStatus}`);
       }
+
+      const taskIdentityKey = [
+        abstractFile.path,
+        task.externalEventId || "",
+        task.calendarUid || "",
+        startDate.getTime(),
+        endDate.getTime(),
+        task.text || "",
+      ].join("::");
+      if (seenTaskEventKeys.has(taskIdentityKey)) {
+        continue;
+      }
+      seenTaskEventKeys.add(taskIdentityKey);
 
       entries.push({
         entry: this.createTaskEntryFromItem(abstractFile, task),
@@ -6938,6 +7028,10 @@ export class CalendarView extends BasesView {
       });
       if (this.plugin.settings.showTaskItems) {
         this.scheduleRefresh(0);
+      }
+
+      if (allowedInCurrentView) {
+        void this.syncTaskVisualPropertiesForFile(file);
       }
     } catch (err) {
       logger.error("[CalendarView] Failed to refresh task items for file:", err);

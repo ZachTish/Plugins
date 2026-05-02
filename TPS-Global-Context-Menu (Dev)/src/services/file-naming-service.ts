@@ -132,6 +132,10 @@ export class FileNamingService {
         this.processingFiles.add(lockKey);
 
         try {
+            if (this.plugin.settings.enableAutoRename && this.isDateOnlyBasename(liveFile.basename)) {
+                await this.normalizeDailyNoteFilenameAndTitle(liveFile);
+            }
+
             if (!skipFrontmatterWrites && this.isDateOnlyBasename(liveFile.basename)) {
                 await this.plugin.frontmatterMutationService.process(liveFile, (frontmatter: any) => {
                     const mergedTags = mergeNormalizedTags(frontmatter.tags, 'dailynote');
@@ -340,9 +344,7 @@ export class FileNamingService {
             const rawBasename = (liveFile.basename || '').trim();
             if (!rawBasename) return "skipped";
 
-            // Date-only files (daily notes) are owned by the Companion
-            // plugin for title sync. Skip them here to avoid fighting over title values.
-            if (this.isDateOnlyBasename(rawBasename)) return "skipped";
+            if (this.isDateOnlyBasename(rawBasename) && !options.force) return "skipped";
 
             // Avoid writing clearly-stale template-derived titles
             if (rawBasename.toLowerCase().includes('template')) return "skipped";
@@ -796,6 +798,37 @@ export class FileNamingService {
 
     private shouldSkipAutoFrontmatterWrite(file: TFile): boolean {
         return this.plugin.shouldIgnoreAutoFrontmatterWrite(file);
+    }
+
+    private async normalizeDailyNoteFilenameAndTitle(file: TFile): Promise<void> {
+        const liveFile = this.getLiveFile(file);
+        if (!liveFile) return;
+
+        const currentFormat = this.getDailyNoteDateFormat();
+        const parsed = parseDateFromFilename(liveFile.basename, currentFormat);
+        if (!parsed || !parsed.isValid?.() || !parsed.isValid()) {
+            await this.syncTitleFromFilenameWithOptions(liveFile, { force: true, bypassCreationGrace: true });
+            return;
+        }
+
+        const expectedBasename = this.sanitizeFilename(parsed.format(currentFormat));
+        const expectedPath = liveFile.parent
+            ? `${liveFile.parent.path}/${expectedBasename}.md`
+            : `${expectedBasename}.md`;
+
+        let targetFile = liveFile;
+        if (this.normalizeBasenameForCompare(liveFile.basename) !== this.normalizeBasenameForCompare(expectedBasename)) {
+            const existing = this.plugin.app.vault.getAbstractFileByPath(expectedPath);
+            if (!existing || existing === liveFile) {
+                await this.plugin.app.fileManager.renameFile(liveFile, expectedPath);
+                const renamed = this.plugin.app.vault.getAbstractFileByPath(expectedPath);
+                if (renamed instanceof TFile) {
+                    targetFile = renamed;
+                }
+            }
+        }
+
+        await this.syncTitleFromFilenameWithOptions(targetFile, { force: true, bypassCreationGrace: true });
     }
 
     private hasRecentFolderPathWrite(path: string, value: string): boolean {

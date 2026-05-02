@@ -687,6 +687,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   const [navScrollHidden, setNavScrollHidden] = useState(false);
   // Accumulator state for direction-based scroll hiding (same pattern as GCM).
   const navScrollStateRef = useRef({ lastTop: 0, accum: 0 });
+  const timeGridEventMinHeight = 0;
 
   const dragCounterRef = useRef(0);
   const eventContextMenuHandlersRef = useRef(new Map<HTMLElement, (event: MouseEvent) => void>());
@@ -1963,12 +1964,6 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
         (element as any)._tpsDragStartHandler = handleDragStart;
         element.addEventListener("dragstart", handleDragStart);
       }
-      if (!event.allDay) {
-        const eventMinHeight = event.extendedProps.minEventHeight as number | undefined;
-        if (typeof eventMinHeight === "number" && Number.isFinite(eventMinHeight) && eventMinHeight > 0) {
-          element.style.minHeight = `${eventMinHeight}px`;
-        }
-      }
 
       let top = element.querySelector(".bases-calendar-time-top") as HTMLElement;
       let bottom = element.querySelector(".bases-calendar-time-bottom") as HTMLElement;
@@ -2957,6 +2952,9 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
               selectMirror={allowSelect}
               selectOverlap={allowSelect}
               selectAllow={allowSelect ? handleSelectAllow : undefined}
+              eventOrderStrict={true}
+              eventOverlap={false}
+              eventMinHeight={timeGridEventMinHeight}
               slotEventOverlap={false}
               select={allowSelect ? handleSelect : undefined}
               selectLongPressDelay={isMobile ? 600 : 300}
@@ -3038,6 +3036,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
               currentDate={currentDate}
               events={eventsWithExternalDropPreview}
               allDayMaxRows={allDayMaxRows}
+              minEventHeight={timeGridEventMinHeight}
               slotMinTimeValue={slotMinTimeValue}
               slotMaxTimeValue={slotMaxTimeValue}
               defaultScrollTime={DEFAULT_SCROLL_TIME}

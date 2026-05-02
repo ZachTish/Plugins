@@ -549,7 +549,9 @@ export class NewEventService {
     for (const [rawKey, rawValue] of Object.entries(merged)) {
       const key = String(rawKey || "").trim();
       if (!key || reservedKeys.has(key.toLowerCase())) continue;
-      const formattedValue = this.formatTaskInlinePropertyValue(rawValue);
+      const formattedValue = this.isTaskVisualColorPropertyKey(key)
+        ? this.formatTaskInlineColorPropertyValue(rawValue)
+        : this.formatTaskInlinePropertyValue(rawValue);
       if (!formattedValue) continue;
       properties.push(`[${key}:: ${formattedValue}]`);
     }
@@ -580,6 +582,26 @@ export class NewEventService {
       return String(value);
     }
     return null;
+  }
+
+  private isTaskVisualColorPropertyKey(key: string): boolean {
+    const normalized = String(key || "").trim().toLowerCase();
+    return normalized === "color" || normalized === "iconcolor" || normalized === "icon-color";
+  }
+
+  private formatTaskInlineColorPropertyValue(value: unknown): string | null {
+    const formatted = this.formatTaskInlinePropertyValue(value);
+    if (!formatted) return null;
+
+    const match = formatted.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (!match) return formatted;
+
+    const hex = match[1];
+    if (hex.length === 3) {
+      return hex.split("").map((char) => char + char).join("").toLowerCase();
+    }
+
+    return hex.toLowerCase();
   }
 
   private insertLineAtTopOfBody(content: string, line: string): string {

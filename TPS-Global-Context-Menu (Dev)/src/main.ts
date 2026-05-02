@@ -279,6 +279,12 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     // Check for missing recurrences on startup; build workspace ribbon buttons
     this.app.workspace.onLayoutReady(async () => {
       this.workspaceRibbonService.setup();
+      const activeFile = this.app.workspace.getActiveFile();
+      if (activeFile instanceof TFile) {
+        void this.dailyNoteNavManager.syncScheduledFrontmatterOnOpen(activeFile);
+        void this.fileNamingService.processFileOnOpen(activeFile, { bypassCreationGrace: true });
+        void this.taskCheckboxHandler.syncTaskVisualPropertiesForFile(activeFile);
+      }
       // Wait for metadataCache to finish initial indexing before scanning for
       // missing recurrences. 'resolved' fires once indexing completes; the
       // 6-second fallback handles edge cases where the event fires before we

@@ -139,7 +139,10 @@ export class CalendarAutomationService {
         }
 
         const scanRoots = this.buildScanRoots(calendars, settings.archiveFolder);
-        if (!scanRoots.length) {
+        const hasTaskListMode = calendars.some(
+            (calendar) => calendar.enabled !== false && (calendar.autoCreateMode || 'note') === 'task-list',
+        );
+        if (!scanRoots.length && !hasTaskListMode) {
             logger.warn("📅 Skipping calendar sync: no scoped calendar folders configured (vault-wide scan is disabled).");
             if (force) new Notice("Calendar sync skipped: no destination folders configured for any calendar.");
             return;

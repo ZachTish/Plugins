@@ -45,8 +45,10 @@ export function useEventRenderer({
       const taskIsDone = !!props.taskIsDone;
       const iconName = typeof props.iconName === "string" ? props.iconName.trim() : "";
       const iconColor = typeof props.iconColor === "string" ? props.iconColor.trim() : "";
+      const taskColor = typeof props.taskColor === "string" ? props.taskColor.trim() : "";
       const eventHasColoredBackground = Boolean(eventInfo.event.backgroundColor || props.backgroundColor);
       const resolvedIconColor = iconColor || (eventHasColoredBackground ? "var(--text-on-accent)" : "currentColor");
+      const resolvedCheckboxColor = taskColor || iconColor || (eventHasColoredBackground ? "var(--text-on-accent)" : "currentColor");
 
       const propertyChips: React.ReactElement[] = [];
       if (isTask && sanitizedProperties && sanitizedProperties.length > 0) {
@@ -143,7 +145,7 @@ export function useEventRenderer({
               {iconName
                 ? <EventIcon iconName={iconName} color={resolvedIconColor} />
                 : isTask
-                  ? renderTaskCheckboxIcon(taskCheckboxState, 12, "var(--text-on-accent)")
+                  ? renderTaskCheckboxIcon(taskCheckboxState, 12, resolvedCheckboxColor)
                   : null}
               {hasRenderableTitleValue ? (
                 <RenderedValue
@@ -231,7 +233,7 @@ export function useEventRenderer({
             {iconName
               ? <EventIcon iconName={iconName} color={resolvedIconColor} />
               : isTask
-                ? renderTaskCheckboxIcon(taskCheckboxState, 14, "var(--text-on-accent)")
+                ? renderTaskCheckboxIcon(taskCheckboxState, 14, resolvedCheckboxColor)
                 : null}
             {hasRenderableTitleValue ? (
               <RenderedValue

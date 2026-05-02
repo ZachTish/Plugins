@@ -1,8 +1,11 @@
-import { App, Menu, TFile, MarkdownView } from 'obsidian';
+import { App, Menu, TFile, MarkdownView, getAllTags } from 'obsidian';
 import * as logger from '../logger';
 import type TPSGlobalContextMenuPlugin from '../main';
 import { StatusChoiceModal } from '../modals/status-choice-modal';
 import { CheckboxPatterns, type CheckboxStateChar } from '../core';
+import { applyRulesToFile as applyRulesToFileShared, evaluateIconColorRules } from '../utils/rule-resolver';
+import type { RuleEvaluationContext } from '../types';
+import { normalizeTagValue } from '../utils/tag-utils';
 
 /**
  * Handles task checkbox context actions and long-press state selection.
@@ -31,6 +34,27 @@ export class TaskCheckboxHandler {
             window.clearTimeout(this.longPressTimerId);
             this.longPressTimerId = null;
         }
+    }
+
+    async syncTaskVisualPropertiesForFile(file: TFile): Promise<boolean> {
+        if (!(file instanceof TFile) || file.extension.toLowerCase() !== 'md') return false;
+
+        const content = await this.app.vault.read(file);
+        const lines = content.split('\n');
+        let changed = false;
+
+        for (let index = 0; index < lines.length; index++) {
+            const currentLine = lines[index];
+            if (!CheckboxPatterns.ANY_CHECKBOX_CONTENT.test(currentLine)) continue;
+            const nextLine = this.applyTaskVisualInlineProperties(file, currentLine);
+            if (nextLine === currentLine) continue;
+            lines[index] = nextLine;
+            changed = true;
+        }
+
+        if (!changed) return false;
+        await this.app.vault.modify(file, lines.join('\n'));
+        return true;
     }
 
     async handleContextMenu(evt: MouseEvent): Promise<void> {
@@ -410,10 +434,11 @@ export class TaskCheckboxHandler {
         const next = this.applyNextTaskStateToLine(lines[candidateLine]);
         if (!next) return false;
         const previousState = this.getTaskLineState(lines[candidateLine]);
-        lines[candidateLine] = next.nextLine;
+        lines[candidateLine] = this.applyTaskVisualInlineProperties(file, next.nextLine);
         const updatedContent = lines.join('\n');
         if (updatedContent === content) return false;
         await this.app.vault.modify(file, updatedContent);
+        await this.applyRulesAfterTaskMutation(file);
         await this.maybeStopTimerOnTerminalState(file, previousState, next.nextState, candidateLine);
         await this.maybePromptToCompleteNote(file, previousState, next.nextState, lines);
         this.scheduleChecklistReorder(file);
@@ -442,20 +467,136 @@ export class TaskCheckboxHandler {
         const previousState = this.getTaskLineState(lines[candidateLine]);
         const nextLine = this.applySpecificTaskStateToLine(lines[candidateLine], targetState);
         if (!nextLine || nextLine === lines[candidateLine]) return false;
-        lines[candidateLine] = nextLine;
+        lines[candidateLine] = this.applyTaskVisualInlineProperties(file, nextLine);
         const updatedContent = lines.join('\n');
         if (updatedContent === content) return false;
         await this.app.vault.modify(file, updatedContent);
+        await this.applyRulesAfterTaskMutation(file);
         await this.maybeStopTimerOnTerminalState(file, previousState, targetState, candidateLine);
         await this.maybePromptToCompleteNote(file, previousState, targetState, lines);
         this.scheduleChecklistReorder(file);
         return true;
     }
 
+    private async applyRulesAfterTaskMutation(file: TFile): Promise<void> {
+        try {
+            await applyRulesToFileShared(this.app, file, 'gcm-task-checkbox-update');
+        } catch (error) {
+            logger.warn('[TPS GCM] Failed reapplying rules after task checkbox mutation', { file: file.path, error });
+        }
+    }
+
     private applySpecificTaskStateToLine(line: string, targetState: CheckboxStateChar): string | null {
         const match = line.match(CheckboxPatterns.CHECKBOX_LINE_CAPTURE);
         if (!match) return null;
         return `${match[1]}[${targetState}] ${match[3] || ''}`.replace(/\s+$/, ' ');
+    }
+
+    private applyTaskVisualInlineProperties(file: TFile, line: string): string {
+        const parsed = this.plugin.itemSemanticsService.parseTaskLine(line);
+        if (!parsed || parsed.kind !== 'task') return line;
+
+        const rules = Array.isArray(this.plugin.settings.notebookNavigatorRules)
+            ? this.plugin.settings.notebookNavigatorRules
+            : [];
+        if (rules.length === 0) return line;
+
+        const cache = this.app.metadataCache.getFileCache(file);
+        const parentFrontmatter = { ...((cache?.frontmatter || {}) as Record<string, unknown>) };
+        const mergedFrontmatter: Record<string, unknown> = { ...parentFrontmatter };
+        for (const [key, value] of Object.entries(parsed.inlineProperties || {})) {
+            const normalizedKey = String(key || '').trim().toLowerCase();
+            if (!normalizedKey || normalizedKey === 'color' || normalizedKey === 'icon') continue;
+            if (value !== undefined && value !== null && String(value).trim()) {
+                mergedFrontmatter[key] = value;
+            }
+        }
+
+        const taskStatus = String(parsed.inlineProperties.status || this.getRuleTaskStatusFromCheckbox(parsed.checkboxState || '[ ]')).trim();
+        if (taskStatus) {
+            mergedFrontmatter.status = taskStatus;
+        }
+        mergedFrontmatter.title = parsed.text;
+        mergedFrontmatter.name = parsed.text;
+        mergedFrontmatter.text = parsed.text;
+        mergedFrontmatter.body = parsed.text;
+
+        const parentTags = new Set<string>();
+        for (const rawTag of getAllTags(cache || {}) || []) {
+            const normalized = normalizeTagValue(rawTag);
+            if (normalized) parentTags.add(normalized);
+        }
+
+        const context: RuleEvaluationContext = {
+            file: {
+                path: `${file.path}::task-checkbox`,
+                name: `${parsed.text || file.basename}.md`,
+                basename: parsed.text || file.basename,
+                extension: 'md',
+            },
+            frontmatter: mergedFrontmatter,
+            tags: Array.from(parentTags),
+            body: parsed.text,
+            parent: {
+                file: {
+                    path: file.path,
+                    name: file.name,
+                    basename: file.basename,
+                    extension: file.extension,
+                },
+                frontmatter: parentFrontmatter,
+                tags: Array.from(parentTags),
+            },
+        };
+
+        let updated = line;
+        try {
+            const visual = evaluateIconColorRules(this.app, rules, context);
+            updated = this.setTaskInlineProperty(updated, 'icon', String(visual?.icon?.value || '').trim() || null);
+            updated = this.setTaskInlineProperty(updated, 'color', this.formatTaskInlineColorValue(visual?.color?.value));
+            return updated;
+        } catch (error) {
+            logger.warn('[TPS GCM] Failed applying task visual inline properties after checkbox update', { file: file.path, error });
+            return line;
+        }
+    }
+
+    private setTaskInlineProperty(line: string, key: string, value: string | null): string {
+        const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const propertyRe = new RegExp(`\\s*\\[${escapedKey}::\\s*[^\\]]*\\]`, 'i');
+        if (!value) {
+            return line.replace(propertyRe, '').replace(/\s{2,}/g, ' ').trimEnd();
+        }
+
+        const propertyText = `[${key}:: ${value}]`;
+        const updated = propertyRe.test(line)
+            ? line.replace(propertyRe, ` ${propertyText}`)
+            : `${line} ${propertyText}`;
+        return updated.replace(/\s{2,}/g, ' ').trimEnd();
+    }
+
+    private formatTaskInlineColorValue(value: unknown): string | null {
+        const formatted = String(value ?? '').trim();
+        if (!formatted) return null;
+
+        const match = formatted.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+        if (!match) return formatted;
+
+        const hex = match[1];
+        if (hex.length === 3) {
+            return hex.split('').map((char) => char + char).join('').toLowerCase();
+        }
+
+        return hex.toLowerCase();
+    }
+
+    private getRuleTaskStatusFromCheckbox(checkboxState: string): string {
+        const normalized = String(checkboxState || '').replace(/^\[|\]$/g, '').trim();
+        if (/^[xX]$/.test(normalized)) return 'complete';
+        if (normalized === '-') return 'wont-do';
+        if (normalized === '/') return 'working';
+        if (normalized === '?') return 'holding';
+        return 'open';
     }
 
     private showTaskStateSelectorMenu(

@@ -794,6 +794,7 @@ export class DailyNoteNavManager extends Component {
         });
         const scheduledDateKey = resolver.parseFilenameToDateKey(file.basename);
         if (!scheduledDateKey) return false;
+        const expectedTitle = String(file.basename || '').trim();
 
         try {
             // userInitiated: true — the date key is derived from the filename, not vault
@@ -801,12 +802,16 @@ export class DailyNoteNavManager extends Component {
             // window. The outer file-open handler intentionally runs this before the
             // isInitialSyncSettled gate for the same reason.
             return await this.plugin.frontmatterMutationService.process(file, (fm: any) => {
+                const existingTitle = String((fm?.title ?? fm?.Title ?? '')).trim();
                 const existing = String((fm?.scheduled ?? fm?.Scheduled ?? '')).trim();
                 const existingMoment = existing ? window.moment(existing) : null;
                 const existingKey = existingMoment?.isValid?.() ? existingMoment.format('YYYY-MM-DD') : '';
                 const isTemplateDerived = /<%[\s\S]*%>/.test(existing) || /\{\{[\s\S]*\}\}/.test(existing);
                 if (!existing || isTemplateDerived || !existingMoment?.isValid?.() || existingKey !== scheduledDateKey) {
                     setValueCaseInsensitive(fm, 'scheduled', scheduledDateKey);
+                }
+                if (expectedTitle && existingTitle !== expectedTitle) {
+                    setValueCaseInsensitive(fm, 'title', expectedTitle);
                 }
                 this.normalizeDailyNoteStatusFrontmatter(fm);
             }, { userInitiated: true });

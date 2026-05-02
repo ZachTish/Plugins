@@ -162,13 +162,68 @@ export function evaluateLocalRules(
  */
 export function isRuleWriteExcluded(app: App, file: TFile, exclusionPatterns?: string): boolean {
   if (!exclusionPatterns) return false;
-  const patterns = exclusionPatterns.split(',').map((p) => p.trim()).filter(Boolean);
+  const patterns = exclusionPatterns.split(/\r?\n|,/).map((p) => p.trim()).filter(Boolean);
   if (patterns.length === 0) return false;
 
-  const filePath = file.path.toLowerCase();
-  for (const pattern of patterns) {
-    const normalized = pattern.toLowerCase();
-    if (filePath.startsWith(normalized) || filePath.includes(`/${normalized}`)) {
+  const normalizedPath = String(file.path || '').trim().replace(/^\/+/, '').replace(/[\/\\]+$/, '').toLowerCase();
+  const normalizedBasename = String(file.basename || '').trim().replace(/^\/+/, '').replace(/[\/\\]+$/, '').toLowerCase();
+  const matchesWildcard = (pattern: string, value: string): boolean => {
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`^${escaped.replace(/\*/g, '.*')}$`, 'i');
+    return regex.test(value);
+  };
+
+  for (const rawPattern of patterns) {
+    const pattern = String(rawPattern || '').trim();
+    if (!pattern) continue;
+    const asLower = pattern.toLowerCase();
+
+    if (asLower.startsWith('re:')) {
+      const source = pattern.slice(3).trim();
+      if (!source) continue;
+      try {
+        const regex = new RegExp(source, 'i');
+        if (regex.test(normalizedPath) || regex.test(normalizedBasename)) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+      continue;
+    }
+
+    if (asLower.startsWith('name:')) {
+      const target = pattern.slice(5).trim().replace(/^\/+/, '').replace(/[\/\\]+$/, '').toLowerCase();
+      if (target && matchesWildcard(target, normalizedBasename)) {
+        return true;
+      }
+      continue;
+    }
+
+    const pathTarget = asLower.startsWith('path:') ? pattern.slice(5).trim() : pattern;
+    const hasTrailingSlash = /[\/\\]$/.test(pathTarget);
+    const normalizedTarget = String(pathTarget || '').trim().replace(/^\/+/, '').replace(/[\/\\]+$/, '').toLowerCase();
+    if (!normalizedTarget) continue;
+
+    if (normalizedTarget.includes('*')) {
+      if (matchesWildcard(normalizedTarget, normalizedPath) || matchesWildcard(normalizedTarget, normalizedBasename)) {
+        return true;
+      }
+      continue;
+    }
+
+    if (hasTrailingSlash) {
+      if (normalizedPath === normalizedTarget || normalizedPath.startsWith(`${normalizedTarget}/`)) {
+        return true;
+      }
+      continue;
+    }
+
+    if (
+      normalizedPath === normalizedTarget ||
+      normalizedPath.startsWith(`${normalizedTarget}/`) ||
+      normalizedBasename === normalizedTarget
+    ) {
       return true;
     }
   }

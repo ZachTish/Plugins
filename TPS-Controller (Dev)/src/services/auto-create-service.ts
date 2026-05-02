@@ -1,10 +1,12 @@
-import { App, TFile, normalizePath, Notice } from "obsidian";
+import { App, TFile, normalizePath, Notice, getAllTags } from "obsidian";
 import * as logger from "../logger";
 import { ExternalCalendarService } from "./external-calendar-service";
 import { ExternalCalendarEvent } from "../types";
 import { buildExternalEventNoteBasename, createMeetingNoteFromExternalEvent } from "./external-event-modal";
 import { formatDateTimeForFrontmatter, parseFrontmatterDate, matchesExclusionPattern, normalizeCalendarUrl, normalizeComparablePath } from "../utils";
 import { mergeTagInputs, normalizeTagValue, parseTagInput } from "../utils/tag-utils";
+import { evaluateIconColorRules } from "../../../TPS-Global-Context-Menu (Dev)/src/utils/rule-resolver";
+import type { RuleEvaluationContext } from "../../../TPS-Global-Context-Menu (Dev)/src/types";
 import { getDailyNoteResolver } from "../utils/daily-note-resolver";
 import { ensureDailyNoteFile } from "../utils/daily-note-create";
 import { applyTemplateVars, buildTemplateVars } from "../utils/template-variable-service";
@@ -767,6 +769,7 @@ export class AutoCreateService {
     }
 
     private buildTaskListLine(
+        file: TFile,
         event: ExternalCalendarEvent,
         checkboxState: string = " ",
         existingInlineProperties: Record<string, string> = {},
@@ -775,6 +778,7 @@ export class AutoCreateService {
         const checkbox = normalizedCheckboxState.length > 0 ? normalizedCheckboxState : " ";
         const sourceUrl = this.normalizeSourceUrl(event.sourceUrl) || "";
         const durationMinutes = Math.max(5, Math.round((event.endDate.getTime() - event.startDate.getTime()) / 60000));
+        const taskVisualProperties = this.computeTaskListVisualInlineProperties(file, event, checkbox, existingInlineProperties);
         const reservedKeys = new Set([
             this.config.eventIdKey.toLowerCase(),
             this.config.uidKey.toLowerCase(),
@@ -782,7 +786,10 @@ export class AutoCreateService {
             this.config.startProperty.toLowerCase(),
             this.config.endProperty.toLowerCase(),
         ]);
-        const passthroughProperties = Object.entries(existingInlineProperties || {})
+        const passthroughProperties = Object.entries({
+            ...(existingInlineProperties || {}),
+            ...taskVisualProperties,
+        })
             .filter(([key, value]) => !!String(key || "").trim() && !!String(value || "").trim())
             .filter(([key]) => !reservedKeys.has(String(key || "").trim().toLowerCase()))
             .map(([key, value]) => `[${key}:: ${String(value).trim()}]`);
@@ -795,6 +802,114 @@ export class AutoCreateService {
             `[${this.config.endProperty}:: ${durationMinutes}]`,
             ...passthroughProperties,
         ].join(" ");
+    }
+
+    private computeTaskListVisualInlineProperties(
+        file: TFile,
+        event: ExternalCalendarEvent,
+        checkboxState: string,
+        existingInlineProperties: Record<string, string> = {},
+    ): Record<string, string> {
+        const gcm = (this.app as any)?.plugins?.plugins?.["tps-global-context-menu"]
+            ?? (this.app as any)?.plugins?.plugins?.["TPS-Global-Context-Menu (Dev)"]
+            ?? null;
+        const rules = Array.isArray(gcm?.settings?.notebookNavigatorRules) ? gcm.settings.notebookNavigatorRules : [];
+        if (!gcm?.settings?.enabled || rules.length === 0) {
+            return {};
+        }
+
+        const cache = this.app.metadataCache.getFileCache(file);
+        const parentFrontmatter = { ...((cache?.frontmatter || {}) as Record<string, unknown>) };
+        const mergedFrontmatter: Record<string, unknown> = { ...parentFrontmatter };
+        for (const [key, value] of Object.entries(existingInlineProperties || {})) {
+            const normalizedKey = String(key || '').trim().toLowerCase();
+            if (!normalizedKey || normalizedKey === 'color' || normalizedKey === 'icon') continue;
+            if (value !== undefined && value !== null && String(value).trim()) {
+                mergedFrontmatter[key] = value;
+            }
+        }
+
+        mergedFrontmatter.status = String(existingInlineProperties.status || this.getStatusForCheckboxState(checkboxState)).trim();
+        mergedFrontmatter.title = event.title;
+        mergedFrontmatter.name = event.title;
+        mergedFrontmatter.text = event.title;
+        mergedFrontmatter.body = event.title;
+        mergedFrontmatter[this.config.startProperty] = this.formatTaskListScheduledValue(event.startDate, event.isAllDay);
+        mergedFrontmatter[this.config.endProperty] = Math.max(5, Math.round((event.endDate.getTime() - event.startDate.getTime()) / 60000));
+
+        const metadataTags = new Set<string>();
+        for (const rawTag of getAllTags(cache || {}) || []) {
+            const normalized = normalizeTagValue(rawTag);
+            if (normalized) metadataTags.add(normalized);
+        }
+        for (const rawTag of parseTagInput(event.title)) {
+            const normalized = normalizeTagValue(rawTag);
+            if (normalized) metadataTags.add(normalized);
+        }
+
+        const tagList = Array.from(metadataTags);
+        const context: RuleEvaluationContext = {
+            file: {
+                path: `${file.path}::task-sync:${event.id}`,
+                name: `${event.title || file.basename}.md`,
+                basename: event.title || file.basename,
+                extension: 'md',
+            },
+            frontmatter: mergedFrontmatter,
+            tags: tagList,
+            body: event.title,
+            parent: {
+                file: {
+                    path: file.path,
+                    name: file.name,
+                    basename: file.basename,
+                    extension: file.extension,
+                },
+                frontmatter: parentFrontmatter,
+                tags: tagList,
+            },
+        };
+
+        try {
+            const visual = (evaluateIconColorRules as any)(this.app, rules, context);
+            const result: Record<string, string> = {};
+            const colorValue = this.formatTaskInlineColorPropertyValue(visual?.color?.value);
+            if (colorValue) {
+                result.color = colorValue;
+            }
+            const iconValue = String(visual?.icon?.value || '').trim();
+            if (iconValue) {
+                result.icon = iconValue;
+            }
+            return result;
+        } catch (error) {
+            logger.warn('[AutoCreateService] Failed computing task-list visual properties', { file: file.path, eventId: event.id, error });
+            return {};
+        }
+    }
+
+    private getStatusForCheckboxState(checkboxState: string): string {
+        const normalized = String(checkboxState || '').trim();
+        if (/^[xX]$/.test(normalized)) return 'complete';
+        if (normalized === '-') return 'wont-do';
+        if (normalized === '/') return 'working';
+        if (normalized === '?') return 'holding';
+        return 'open';
+    }
+
+    private formatTaskInlineColorPropertyValue(value: unknown): string | null {
+        const formatted = String(value ?? '').trim();
+        if (!formatted) return null;
+
+        const match = formatted.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+        if (!match) return formatted;
+
+        const hex = match[1];
+        if (hex.length === 3) {
+            return hex.split('').map((char) => char + char).join('').toLowerCase();
+        }
+
+        return hex.toLowerCase();
     }
 
     private getTaskListInsertIndex(state: TaskListState): number {
@@ -1287,7 +1402,7 @@ export class AutoCreateService {
             return { action: "none" };
         }
 
-        const desiredLine = this.buildTaskListLine(event, existing?.checkboxState || " ", existing?.inlineProperties || {});
+        const desiredLine = this.buildTaskListLine(state.file, event, existing?.checkboxState || " ", existing?.inlineProperties || {});
         if (existing) {
             this.touchTaskListItem(state, event.id);
             if (existing.line === desiredLine) {

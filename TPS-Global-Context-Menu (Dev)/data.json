@@ -1995,7 +1995,7 @@
     {
       "checkboxState": "[ ]",
       "statuses": [
-        "todo"
+        "open"
       ],
       "toggleTargetStatus": "complete",
       "icon": "square",
@@ -2006,7 +2006,7 @@
       "statuses": [
         "complete"
       ],
-      "toggleTargetStatus": "todo",
+      "toggleTargetStatus": "open",
       "icon": "check",
       "label": "Complete"
     },
@@ -2024,7 +2024,7 @@
       "statuses": [
         "holding"
       ],
-      "toggleTargetStatus": "todo",
+      "toggleTargetStatus": "open",
       "icon": "help-circle",
       "label": "Holding"
     },
@@ -2033,14 +2033,14 @@
       "statuses": [
         "wont-do"
       ],
-      "toggleTargetStatus": "todo",
+      "toggleTargetStatus": "open",
       "icon": "minus",
       "label": "Won’t Do"
     }
   ],
   "linkedSubitemDefaultOpenState": "[ ]",
   "linkedSubitemUncheckedStatuses": [
-    "todo",
+    "open",
     "working",
     "holding",
     "note"
@@ -2052,7 +2052,7 @@
     "wont-do"
   ],
   "linkedSubitemToggleCheckedStatus": "complete",
-  "linkedSubitemToggleUncheckedStatus": "todo",
+  "linkedSubitemToggleUncheckedStatus": "open",
   "enableArchiveTagMove": true,
   "archiveTag": "archive",
   "archiveFolderPath": "Archive",

@@ -12,6 +12,7 @@ interface ContinuousScrollViewProps {
   currentDate?: Date;
   events: any[];
   allDayMaxRows?: number;
+  minEventHeight?: number;
   slotMinTimeValue: string;
   slotMaxTimeValue: string;
   defaultScrollTime: string;
@@ -49,6 +50,7 @@ export const ContinuousScrollView: React.FC<ContinuousScrollViewProps> = ({
   currentDate,
   events,
   allDayMaxRows,
+  minEventHeight = 10,
   slotMinTimeValue,
   slotMaxTimeValue,
   defaultScrollTime,
@@ -298,6 +300,10 @@ export const ContinuousScrollView: React.FC<ContinuousScrollViewProps> = ({
             eventDurationEditable={allowEdit && !!onEventResize}
             selectable={allowSelect}
             selectMirror={allowSelect}
+            eventOrderStrict={true}
+            eventOverlap={false}
+            eventMinHeight={minEventHeight}
+            slotEventOverlap={false}
             selectLongPressDelay={isMobile ? 600 : 300}
             longPressDelay={isMobile ? 600 : 300}
             eventLongPressDelay={isMobile ? 600 : 300}

@@ -546,6 +546,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
                 // Run file naming normalization (tags, folder path, title sync) for the
                 // opened note. Gated by individual feature flags inside the service.
                 void plugin.fileNamingService.processFileOnOpen(file, { bypassCreationGrace: true });
+                void plugin.taskCheckboxHandler.syncTaskVisualPropertiesForFile(file);
 
                 // 1. Check for unresolved/deleted subitem links and prompt user
                 scheduleFileOpenGuard(file, 250, async () => {

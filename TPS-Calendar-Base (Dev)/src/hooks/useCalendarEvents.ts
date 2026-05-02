@@ -107,7 +107,7 @@ export function useCalendarEvents({
       const borderColor = calEntry.borderColor || (isAdditionalDateSource ? "var(--background-modifier-border)" : backgroundColor);
       const taskColor = calEntry.isTask && !isAdditionalDateSource ? backgroundColor : "";
       const eventMinHeightValue = calEntry.isTask && !isAllDayTask(calEntry)
-        ? Math.max(0, Math.min(minEventHeight, 10))
+        ? 0
         : minEventHeight;
 
       const allDaySource = allDayProperty
