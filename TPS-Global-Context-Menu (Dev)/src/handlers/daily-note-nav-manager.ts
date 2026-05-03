@@ -100,6 +100,7 @@ export class DailyNoteNavManager extends Component {
         if (this.currentHost) {
             this.currentHost.removeClass("tps-daily-note-nav-host");
             this.currentHost.removeClass("tps-daily-note-nav-anchor");
+            this.currentHost.removeClass("tps-daily-note-nav-header-host");
             this.currentHost.style.removeProperty("--tps-daily-nav-reserved-width");
         }
         this.currentHost = null;
@@ -154,16 +155,21 @@ export class DailyNoteNavManager extends Component {
         // Fresh AbortController for this nav's event listeners
         this._navAbortController = new AbortController();
 
-        // Prefer placing the controls beside the actual note title row (inline title or first H1).
+        // Prefer the view header/title area so the control behaves like Obsidian chrome, not note content.
+        const headerHost = this.resolveHeaderNavHost(leaf);
         const titleAnchor = this.resolveTitleAnchor(leaf);
-        const host = container;
+        const host = headerHost ?? container;
         this.currentHost = host;
 
         // Create the nav element
         const nav = document.createElement("div");
         nav.className = "tps-daily-note-nav";
         this.hardenNavControl(nav);
-        if (titleAnchor) {
+        if (headerHost) {
+            nav.addClass("tps-daily-note-nav--header");
+            headerHost.addClass("tps-daily-note-nav-header-host");
+            headerHost.appendChild(nav);
+        } else if (titleAnchor) {
             nav.addClass("tps-daily-note-nav--under-title");
             host.addClass("tps-daily-note-nav-anchor");
             titleAnchor.insertAdjacentElement("beforebegin", nav);
@@ -254,6 +260,22 @@ export class DailyNoteNavManager extends Component {
             this.suppressNavEvent(e);
             this.goToDate(isoDateStr, 1, leaf);
         }, { passive: false });
+    }
+
+    private resolveHeaderNavHost(leaf: WorkspaceLeaf): HTMLElement | null {
+        const view = leaf.view as any;
+        const roots = [
+            (leaf as any)?.containerEl as HTMLElement | undefined,
+            view?.containerEl?.closest?.(".workspace-leaf-content") as HTMLElement | undefined,
+            view?.containerEl as HTMLElement | undefined,
+        ].filter((root): root is HTMLElement => root instanceof HTMLElement);
+
+        for (const root of roots) {
+            const header = root.querySelector<HTMLElement>(".view-header");
+            if (header) return header;
+        }
+
+        return null;
     }
 
     private resolveTitleAnchor(leaf: WorkspaceLeaf): HTMLElement | null {
