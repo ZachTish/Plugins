@@ -841,6 +841,7 @@ export class CalendarView extends BasesView {
     const statusFieldName = this.statusField
       ? this.getNoteField(this.statusField)
       : null;
+    const allDayFieldName = this.getNoteField(this.allDayProperty);
     const eventIdFieldName = this.plugin.settings.eventIdKey;
     const uidFieldName = this.plugin.settings.uidKey;
     const startFieldNames = this.getStartDateNoteFields();
@@ -969,6 +970,12 @@ export class CalendarView extends BasesView {
         }
 
         const cache = entryFile ? this.app.metadataCache.getFileCache(entryFile) : null;
+        const frontmatterAllDay = allDayFieldName
+          ? this.parseBooleanLike(
+            this.getFrontmatterValueCaseInsensitive(cache?.frontmatter as Record<string, any> | undefined, allDayFieldName),
+            false,
+          )
+          : false;
         const frontmatterTitle = this.getFrontmatterStringCaseInsensitive(
           cache?.frontmatter as Record<string, any> | undefined,
           "title",
@@ -1140,6 +1147,7 @@ export class CalendarView extends BasesView {
           startDate.getSeconds() === 0 &&
           startDate.getMilliseconds() === 0;
         const forceAllDay =
+          frontmatterAllDay ||
           forceAllDayFromSource ||
           (!hasExplicitEnd && configuredDurationMinutes === null && startsAtMidnight);
 
@@ -4543,8 +4551,15 @@ export class CalendarView extends BasesView {
     if (typeof value === "boolean") return value;
     if (typeof value === "string") {
       const normalized = value.trim().toLowerCase();
-      if (normalized === "true") return true;
-      if (normalized === "false") return false;
+      if (["true", "yes", "y", "1"].includes(normalized)) return true;
+      if (["false", "no", "n", "0"].includes(normalized)) return false;
+      const firstToken = normalized.split(/\s+/)[0];
+      if (["true", "yes", "y", "1"].includes(firstToken)) return true;
+      if (["false", "no", "n", "0"].includes(firstToken)) return false;
+    }
+    if (typeof value === "number") {
+      if (value === 1) return true;
+      if (value === 0) return false;
     }
     return fallback;
   }

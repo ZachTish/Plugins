@@ -211,6 +211,7 @@ export async function createMeetingNoteFromExternalEvent(
   const frontmatter: Record<string, any> = {};
   frontmatter[titleKey] = event.title;
   frontmatter[eventIdKey] = event.id;
+  frontmatter["allDay"] = !!event.isAllDay;
 
   if (uidKey) {
     frontmatter[uidKey] = event.uid;

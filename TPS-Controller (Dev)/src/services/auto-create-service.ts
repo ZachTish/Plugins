@@ -51,6 +51,7 @@ interface VaultNote {
     storedEnd: string | number;
     storedTitle: string;
     storedLocation: string;
+    storedAllDay: boolean | null;
     /** Parsed start date, only used for uid+start fallback matching. */
     startDate: Date | null;
     sourceUrl: string | null;
@@ -209,6 +210,7 @@ export class AutoCreateService {
                                     : formatDateTimeForFrontmatter(event.endDate),
                                 storedTitle: event.title,
                                 storedLocation: event.location || "",
+                                storedAllDay: event.isAllDay,
                                 startDate: event.startDate,
                                 sourceUrl: this.normalizeSourceUrl(event.sourceUrl),
                                 orphanCandidateAt: null,
@@ -397,6 +399,7 @@ export class AutoCreateService {
 
             const storedTitle = String(this.findKeyInsensitive(fm, this.config.titleKey) ?? "").trim();
             const storedLocation = String(this.findKeyInsensitive(fm, "location") ?? "").trim();
+            const storedAllDay = this.normalizeBooleanValue(this.findKeyInsensitive(fm, "allDay"));
             const sourceUrl = this.normalizeSourceUrl(this.findKeyInsensitive(fm, this.config.sourceUrlKey));
             const orphanCandidateAt = this.normalizeIdentityValue(this.findKeyInsensitive(fm, this.config.orphanCandidateAtKey));
 
@@ -414,6 +417,7 @@ export class AutoCreateService {
                 storedEnd,
                 storedTitle,
                 storedLocation,
+                storedAllDay,
                 startDate,
                 sourceUrl,
                 orphanCandidateAt,
@@ -771,9 +775,12 @@ export class AutoCreateService {
             const titleMissing = !match.storedTitle && !!event.title;
             const locationMissing = !match.storedLocation && !!event.location;
             const sourceChanged = !!normalizedSourceUrl && match.sourceUrl !== normalizedSourceUrl;
+            const allDayChanged = match.storedAllDay === null
+                ? event.isAllDay
+                : match.storedAllDay !== event.isAllDay;
 
             // Fast path: nothing changed and no identity repair needed — skip entirely, no file I/O
-            if (!startChanged && !endChanged && !titleMissing && !locationMissing && !sourceChanged && !repairedEventId && !forceRegenerate) {
+            if (!startChanged && !endChanged && !titleMissing && !locationMissing && !sourceChanged && !allDayChanged && !repairedEventId && !forceRegenerate) {
                 return { action: 'none', file: match.file };
             }
 
@@ -801,6 +808,11 @@ export class AutoCreateService {
                     didUpdate = true;
                 }
 
+                if (allDayChanged) {
+                    fm["allDay"] = event.isAllDay;
+                    didUpdate = true;
+                }
+
                 if (startChanged) {
                     logger.log(`[AutoCreateService] Start changed: '${match!.storedStart}' -> '${expectedStart}'`);
                     fm[this.config.startProperty] = expectedStart;
@@ -822,6 +834,7 @@ export class AutoCreateService {
                 if (titleMissing) match.storedTitle = event.title;
                 if (locationMissing) match.storedLocation = event.location || "";
                 if (sourceChanged && normalizedSourceUrl) match.sourceUrl = normalizedSourceUrl;
+                if (allDayChanged) match.storedAllDay = event.isAllDay;
                 if (repairedEventId) {
                     match.eventId = event.id;
                     byEventId.set(event.id, match);
@@ -1300,6 +1313,23 @@ export class AutoCreateService {
             return null;
         }
         return normalized;
+    }
+
+    private normalizeBooleanValue(value: any): boolean | null {
+        if (typeof value === "boolean") return value;
+        if (typeof value === "number") {
+            if (value === 1) return true;
+            if (value === 0) return false;
+        }
+        if (typeof value === "string") {
+            const normalized = value.trim().toLowerCase();
+            if (["true", "yes", "y", "1"].includes(normalized)) return true;
+            if (["false", "no", "n", "0"].includes(normalized)) return false;
+            const firstToken = normalized.split(/\s+/)[0];
+            if (["true", "yes", "y", "1"].includes(firstToken)) return true;
+            if (["false", "no", "n", "0"].includes(firstToken)) return false;
+        }
+        return null;
     }
 
     private normalizeSourceUrl(value: unknown): string | null {
