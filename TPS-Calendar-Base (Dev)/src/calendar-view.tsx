@@ -3147,17 +3147,18 @@ export class CalendarView extends BasesView {
 
   private getTargetLeafForOpen(preferNewTab: boolean): WorkspaceLeaf | null {
     if (preferNewTab) {
-      return this.app.workspace.getLeaf("tab");
+      return this.getMainWorkspaceTabLeaf();
     }
 
     const workspaceAny = this.app.workspace as any;
     const activeLeaf = workspaceAny?.activeLeaf as WorkspaceLeaf | null | undefined;
-    const activeViewType = activeLeaf?.view?.getViewType?.();
-    if (activeLeaf && activeViewType !== CalendarViewType) {
+    if (activeLeaf && this.isMainWorkspaceOpenTarget(activeLeaf)) {
       return activeLeaf;
     }
 
-    const markdownLeaves = this.app.workspace.getLeavesOfType("markdown");
+    const markdownLeaves = this.app.workspace
+      .getLeavesOfType("markdown")
+      .filter((leaf) => !this.isSidebarLeaf(leaf));
     if (markdownLeaves.length > 0) {
       return markdownLeaves[0];
     }
@@ -3166,13 +3167,59 @@ export class CalendarView extends BasesView {
       typeof workspaceAny?.getMostRecentLeaf === "function"
         ? (workspaceAny.getMostRecentLeaf() as WorkspaceLeaf | null)
         : null;
-    const recentViewType = recentLeaf?.view?.getViewType?.();
-    if (recentLeaf && recentViewType !== CalendarViewType) {
+    if (recentLeaf && this.isMainWorkspaceOpenTarget(recentLeaf)) {
       return recentLeaf;
     }
 
-    // Never allocate a new leaf just to open a calendar event.
-    return null;
+    const mainLeaf = this.getAnyMainWorkspaceLeaf();
+    if (mainLeaf) {
+      return mainLeaf;
+    }
+
+    return this.getMainWorkspaceTabLeaf();
+  }
+
+  private getMainWorkspaceTabLeaf(): WorkspaceLeaf | null {
+    const workspaceAny = this.app.workspace as any;
+    const activeLeaf = workspaceAny?.activeLeaf as WorkspaceLeaf | null | undefined;
+    if (activeLeaf && !this.isSidebarLeaf(activeLeaf)) {
+      return this.app.workspace.getLeaf("tab");
+    }
+
+    const anchorLeaf =
+      this.app.workspace.getLeavesOfType("markdown").find((leaf) => !this.isSidebarLeaf(leaf))
+      ?? this.getAnyMainWorkspaceLeaf();
+    if (anchorLeaf) {
+      this.app.workspace.setActiveLeaf(anchorLeaf, false, true);
+      return this.app.workspace.getLeaf("tab");
+    }
+
+    return this.app.workspace.getLeaf("tab");
+  }
+
+  private getAnyMainWorkspaceLeaf(): WorkspaceLeaf | null {
+    let target: WorkspaceLeaf | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (target) return;
+      if (this.isSidebarLeaf(leaf)) return;
+      if (this.isCalendarLeaf(leaf)) return;
+      target = leaf;
+    });
+    return target;
+  }
+
+  private isMainWorkspaceOpenTarget(leaf: WorkspaceLeaf): boolean {
+    return !this.isSidebarLeaf(leaf) && !this.isCalendarLeaf(leaf);
+  }
+
+  private isCalendarLeaf(leaf: WorkspaceLeaf): boolean {
+    const viewType = leaf?.view?.getViewType?.();
+    return viewType === CalendarViewType || viewType === "calendar-bases-view" || viewType === "calendar";
+  }
+
+  private isSidebarLeaf(leaf: WorkspaceLeaf | null | undefined): boolean {
+    const containerEl = (leaf as any)?.containerEl as HTMLElement | undefined;
+    return !!containerEl?.closest?.(".mod-left-split, .mod-right-split");
   }
 
   private async buildDailyNoteContent(date: Date, path: string): Promise<string> {
@@ -3479,7 +3526,8 @@ export class CalendarView extends BasesView {
   }
 
   private async revealTaskLine(file: TFile, lineNumber: number): Promise<void> {
-    const leaf = this.app.workspace.getLeaf(false);
+    const leaf = this.getTargetLeafForOpen(false);
+    if (!leaf) return;
     await leaf.openFile(file);
     const view = leaf.view;
     if (!(view instanceof MarkdownView)) return;
@@ -3530,7 +3578,8 @@ export class CalendarView extends BasesView {
         .setTitle("Open parent note")
         .setIcon("file-text")
         .onClick(async () => {
-          await this.app.workspace.getLeaf(false).openFile(abstractFile);
+          const leaf = this.getTargetLeafForOpen(false);
+          if (leaf) await leaf.openFile(abstractFile);
         }),
     );
     menu.addItem((item) =>

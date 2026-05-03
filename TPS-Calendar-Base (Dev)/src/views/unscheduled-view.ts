@@ -132,16 +132,9 @@ export class UnscheduledView extends ItemView {
           }
           return;
         }
-        const workspaceAny = this.app.workspace as any;
-        const activeLeaf = workspaceAny?.activeLeaf ?? null;
-        const activeType = activeLeaf?.view?.getViewType?.();
-        const fallbackLeaf =
-          activeLeaf && activeType !== "calendar-bases-view" && activeType !== "calendar"
-            ? activeLeaf
-            : this.app.workspace.getLeavesOfType("markdown")[0] ?? null;
         const leaf = (e.ctrlKey || e.metaKey)
-          ? this.app.workspace.getLeaf("tab")
-          : fallbackLeaf;
+          ? this.getMainWorkspaceTabLeaf()
+          : this.getPreferredMainLeaf();
         if (!leaf) return;
         void leaf.openFile(file);
       });
@@ -155,12 +148,64 @@ export class UnscheduledView extends ItemView {
         e.dataTransfer.setData("obsidian/file", file.path);
         e.dataTransfer.setData("text/plain", file.path);
         item.style.opacity = "0.5";
-      });
+    });
 
       item.addEventListener("dragend", () => {
         item.style.opacity = "1";
         scheduleSuppressReset();
       });
     }
+  }
+
+  private getPreferredMainLeaf(): WorkspaceLeaf | null {
+    const workspaceAny = this.app.workspace as any;
+    const activeLeaf = workspaceAny?.activeLeaf as WorkspaceLeaf | null | undefined;
+    if (activeLeaf && this.isMainWorkspaceOpenTarget(activeLeaf)) return activeLeaf;
+
+    return this.app.workspace.getLeavesOfType("markdown").find((leaf) => !this.isSidebarLeaf(leaf))
+      ?? this.getAnyMainWorkspaceLeaf()
+      ?? this.getMainWorkspaceTabLeaf();
+  }
+
+  private getMainWorkspaceTabLeaf(): WorkspaceLeaf | null {
+    const workspaceAny = this.app.workspace as any;
+    const activeLeaf = workspaceAny?.activeLeaf as WorkspaceLeaf | null | undefined;
+    if (activeLeaf && !this.isSidebarLeaf(activeLeaf)) {
+      return this.app.workspace.getLeaf("tab");
+    }
+
+    const anchorLeaf = this.app.workspace.getLeavesOfType("markdown").find((leaf) => !this.isSidebarLeaf(leaf))
+      ?? this.getAnyMainWorkspaceLeaf();
+    if (anchorLeaf) {
+      this.app.workspace.setActiveLeaf(anchorLeaf, false, true);
+      return this.app.workspace.getLeaf("tab");
+    }
+
+    return this.app.workspace.getLeaf("tab");
+  }
+
+  private getAnyMainWorkspaceLeaf(): WorkspaceLeaf | null {
+    let target: WorkspaceLeaf | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (target) return;
+      if (this.isSidebarLeaf(leaf)) return;
+      if (this.isCalendarLeaf(leaf)) return;
+      target = leaf;
+    });
+    return target;
+  }
+
+  private isMainWorkspaceOpenTarget(leaf: WorkspaceLeaf): boolean {
+    return !this.isSidebarLeaf(leaf) && !this.isCalendarLeaf(leaf);
+  }
+
+  private isCalendarLeaf(leaf: WorkspaceLeaf): boolean {
+    const viewType = leaf?.view?.getViewType?.();
+    return viewType === "calendar-bases-view" || viewType === "calendar" || viewType === UNSCHEDULED_VIEW_TYPE;
+  }
+
+  private isSidebarLeaf(leaf: WorkspaceLeaf | null | undefined): boolean {
+    const containerEl = (leaf as any)?.containerEl as HTMLElement | undefined;
+    return !!containerEl?.closest?.(".mod-left-split, .mod-right-split");
   }
 }
