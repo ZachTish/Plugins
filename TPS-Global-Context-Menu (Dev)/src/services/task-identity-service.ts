@@ -90,7 +90,7 @@ const DATE_ONLY_PATTERN = /^\d{4}[-_/]\d{2}[-_/]\d{2}$/;
 
 const DEFAULT_COMPLETION_STATUSES = ['complete', 'done', 'finished'];
 const DEFAULT_WONT_DO_STATUSES    = ['wont-do', 'cancelled', 'canceled', 'skipped'];
-const DEFAULT_PENDING_STATUSES    = ['open', 'working', 'blocked', 'in-progress', 'pending'];
+const DEFAULT_PENDING_STATUSES    = ['todo', 'open', 'working', 'holding', 'blocked', 'in-progress', 'pending'];
 const DEFAULT_SCHEDULED_PROPS     = ['scheduled', 'date', 'due', 'start'];
 const DEFAULT_RECURRENCE_PROPS    = ['recurrence', 'recurrenceRule', 'rrule'];
 

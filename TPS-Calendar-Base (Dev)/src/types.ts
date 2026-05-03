@@ -72,6 +72,15 @@ export interface ExternalCalendarConfig {
     autoCreateFolder?: string;
     autoCreateTag?: string;
     autoCreateTemplate?: string;
+    autoCreateMode?: "note" | "task-list";
+    autoCreateTaskListPath?: string;
+    autoCreateTaskListHeading?: string;
+}
+
+export interface ExternalCalendarCacheSnapshotEntry {
+    events: Array<Omit<ExternalCalendarEvent, "startDate" | "endDate"> & { startDate: string; endDate: string }>;
+    expiry: number;
+    updatedAt: number;
 }
 
 export interface CalendarPluginSettings {
@@ -90,6 +99,7 @@ export interface CalendarPluginSettings {
     defaultCondenseLevel: number;
     externalCalendars: ExternalCalendarConfig[];
     externalCalendarFilter: string;
+    externalEventCache: Record<string, ExternalCalendarCacheSnapshotEntry>;
     enableLogging: boolean;
     syncOnEventDelete: string;
     archiveFolder: string;

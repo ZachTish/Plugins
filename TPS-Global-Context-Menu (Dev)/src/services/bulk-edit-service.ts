@@ -818,7 +818,7 @@ export class BulkEditService {
         if (hasStatusUpdate) {
             if (targetStatus === 'complete') {
                 updates.completedDate = window.moment().format('YYYY-MM-DD HH:mm:ss');
-            } else if (targetStatus === 'open' || targetStatus === 'working' || targetStatus === 'blocked') {
+            } else if (targetStatus === 'todo' || targetStatus === 'open' || targetStatus === 'working' || targetStatus === 'holding' || targetStatus === 'blocked') {
                 updates.completedDate = null;
             }
         }
@@ -2107,8 +2107,8 @@ export class BulkEditService {
 
     /**
      * Removes the bidirectional parent↔child link between childFile and parentFile.
-     * - Removes the selected parent reference from childFile's parent key (`childOf` by default)
-     * - Removes childFile from the `parentOf` array in parentFile's frontmatter
+     * - Removes the selected parent reference from childFile's parent key.
+     * - Removes the embedded markdown body link from the parent note.
      */
     async unlinkFromParent(childFile: TFile, parentFile: TFile): Promise<void> {
         const result = await this.plugin.subitemRelationshipSyncService.unlinkChildFromParent(childFile, parentFile);
@@ -2121,7 +2121,7 @@ export class BulkEditService {
     }
 
     async unlinkFromAllParents(childFile: TFile): Promise<number> {
-        const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+        const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent';
         const parents = this.plugin.parentLinkResolutionService.getParentsForChild(childFile).map((entry) => entry.file);
         if (!parents.length) {
             return 0;
@@ -2158,8 +2158,8 @@ export class BulkEditService {
      * that pointed to the given deleted file. Called from the vault delete handler.
      */
     async cleanupLinksForDeletedFile(deletedPath: string, deletedBasename: string): Promise<void> {
-        const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
-        const childKey = String(this.plugin.settings.childLinkFrontmatterKey || 'parentOf').trim() || 'parentOf';
+        const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent';
+        const childKey = String(this.plugin.settings.childLinkFrontmatterKey || '').trim();
         const attachmentsKey = 'attachments';
 
         const norm = (s: string) => normalizePath(s).toLowerCase();
@@ -2181,7 +2181,7 @@ export class BulkEditService {
             const cache = this.plugin.app.metadataCache.getFileCache(file);
             const fm = cache?.frontmatter;
             const hasPk = !!fm && Object.keys(fm).some(k => k.toLowerCase() === parentKey.toLowerCase());
-            const hasCk = !!fm && Object.keys(fm).some(k => k.toLowerCase() === childKey.toLowerCase());
+            const hasCk = !!childKey && !!fm && Object.keys(fm).some(k => k.toLowerCase() === childKey.toLowerCase());
             const hasAk = !!fm && Object.keys(fm).some(k => k.toLowerCase() === attachmentsKey.toLowerCase());
             let frontmatterChanged = false;
 
@@ -2194,7 +2194,7 @@ export class BulkEditService {
                             frontmatterChanged = true;
                         }
 
-                        const ck = Object.keys(frontmatter).find(k => k.toLowerCase() === childKey.toLowerCase());
+                        const ck = childKey ? Object.keys(frontmatter).find(k => k.toLowerCase() === childKey.toLowerCase()) : undefined;
                         if (ck) {
                             const raw = frontmatter[ck];
                             const arr: any[] = Array.isArray(raw) ? raw : (raw != null ? [raw] : []);

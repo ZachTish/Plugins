@@ -115,7 +115,7 @@ export class NotificationItemsModal extends Modal {
     const gcmPlugin = this.getGcmPlugin();
     const values = gcmPlugin?.settings?.properties
       ?.find((p: any) => p.key === 'status')?.options
-      ?? ['open', 'working', 'blocked', 'wont-do', 'complete'];
+      ?? ['todo', 'working', 'holding', 'wont-do', 'complete'];
     return Array.from(new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean)));
   }
 

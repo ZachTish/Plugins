@@ -10,6 +10,7 @@
     "test": "tsc -p tsconfig.tests.json && node --test .test-dist/tests/settings.test.js"
   },
   "devDependencies": {
+    "@types/node": "^16.18.126",
     "builtin-modules": "3.3.0",
     "esbuild": "^0.19.3",
     "obsidian": "latest",

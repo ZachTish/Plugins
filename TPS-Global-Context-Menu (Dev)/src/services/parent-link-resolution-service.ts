@@ -7,7 +7,7 @@ export class ParentLinkResolutionService {
   constructor(private readonly plugin: TPSGlobalContextMenuPlugin) {}
 
   getParentKey(): string {
-    return String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+    return String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent';
   }
 
   getParentKind(file: TFile): ParentLinkKind {

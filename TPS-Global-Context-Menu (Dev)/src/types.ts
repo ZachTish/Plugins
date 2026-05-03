@@ -245,6 +245,13 @@ export interface TPSGlobalContextMenuSettings {
   inlineMenuOnly: boolean;
   nativeMenuPlacement: 'tps-first' | 'tps-last';
   enableLineItems: boolean; // LINE-ITEMS: Feature flag
+  lineTrackingSurfaceFolders: string[];
+  lineTrackingHeadingNames: string[];
+  lineTrackingTreatDailyNotesAsSurface: boolean;
+  lineTrackingPromotionRequiresSurface: boolean;
+  lineTrackingTrackCheckboxes: boolean;
+  lineTrackingTrackBullets: boolean;
+  lineTrackingTrackHeadings: boolean;
   suppressMobileKeyboard: boolean;
   properties: CustomProperty[];
   showCustomPropertiesInInlineUi: boolean;
@@ -302,6 +309,7 @@ export interface TPSGlobalContextMenuSettings {
   viewModeRules: ViewModeRule[];
 
   checklistFinalPromptStatuses: string[];
+  taskSurfacePaths: string[];
   enableLinkedSubitemCheckboxes: boolean;
   linkedSubitemCheckboxStyle: LinkedSubitemCheckboxStyle;
   linkedSubitemCheckboxMappings: LinkedSubitemCheckboxMapping[];

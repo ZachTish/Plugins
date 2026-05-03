@@ -183,6 +183,8 @@ export class CalendarView extends BasesView {
   private cachedRawTaskItems: ParsedTaskItem[] = [];
   private cachedAllTaskItemsForDedup: ParsedTaskItem[] = [];
   private taskItemAllowedPaths: Set<string> | null = null;
+  private taskItemSurfacePaths: Set<string> = new Set();
+  private taskItemAllowedPathsKey: string = "";
   private isFetchingTaskItems: boolean = false;
   private pendingTaskItemRefreshPaths: Set<string> = new Set();
   private lastTaskItemsFetch: number = 0;
@@ -957,25 +959,6 @@ export class CalendarView extends BasesView {
     this.pendingDataRetryCount = 0;
     this.containerEl.removeClass("is-loading");
     this.updateExternalCalendarVisibility();
-    // Task-item overlays should only surface when their parent note is part of
-    // the current Bases result set. This keeps task-list calendar events aligned
-    // with the active base filter while still allowing every matching parent note
-    // to contribute all of its dated task items.
-    const taskAllowedPaths = new Set<string>();
-    for (const entry of queryData.data ?? []) {
-      if (entry?.file?.path) taskAllowedPaths.add(entry.file.path);
-    }
-    for (const taskListPath of this.getManagedTaskListPaths()) {
-      taskAllowedPaths.add(taskListPath);
-    }
-    this.taskItemAllowedPaths = taskAllowedPaths;
-
-    // 0. Update Line Filter from View Config (Standard Filter Integration)
-    // We look for filters that use our injected line properties
-
-
-    const currentEntries: CalendarEntry[] = [];
-    const unscheduledEntries: { file: TFile; title: string }[] = [];
 
     // Determine the time window we'll display/expand events for
     const baseDate = this.currentDate || new Date();
@@ -983,6 +966,41 @@ export class CalendarView extends BasesView {
     calendarStart.setDate(calendarStart.getDate() - 30);
     const calendarEnd = new Date(baseDate);
     calendarEnd.setDate(calendarEnd.getDate() + 60);
+
+    if (this.plugin.settings.showTaskItems) {
+      // Task-item overlays are first-class only on configured ledgers and daily notes.
+      // Ordinary note checkboxes remain local content unless promoted by GCM.
+      const nextTaskItemSurfacePaths = this.getActiveTaskItemSurfacePaths(calendarStart, calendarEnd);
+      const nextTaskItemAllowedPaths = this.getActiveTaskItemParsePaths(queryData, nextTaskItemSurfacePaths);
+      const nextTaskItemAllowedPathsKey = this.getTaskItemAllowedPathsKey(nextTaskItemAllowedPaths);
+      const taskItemAllowedPathsChanged = nextTaskItemAllowedPathsKey !== this.taskItemAllowedPathsKey;
+      this.taskItemSurfacePaths = nextTaskItemSurfacePaths;
+      this.taskItemAllowedPaths = nextTaskItemAllowedPaths;
+      this.taskItemAllowedPathsKey = nextTaskItemAllowedPathsKey;
+      if (taskItemAllowedPathsChanged) {
+        this.cachedRawTaskItems = this.filterTaskItemsForAllowedPaths(this.cachedAllTaskItemsForDedup);
+        this.lastTaskItemsFetch = 0;
+      }
+
+      const taskCacheIsStale = Date.now() - this.lastTaskItemsFetch > 60000;
+      if (taskCacheIsStale && !recentlyTyping && !this.isFetchingTaskItems) {
+        await this.refreshTaskItems({ renderAfter: false });
+      }
+    } else if (this.cachedRawTaskItems.length || this.cachedAllTaskItemsForDedup.length || this.taskItemAllowedPaths) {
+      this.cachedRawTaskItems = [];
+      this.cachedAllTaskItemsForDedup = [];
+      this.taskItemSurfacePaths = new Set();
+      this.taskItemAllowedPaths = null;
+      this.taskItemAllowedPathsKey = "";
+      this.lastTaskItemsFetch = 0;
+    }
+
+    // 0. Update Line Filter from View Config (Standard Filter Integration)
+    // We look for filters that use our injected line properties
+
+
+    const currentEntries: CalendarEntry[] = [];
+    const unscheduledEntries: { file: TFile; title: string }[] = [];
 
     // Fetch external calendar events if configured
     // 1. Fetch external calendar events FIRST
@@ -1549,7 +1567,15 @@ export class CalendarView extends BasesView {
       const id = entry.isGhost
         ? `ghost:${(entry.entry as any).path || "unknown"}:${startTs}:${endTs}`
         : entry.isTask
-          ? `task:${(entry.entry as any).file?.path || "unknown"}:${startTs}:${(entry.title || "").slice(0, 40)}`
+          ? [
+              "task",
+              (entry.entry as any).file?.path || "unknown",
+              (entry.entry as any).__taskItem?.externalEventId || "",
+              (entry.entry as any).__taskItem?.calendarUid || "",
+              (entry.entry as any).__taskItem?.lineNumber ?? "na",
+              startTs,
+              endTs,
+            ].join(":")
           : entry.isExternal
           ? `external:${entry.externalEvent?.id || entry.title || "unknown"}:${startTs}:${endTs}`
           : `local:${(entry.entry as any).file?.path || entry.title || "unknown"}:${startTs}:${endTs}`;
@@ -2420,6 +2446,15 @@ export class CalendarView extends BasesView {
     this.isFetchingExternalEvents = true;
 
     try {
+      const cachedEvents = this.visibleExternalCalendarUrls.flatMap((url) =>
+        this.externalCalendarService.getCachedEvents(url, start, end, false, true),
+      );
+      if (cachedEvents.length) {
+        this.cachedExternalEvents = cachedEvents;
+        this.lastExternalFetch = Date.now();
+        this.updateCalendar();
+      }
+
       const externalPromises = this.visibleExternalCalendarUrls.map((url) =>
         this.externalCalendarService.fetchEvents(url, start, end, false, true),
       );
@@ -2433,8 +2468,11 @@ export class CalendarView extends BasesView {
         }
       }
 
-      this.cachedExternalEvents = newEvents;
+      if (newEvents.length || !cachedEvents.length) {
+        this.cachedExternalEvents = newEvents;
+      }
       this.lastExternalFetch = Date.now();
+      void (this.plugin as any)?.persistExternalEventCache?.();
       this.updateCalendar();
 
     } catch (error) {
@@ -2570,7 +2608,7 @@ export class CalendarView extends BasesView {
         : null;
       const calendarTag =
         typeof calendarConfig?.autoCreateTag === "string"
-          ? calendarConfig.autoCreateTag.trim().replace(/^#+/, "").toLowerCase()
+          ? calendarConfig.autoCreateTag.trim()
           : "";
       const templatePath =
         typeof calendarConfig?.autoCreateTemplate === "string" && calendarConfig.autoCreateTemplate.trim()
@@ -3689,11 +3727,12 @@ export class CalendarView extends BasesView {
   }
 
   private parseTaskStateLabel(rawLine: string): string {
-    const state = rawLine.match(/^[\t ]*-\s+\[([^\]]*)\]/)?.[1]?.trim() ?? "";
+    const state = rawLine.match(/^[\t ]*-\s+\[([^\]]*)\]/)?.[1] ?? "";
     if (/^[xX]$/.test(state)) return "complete";
-    if (state === "-") return "canceled";
-    if (state === "?") return "question";
-    return "open";
+    if (state === "-") return "wont-do";
+    if (state === "?") return "holding";
+    if (state === "/") return "working";
+    return "todo";
   }
 
   private async revealTaskLine(file: TFile, lineNumber: number): Promise<void> {
@@ -4214,9 +4253,336 @@ export class CalendarView extends BasesView {
   }
 
   private createTaskEntryFromItem(file: TFile, task: ParsedTaskItem): BasesEntry {
-    const entry = this.createTaskEntry(file) as any;
-    entry.__taskItem = task;
-    return entry as BasesEntry;
+    return {
+      file,
+      __taskItem: task,
+      getValue: (propId: BasesPropertyId | string) => this.getTaskEntryValue(file, task, propId) as any,
+    } as unknown as BasesEntry;
+  }
+
+  private getTaskEntryValue(file: TFile, task: ParsedTaskItem, propId: BasesPropertyId | string): any {
+    const names = this.getPropertyLookupNames(propId);
+    const inline = task.inlineProperties || {};
+    const cache = this.app.metadataCache.getFileCache(file);
+    const frontmatter = (cache?.frontmatter || {}) as Record<string, any>;
+
+    for (const name of names) {
+      if (!name) continue;
+      if (name === "file.path" || name === "path") return file.path;
+      if (name === "file.name" || name === "name") return task.text || file.basename;
+      if (name === "file.basename" || name === "basename") return task.text || file.basename;
+      if (name === "file.folder" || name === "folder") return file.parent?.path || "";
+      if (name === "title" || name === "text" || name === "task" || name === "content") return task.text;
+      if (name === "status") return this.getTaskStatusFromMarker(task.checkboxState);
+      if (name === "tags" || name === "tag") return this.collectTagsForTask(file, task);
+      if (name === "scheduled" || name === "scheduleddate" || name === "scheduled-date") return task.scheduledDate;
+      if (name === "due" || name === "duedate" || name === "due-date") return task.dueDate;
+      if (name === "start" || name === "startdate" || name === "start-date") return task.startDate || task.scheduledDate;
+      if (name === "timeestimate" || name === "time-estimate" || name === "duration" || name === "durationminutes") return task.durationMinutes;
+      if (name === "completed" || name === "complete" || name === "done") return task.isCompleted;
+      if (name === "checkbox" || name === "checkboxstate" || name === "taskstate") return task.checkboxState;
+      if (name === "line" || name === "linenumber") return task.lineNumber;
+    }
+
+    for (const name of names) {
+      const inlineValue = this.getInlinePropertyValue(inline, name);
+      if (inlineValue !== null) return this.normalizeTaskEntryPropertyValue(name, inlineValue);
+    }
+
+    for (const name of names) {
+      const frontmatterValue = this.getFrontmatterValueCaseInsensitive(frontmatter, name);
+      if (frontmatterValue !== undefined && frontmatterValue !== null) return frontmatterValue as Value;
+    }
+
+    return null;
+  }
+
+  private getPropertyLookupNames(propId: BasesPropertyId | string): string[] {
+    const names = new Set<string>();
+    const add = (value: unknown) => {
+      if (typeof value !== "string") return;
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      names.add(trimmed.toLowerCase());
+      names.add(trimmed.replace(/^note\./i, "").toLowerCase());
+      names.add(trimmed.replace(/^file\./i, "file.").toLowerCase());
+      names.add(trimmed.replace(/[\s_-]+/g, "").replace(/^note\./i, "").toLowerCase());
+    };
+
+    add(String(propId || ""));
+    try {
+      const parsed = parsePropertyId(propId as BasesPropertyId) as any;
+      add(parsed.name);
+      add(parsed.property);
+      add(parsed.key);
+      add(parsed.id);
+    } catch {
+      // Fall back to the raw property id.
+    }
+
+    return Array.from(names).filter(Boolean);
+  }
+
+  private getInlinePropertyValue(inline: Record<string, string>, propertyName: string): string | null {
+    const normalizedTarget = this.normalizeInlinePropertyKey(propertyName);
+    for (const [key, value] of Object.entries(inline || {})) {
+      if (this.normalizeInlinePropertyKey(key) === normalizedTarget) {
+        return String(value ?? "").trim();
+      }
+    }
+    return null;
+  }
+
+  private normalizeInlinePropertyKey(value: string): string {
+    return String(value || "").trim().replace(/^note\./i, "").replace(/[\s_-]+/g, "").toLowerCase();
+  }
+
+  private normalizeTaskEntryPropertyValue(propertyName: string, value: string): any {
+    const normalized = this.normalizeInlinePropertyKey(propertyName);
+    if (!value) return null;
+    if (["scheduled", "scheduleddate", "due", "duedate", "start", "startdate"].includes(normalized)) {
+      return tryParseDate(value) || value;
+    }
+    if (["timeestimate", "duration", "durationminutes", "line", "linenumber"].includes(normalized)) {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : value;
+    }
+    if (["completed", "complete", "done", "allday"].includes(normalized)) {
+      const lower = value.toLowerCase();
+      if (["true", "yes", "y", "1"].includes(lower)) return true;
+      if (["false", "no", "n", "0"].includes(lower)) return false;
+    }
+    return value;
+  }
+
+  private resolveSyntheticEntrySortKey(entry: BasesEntry): string | null {
+    const viewOrderKey = this.resolveSyntheticEntryViewOrderSortKey(entry);
+    if (viewOrderKey) return viewOrderKey;
+    const sortValue = this.tryGetEntryValue(entry, this.getNotebookNavigatorSmartSortField() as BasesPropertyId);
+    const sortKey = valueToString(sortValue);
+    return sortKey && sortKey.trim() ? sortKey.trim() : null;
+  }
+
+  private resolveSyntheticEntryViewOrderSortKey(entry: BasesEntry): string | null {
+    const rawOrder =
+      this.config?.get?.("order") ??
+      (this.config as any)?.order ??
+      (this.config as any)?.sort ??
+      (this.config as any)?.viewOrder ??
+      null;
+    const orderItems = Array.isArray(rawOrder) ? rawOrder : rawOrder ? [rawOrder] : [];
+    const parts: string[] = [];
+
+    for (const rawItem of orderItems) {
+      const rawProperty =
+        typeof rawItem === "string"
+          ? rawItem
+          : rawItem && typeof rawItem === "object"
+            ? String((rawItem as any).property ?? (rawItem as any).field ?? (rawItem as any).key ?? (rawItem as any).id ?? "")
+            : "";
+      const property = rawProperty.replace(/^[-+]/, "").trim();
+      if (!property) continue;
+      const value = this.tryGetEntryValue(entry, property as BasesPropertyId);
+      const normalized = this.syntheticFilterValueToString(value).trim();
+      if (normalized) parts.push(normalized);
+    }
+
+    return parts.length ? parts.join("\u0000") : null;
+  }
+
+  private passesSyntheticEntryFilters(entry: BasesEntry): boolean {
+    const filterSources = this.getCalendarFilterSources();
+    for (const source of filterSources) {
+      const result = this.evaluateSyntheticEntryFilter(source, entry);
+      if (result.applied && !result.result) return false;
+    }
+    return true;
+  }
+
+  private evaluateSyntheticEntryFilter(
+    filter: unknown,
+    entry: BasesEntry,
+  ): { applied: boolean; result: boolean } {
+    const evalNode = (node: any): { applied: boolean; result: boolean } => {
+      if (!node) return { applied: false, result: true };
+      if (typeof node === "object" && "data" in node) return evalNode(node.data);
+      if (typeof node === "string") {
+        const parsed = this.parseInlineFilterCondition(node);
+        return parsed ? this.evaluateSyntheticEntryCondition(entry, parsed) : { applied: false, result: true };
+      }
+      if (Array.isArray(node)) return this.combineSyntheticFilterResults(node.map(evalNode), "and");
+      if (typeof node !== "object") return { applied: false, result: true };
+
+      const direct = this.extractDirectFilterCondition(node);
+      if (direct) return this.evaluateSyntheticEntryCondition(entry, direct);
+
+      if ("not" in node) {
+        const inner = evalNode(node.not);
+        return inner.applied ? { applied: true, result: !inner.result } : inner;
+      }
+
+      const childGroups: Array<{ mode: "and" | "or"; nodes: unknown[] }> = [];
+      for (const key of ["and", "all", "filters"]) {
+        if (Array.isArray(node[key])) childGroups.push({ mode: "and", nodes: node[key] });
+      }
+      for (const key of ["or", "any"]) {
+        if (Array.isArray(node[key])) childGroups.push({ mode: "or", nodes: node[key] });
+      }
+      if (Array.isArray(node.children)) {
+        const modeRaw = String(node.type || node.operator || node.match || "").toLowerCase();
+        childGroups.push({ mode: modeRaw.includes("or") || modeRaw.includes("any") ? "or" : "and", nodes: node.children });
+      }
+
+      if (childGroups.length === 0) return { applied: false, result: true };
+      let applied = false;
+      let result = true;
+      for (const group of childGroups) {
+        const groupResult = this.combineSyntheticFilterResults(group.nodes.map(evalNode), group.mode);
+        if (!groupResult.applied) continue;
+        applied = true;
+        result = result && groupResult.result;
+      }
+      return { applied, result: applied ? result : true };
+    };
+
+    try {
+      return evalNode(filter);
+    } catch (error) {
+      logger.warn("[CalendarView] Failed to evaluate synthetic task filter:", error);
+      return { applied: false, result: true };
+    }
+  }
+
+  private combineSyntheticFilterResults(
+    results: Array<{ applied: boolean; result: boolean }>,
+    mode: "and" | "or",
+  ): { applied: boolean; result: boolean } {
+    const appliedResults = results.filter((result) => result.applied);
+    if (appliedResults.length === 0) return { applied: false, result: true };
+    return {
+      applied: true,
+      result: mode === "or"
+        ? appliedResults.some((result) => result.result)
+        : appliedResults.every((result) => result.result),
+    };
+  }
+
+  private extractDirectFilterCondition(node: Record<string, any>): { property: string; operator: string; value: unknown } | null {
+    const rawProp =
+      node.property ?? node.field ?? node.key ?? node.column ?? node.left ?? node.lhs ?? node.operand ?? null;
+    const property = this.stringifyFilterPart(rawProp);
+    if (!property) return null;
+
+    const rawOp = node.op ?? node.operator ?? node.comparison ?? node.type ?? node.condition ?? "exists";
+    const operator = this.stringifyFilterPart(rawOp) || "exists";
+    let value = node.value ?? node.pattern ?? node.match ?? node.right ?? node.rhs ?? node.target ?? node.literal;
+    if (value && typeof value === "object" && "value" in value) value = (value as any).value;
+    return { property, operator, value };
+  }
+
+  private stringifyFilterPart(value: unknown): string {
+    if (typeof value === "string") return value.trim();
+    if (value && typeof value === "object") {
+      return String(
+        (value as any).property ??
+        (value as any).name ??
+        (value as any).key ??
+        (value as any).field ??
+        (value as any).id ??
+        (value as any).label ??
+        (value as any).column ??
+        "",
+      ).trim();
+    }
+    return "";
+  }
+
+  private evaluateSyntheticEntryCondition(
+    entry: BasesEntry,
+    condition: { property: string; operator: string; value: unknown },
+  ): { applied: boolean; result: boolean } {
+    const actual = this.tryGetEntryValue(entry, condition.property as BasesPropertyId);
+    const actualValues = Array.isArray(actual) ? actual : [actual];
+    const hasValue = actualValues.some((value) => value !== null && value !== undefined && String(value).trim?.() !== "");
+    const op = String(condition.operator || "contains").toLowerCase().replace(/[\s_-]+/g, "");
+
+    if (op === "exists" || op === "has" || op === "notempty" || op === "isnotempty") {
+      return { applied: true, result: hasValue };
+    }
+    if (op === "!exists" || op === "doesnotexist" || op === "empty" || op === "isempty") {
+      return { applied: true, result: !hasValue };
+    }
+
+    const expected = condition.value;
+    const expectedText = (normalizeFilterValue(expected) || "").toLowerCase();
+    const expectedTextValues = this.normalizeSyntheticFilterExpectedValues(expected);
+    const expectedDate = this.resolveSyntheticFilterDate(expected);
+    const expectedNumber = Number(normalizeFilterValue(expected) || "");
+
+    const matchOne = (value: unknown): boolean => {
+      const actualDate = resolveDateValue(value);
+      if (actualDate && expectedDate && this.isComparisonOperator(op)) {
+        return this.compareSyntheticNumbers(actualDate.getTime(), expectedDate.getTime(), op);
+      }
+
+      const actualNumber = Number(valueToString(value) ?? "");
+      if (Number.isFinite(actualNumber) && Number.isFinite(expectedNumber) && this.isComparisonOperator(op)) {
+        return this.compareSyntheticNumbers(actualNumber, expectedNumber, op);
+      }
+
+      const actualText = this.syntheticFilterValueToString(value).toLowerCase();
+      if (op.includes("doesnotcontainany") || op === "!containsany" || op === "notcontainsany") {
+        return expectedTextValues.every((candidate) => !actualText.includes(candidate));
+      }
+      if (op.includes("containsany")) {
+        return expectedTextValues.some((candidate) => actualText.includes(candidate));
+      }
+      if (op === "=" || op === "==" || op === "is" || op === "equals") return actualText === expectedText;
+      if (op === "!=" || op === "!==" || op === "isnot" || op === "notequals") return actualText !== expectedText;
+      if (op.includes("doesnotcontain") || op === "!contains" || op === "notcontains") return !actualText.includes(expectedText);
+      if (op.includes("startswith") || op === "starts") return actualText.startsWith(expectedText);
+      if (op.includes("endswith") || op === "ends") return actualText.endsWith(expectedText);
+      return actualText.includes(expectedText);
+    };
+
+    return {
+      applied: true,
+      result: actualValues.some(matchOne),
+    };
+  }
+
+  private syntheticFilterValueToString(value: unknown): string {
+    if (Array.isArray(value)) return value.map((item) => this.syntheticFilterValueToString(item)).filter(Boolean).join(", ");
+    if (value instanceof Date) return formatDateTimeForFrontmatter(value);
+    return valueToString(value) || "";
+  }
+
+  private normalizeSyntheticFilterExpectedValues(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value.map((item) => normalizeFilterValue(item) || "").map((item) => item.toLowerCase()).filter(Boolean);
+    }
+    const raw = normalizeFilterValue(value) || "";
+    const split = raw
+      .split(",")
+      .map((item) => stripOuterQuotes(item.trim()).toLowerCase())
+      .filter(Boolean);
+    return split.length ? split : [raw.toLowerCase()].filter(Boolean);
+  }
+
+  private resolveSyntheticFilterDate(value: unknown): Date | null {
+    return resolveFilterDateExpression(value) || tryParseDate(normalizeFilterValue(value) || "");
+  }
+
+  private isComparisonOperator(op: string): boolean {
+    return [">", ">=", "<", "<=", "after", "onorafter", "before", "onorbefore", "greaterthan", "lessthan"].includes(op);
+  }
+
+  private compareSyntheticNumbers(left: number, right: number, op: string): boolean {
+    if (op === ">" || op === "after" || op === "greaterthan") return left > right;
+    if (op === ">=" || op === "onorafter") return left >= right;
+    if (op === "<" || op === "before" || op === "lessthan") return left < right;
+    if (op === "<=" || op === "onorbefore") return left <= right;
+    return false;
   }
 
   private createSessionEntryFromHeading(file: TFile, session: ParsedSessionHeading): BasesEntry {
@@ -4271,12 +4637,12 @@ export class CalendarView extends BasesView {
         || inline["icon-name"]
         || "",
     ).trim() || null;
-    const colorValue = String(
+    const colorValue = this.normalizeTaskInlineColorValue(String(
       inline.color
         || inline.iconcolor
         || inline["icon-color"]
         || "",
-    ).trim() || null;
+    ).trim()) || null;
     if (!iconName && !colorValue) {
       return { iconName: null, colorValue: null };
     }
@@ -4326,13 +4692,22 @@ export class CalendarView extends BasesView {
     return hex.toLowerCase();
   }
 
+  private normalizeTaskInlineColorValue(value: string): string {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "";
+    const normalizedHex = this.normalizeTaskInlineHexColor(trimmed);
+    return normalizedHex ? `#${normalizedHex}` : trimmed;
+  }
+
   private getTaskStatusFromMarker(marker: string): string {
-    const normalized = String(marker || "").trim();
+    const raw = String(marker ?? "");
+    const normalized = raw.trim();
+    if (!normalized && raw.includes(" ")) return "todo";
     if (/^[xX]$/.test(normalized)) return "complete";
     if (normalized === "-") return "wont-do";
     if (normalized === "/") return "working";
     if (normalized === "?") return "holding";
-    return "open";
+    return "todo";
   }
 
   private computeTaskVisualStyleFromRules(file: TFile, task: ParsedTaskItem): { iconName: string | null; colorValue: string | null } {
@@ -4340,7 +4715,7 @@ export class CalendarView extends BasesView {
       ?? (this.app as any)?.plugins?.plugins?.["TPS-Global-Context-Menu (Dev)"]
       ?? null;
     const rules = Array.isArray(gcm?.settings?.notebookNavigatorRules) ? gcm.settings.notebookNavigatorRules : [];
-    if (!gcm?.settings?.enabled || rules.length === 0) {
+    if (!gcm?.settings || rules.length === 0) {
       return { iconName: null, colorValue: null };
     }
 
@@ -4425,7 +4800,7 @@ export class CalendarView extends BasesView {
     try {
       const visual = evaluateIconColorRules(this.app, rules, taskContext);
       const iconName = String(visual?.icon?.value || "").trim() || null;
-      const colorValue = String(visual?.color?.value || "").trim() || null;
+      const colorValue = this.normalizeTaskInlineColorValue(String(visual?.color?.value || "").trim()) || null;
       this.taskVisualStyleCache.set(file.path, {
         key: cacheKey,
         iconName,
@@ -4454,14 +4829,14 @@ export class CalendarView extends BasesView {
 
   private isVisibleTaskLineUpdate(file: TFile, lineNumber: number | null): boolean {
     if (!this.plugin.settings.showTaskItems) return false;
-    if (this.taskItemAllowedPaths && !this.taskItemAllowedPaths.has(file.path)) return false;
+    if (this.taskItemAllowedPaths && !this.taskItemAllowedPaths.has(this.normalizeTaskSourcePath(file.path))) return false;
     if (!this.cachedRawTaskItems.length) return false;
 
     if (lineNumber == null || lineNumber < 0) {
-      return this.cachedRawTaskItems.some((task) => task.filePath === file.path);
+      return this.cachedRawTaskItems.some((task) => this.normalizeTaskSourcePath(task.filePath) === this.normalizeTaskSourcePath(file.path));
     }
 
-    return this.cachedRawTaskItems.some((task) => task.filePath === file.path && task.lineNumber === lineNumber);
+    return this.cachedRawTaskItems.some((task) => this.normalizeTaskSourcePath(task.filePath) === this.normalizeTaskSourcePath(file.path) && task.lineNumber === lineNumber);
   }
 
   private formatYmd(date: Date): string {
@@ -4819,24 +5194,119 @@ export class CalendarView extends BasesView {
       if ((calendar?.autoCreateMode || "note") !== "task-list") continue;
       const rawPath = String(calendar?.autoCreateTaskListPath || "").trim();
       if (!rawPath) continue;
-      paths.add(normalizePath(rawPath));
+      paths.add(this.normalizeTaskSourcePath(rawPath));
     }
 
     return paths;
+  }
+
+  private normalizeTaskSourcePath(path: string): string {
+    return normalizePath(String(path || "").trim()).replace(/^\/+/, "");
   }
 
   private getAllowedTaskItemRefreshPaths(managedTaskListPaths: Set<string>): Set<string> | null {
     const allowed = new Set<string>();
 
     for (const path of this.taskItemAllowedPaths ?? []) {
-      allowed.add(path);
+      const normalized = this.normalizeTaskSourcePath(path);
+      if (normalized) allowed.add(normalized);
     }
 
     for (const path of managedTaskListPaths) {
-      allowed.add(path);
+      const normalized = this.normalizeTaskSourcePath(path);
+      if (normalized) allowed.add(normalized);
     }
 
     return allowed.size > 0 ? allowed : null;
+  }
+
+  private getTaskItemAllowedPathsKey(paths: Set<string> | null): string {
+    if (!paths || paths.size === 0) return "";
+    return Array.from(paths).map((path) => this.normalizeTaskSourcePath(path)).sort().join("\n");
+  }
+
+  private filterTaskItemsForAllowedPaths(tasks: ParsedTaskItem[]): ParsedTaskItem[] {
+    if (!this.taskItemAllowedPaths) return tasks;
+    return tasks.filter((task) => {
+      const normalizedPath = this.normalizeTaskSourcePath(task.filePath);
+      if (!this.taskItemAllowedPaths!.has(normalizedPath)) return false;
+      return this.taskItemSurfacePaths.has(normalizedPath) || this.taskHasTpsIdentity(task);
+    });
+  }
+
+  private taskHasTpsIdentity(task: ParsedTaskItem): boolean {
+    const inline = task.inlineProperties || {};
+    return ["tpsid", "externaleventid", "tpscalendaruid", "tpscalendarsourceurl"].some((key) => {
+      const value = this.getInlinePropertyValue(inline, key);
+      return typeof value === "string" && value.trim().length > 0;
+    });
+  }
+
+  private resolveTaskDateSource(task: ParsedTaskItem, date: Date): "due" | "scheduled" | "start" | null {
+    const timestamp = date.getTime();
+    if (task.scheduledDate && task.scheduledDate.getTime() === timestamp) return "scheduled";
+    if (task.dueDate && task.dueDate.getTime() === timestamp) return "due";
+    if (task.startDate && task.startDate.getTime() === timestamp) return "start";
+    return task.scheduledDate ? "scheduled" : task.dueDate ? "due" : task.startDate ? "start" : null;
+  }
+
+  private getActiveTaskItemParsePaths(
+    queryData: { data?: unknown[] } | null | undefined,
+    taskSurfacePaths: Set<string>,
+  ): Set<string> {
+    const paths = new Set<string>(taskSurfacePaths);
+
+    for (const entry of Array.isArray(queryData?.data) ? queryData.data : []) {
+      const file = (entry as any)?.file;
+      if (file instanceof TFile) {
+        paths.add(this.normalizeTaskSourcePath(file.path));
+      }
+    }
+
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file instanceof TFile) {
+        paths.add(this.normalizeTaskSourcePath(view.file.path));
+      }
+    });
+
+    return paths;
+  }
+
+  private getActiveTaskItemSurfacePaths(
+    calendarStart: Date,
+    calendarEnd: Date,
+  ): Set<string> {
+    const paths = this.getManagedTaskListPaths();
+    const gcm =
+      (this.app as any)?.plugins?.getPlugin?.("tps-global-context-menu") ??
+      (this.app as any)?.plugins?.plugins?.["TPS-Global-Context-Menu (Dev)"];
+    const dailyNotesAreLineSurfaces = gcm?.settings?.lineTrackingTreatDailyNotesAsSurface === true;
+
+    if (dailyNotesAreLineSurfaces) {
+      const resolver = getDailyNoteResolver(this.app, {
+        formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+      });
+      const cursor = new Date(calendarStart.getFullYear(), calendarStart.getMonth(), calendarStart.getDate(), 0, 0, 0, 0);
+      const end = new Date(calendarEnd.getFullYear(), calendarEnd.getMonth(), calendarEnd.getDate(), 0, 0, 0, 0);
+      while (cursor.getTime() <= end.getTime()) {
+        const path = resolver.buildPath(cursor, "md");
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          paths.add(this.normalizeTaskSourcePath(file.path));
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        const view = leaf.view;
+        if (view instanceof MarkdownView && view.file instanceof TFile && this.isDailyNoteFile(view.file)) {
+          paths.add(this.normalizeTaskSourcePath(view.file.path));
+        }
+      });
+    }
+
+    return paths;
   }
 
   private buildTaskItemEntries(): CalendarEntry[] {
@@ -4849,9 +5319,19 @@ export class CalendarView extends BasesView {
     for (const task of this.cachedRawTaskItems) {
       if (!settings.showCompletedTaskItems && task.isCompleted) continue;
 
+      const abstractFile = this.app.vault.getAbstractFileByPath(task.filePath);
+      if (!abstractFile || !(abstractFile instanceof TFile)) continue;
+
+      const taskEntry = this.createTaskEntryFromItem(abstractFile, task);
+      if (!this.passesSyntheticEntryFilters(taskEntry)) continue;
+
       let date: Date | null = null;
       let dateSource: "due" | "scheduled" | "start" | null = null;
-      if (dateField === "due") {
+      const resolvedTaskStart = this.resolveEntryStartDate(taskEntry);
+      if (resolvedTaskStart) {
+        date = resolvedTaskStart.date;
+        dateSource = this.resolveTaskDateSource(task, date);
+      } else if (dateField === "due") {
         date = task.dueDate;
         dateSource = "due";
       } else if (dateField === "scheduled") {
@@ -4875,11 +5355,8 @@ export class CalendarView extends BasesView {
 
       if (!date) continue;
 
-      const abstractFile = this.app.vault.getAbstractFileByPath(task.filePath);
-      if (!abstractFile || !(abstractFile instanceof TFile)) continue;
-
-      const taskStatus = String(task.inlineProperties.status || "").trim();
-      const taskPriority = String(task.inlineProperties.priority || "").trim();
+      const taskStatus = valueToString(this.getTaskEntryValue(abstractFile, task, "status" as BasesPropertyId)) || "";
+      const taskPriority = valueToString(this.getTaskEntryValue(abstractFile, task, "priority" as BasesPropertyId)) || "";
       const normalizedTaskStatus = taskStatus.toLowerCase();
       const taskIsDone =
         task.isCompleted ||
@@ -4888,16 +5365,19 @@ export class CalendarView extends BasesView {
       const taskVisual = this.getResolvedTaskVisualStyle(abstractFile, task);
       const taskColor = taskVisual.colorValue || "";
       const taskIconColor = taskVisual.iconName ? "var(--text-on-accent)" : undefined;
-      const taskSortKey = this.resolveFrontmatterEventSortKey(
-        this.app.metadataCache.getFileCache(abstractFile)?.frontmatter as Record<string, any> | undefined,
-      ) || undefined;
+      const taskSortKey = this.resolveSyntheticEntrySortKey(taskEntry)
+        || this.resolveFrontmatterEventSortKey(
+          this.app.metadataCache.getFileCache(abstractFile)?.frontmatter as Record<string, any> | undefined,
+        )
+        || undefined;
 
       const taskTimed = dateSource === "scheduled" && task.hasScheduledTime;
       let startDate: Date;
       let endDate: Date;
       if (taskTimed) {
         startDate = new Date(date);
-        const durationMinutes = Math.max(5, task.durationMinutes || this.defaultEventDuration || 30);
+        const configuredDuration = this.endDateProp ? extractDuration(taskEntry, this.endDateProp) : null;
+        const durationMinutes = Math.max(5, configuredDuration || task.durationMinutes || this.defaultEventDuration || 30);
         endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
       } else {
         // All-day event: start at midnight, end at next-day midnight (FC exclusive end).
@@ -4924,7 +5404,7 @@ export class CalendarView extends BasesView {
       seenTaskEventKeys.add(taskIdentityKey);
 
       entries.push({
-        entry: this.createTaskEntryFromItem(abstractFile, task),
+        entry: taskEntry,
         startDate,
         endDate,
         title: task.text || "Task",
@@ -4967,6 +5447,22 @@ export class CalendarView extends BasesView {
     for (const session of this.cachedSessionHeadings) {
       const abstractFile = this.app.vault.getAbstractFileByPath(session.filePath);
       if (!(abstractFile instanceof TFile)) continue;
+      const gcm =
+        (this.app as any)?.plugins?.getPlugin?.("tps-global-context-menu") ??
+        (this.app as any)?.plugins?.plugins?.["TPS-Global-Context-Menu (Dev)"];
+      const lineTrackingApi = gcm?.api ?? gcm;
+      if (typeof lineTrackingApi?.isLineTrackable === "function") {
+        const inlineProps = Object.entries(session.inlineProperties || {})
+          .map(([key, value]) => `[${key}:: ${value}]`)
+          .join(" ");
+        const trackable = lineTrackingApi.isLineTrackable({
+          path: session.filePath,
+          line: `## Session: ${session.text || "Session"} ${inlineProps}`.trim(),
+          kind: "heading",
+          lineNumber: session.lineNumber,
+        });
+        if (!trackable) continue;
+      }
 
       if (archiveFolder) {
         const normalizedPath = normalizePath(abstractFile.path);
@@ -5008,23 +5504,27 @@ export class CalendarView extends BasesView {
     return entries;
   }
 
-  private async refreshTaskItems(): Promise<void> {
+  private async refreshTaskItems(options: { renderAfter?: boolean } = {}): Promise<void> {
     if (this.isFetchingTaskItems) return;
     this.isFetchingTaskItems = true;
     try {
       const managedTaskListPaths = this.getManagedTaskListPaths();
       const allowedTaskItemPaths = this.getAllowedTaskItemRefreshPaths(managedTaskListPaths);
+      if (!allowedTaskItemPaths && !(this.plugin.settings.taskItemFolderFilter || "").trim()) {
+        this.cachedAllTaskItemsForDedup = [];
+        this.cachedRawTaskItems = [];
+        this.lastTaskItemsFetch = Date.now();
+        return;
+      }
       this.cachedAllTaskItemsForDedup = await parseAllTaskItems(
         this.app,
         this.plugin.settings.taskItemFolderFilter || "",
         allowedTaskItemPaths,
-        managedTaskListPaths,
+        allowedTaskItemPaths,
       );
-      this.cachedRawTaskItems = this.taskItemAllowedPaths
-        ? this.cachedAllTaskItemsForDedup.filter(t => this.taskItemAllowedPaths!.has(t.filePath))
-        : this.cachedAllTaskItemsForDedup;
+      this.cachedRawTaskItems = this.filterTaskItemsForAllowedPaths(this.cachedAllTaskItemsForDedup);
       this.lastTaskItemsFetch = Date.now();
-      if (this.plugin.settings.showTaskItems) {
+      if (options.renderAfter !== false && this.plugin.settings.showTaskItems) {
         this.debouncedRefresh();
       }
     } catch (err) {
@@ -6486,6 +6986,24 @@ export class CalendarView extends BasesView {
     if (!trimmed) return null;
 
     // Example: !file.path.contains("System")
+    const negContainsAnyMatch = trimmed.match(/^!\s*([\w.]+)\.containsAny\((.+)\)\s*$/i);
+    if (negContainsAnyMatch) {
+      return {
+        property: negContainsAnyMatch[1],
+        operator: "does not contain any",
+        value: negContainsAnyMatch[2].trim(),
+      };
+    }
+
+    const containsAnyMatch = trimmed.match(/^([\w.]+)\.containsAny\((.+)\)\s*$/i);
+    if (containsAnyMatch) {
+      return {
+        property: containsAnyMatch[1],
+        operator: "contains any",
+        value: containsAnyMatch[2].trim(),
+      };
+    }
+
     const negContainsMatch = trimmed.match(/^!\s*([\w.]+)\.contains\((.+)\)\s*$/i);
     if (negContainsMatch) {
       return {
@@ -6647,38 +7165,22 @@ export class CalendarView extends BasesView {
   private handleTrackedFileChange = (file: TFile, data: string, cache: CachedMetadata): void => {
     if (!(file instanceof TFile)) return;
 
-    if (this.isEditorFocused() && !this.isActiveLeaf()) {
-      calendarTrace.debug("Ignored tracked file change because another editor is focused", { file: file.path });
-      return;
-    }
-
-    const recentlyTyping = this.lastEditorChangeAt && Date.now() - this.lastEditorChangeAt < this.typingQuietWindowMs;
-    if (recentlyTyping && !this.isActiveLeaf()) {
-      calendarTrace.debug("Ignored tracked file change during typing quiet window", {
-        file: file.path,
-        msSinceEditorChange: Date.now() - this.lastEditorChangeAt,
-      });
-      return;
-    }
-
-    const isTaskItemFile = this.cachedRawTaskItems?.some(t => t.filePath === file.path);
+    const normalizedFilePath = this.normalizeTaskSourcePath(file.path);
+    const isTaskItemFile = this.cachedRawTaskItems?.some(t => this.normalizeTaskSourcePath(t.filePath) === normalizedFilePath);
     const isTaskItemSourceFile = this.isTaskItemSourceFile(file);
+    const isTpsTaskCandidateFile = !isTaskItemSourceFile && this.contentContainsDatedTpsTaskItem(data);
     const isSessionHeadingFile = this.cachedSessionHeadings.some((session) => session.filePath === file.path);
     const isSessionHeadingSourceFile = this.isSessionHeadingSourceFile(file);
 
-    const nextFrontmatter = cache?.frontmatter ? JSON.stringify(cache.frontmatter) : "";
-    const prevFrontmatter = this.lastFrontmatterByPath.get(file.path);
-    const frontmatterChanged = prevFrontmatter !== nextFrontmatter;
-    if (frontmatterChanged) {
-      this.lastFrontmatterByPath.set(file.path, nextFrontmatter);
-      this.invalidateExternalSuppressionState();
-    }
-
-    if (isTaskItemFile || isTaskItemSourceFile) {
+    if (isTaskItemFile || isTaskItemSourceFile || isTpsTaskCandidateFile) {
+      if (isTpsTaskCandidateFile) {
+        this.ensureTaskItemPathAllowed(file.path);
+      }
       calendarTrace.debug("Tracked file change routed to task-item refresh", {
         file: file.path,
         isTaskItemFile,
         isTaskItemSourceFile,
+        isTpsTaskCandidateFile,
       });
       void this.refreshTaskItemsForFile(file);
       void this.updateCalendar();
@@ -6694,6 +7196,28 @@ export class CalendarView extends BasesView {
       void this.refreshSessionHeadingsForFile(file);
       void this.updateCalendar();
       return;
+    }
+
+    if (this.isEditorFocused() && !this.isActiveLeaf()) {
+      calendarTrace.debug("Ignored tracked file change because another editor is focused", { file: file.path });
+      return;
+    }
+
+    const recentlyTyping = this.lastEditorChangeAt && Date.now() - this.lastEditorChangeAt < this.typingQuietWindowMs;
+    if (recentlyTyping && !this.isActiveLeaf()) {
+      calendarTrace.debug("Ignored tracked file change during typing quiet window", {
+        file: file.path,
+        msSinceEditorChange: Date.now() - this.lastEditorChangeAt,
+      });
+      return;
+    }
+
+    const nextFrontmatter = cache?.frontmatter ? JSON.stringify(cache.frontmatter) : "";
+    const prevFrontmatter = this.lastFrontmatterByPath.get(file.path);
+    const frontmatterChanged = prevFrontmatter !== nextFrontmatter;
+    if (frontmatterChanged) {
+      this.lastFrontmatterByPath.set(file.path, nextFrontmatter);
+      this.invalidateExternalSuppressionState();
     }
 
     if (!frontmatterChanged) {
@@ -6934,20 +7458,36 @@ export class CalendarView extends BasesView {
     const settings = this.plugin.settings;
     if (!settings.showTaskItems) return false;
     const folderFilter = settings.taskItemFolderFilter || "";
-    const normalizedPath = normalizePath(file.path);
+    const normalizedPath = this.normalizeTaskSourcePath(file.path);
     if (folderFilter) {
-      const normalizedFolder = normalizePath(folderFilter);
+      const normalizedFolder = this.normalizeTaskSourcePath(folderFilter);
       if (normalizedPath.startsWith(normalizedFolder + "/") || normalizedPath === normalizedFolder + ".md") return true;
     }
     const managedPaths = this.getManagedTaskListPaths();
     if (managedPaths.has(normalizedPath)) return true;
-    const controllerPlugin = (this.app as any)?.plugins?.getPlugin?.('tps-controller')
-      || (this.app as any)?.plugins?.plugins?.['TPS-Controller (Dev)'];
-    if (controllerPlugin?.api?.getDailyNoteResolver) {
-      const resolver = controllerPlugin.api.getDailyNoteResolver();
-      if (resolver?.isDailyNoteBasename?.(file.basename)) return true;
+    return this.isDailyNoteFile(file);
+  }
+
+  private contentContainsDatedTpsTaskItem(content: string): boolean {
+    if (typeof content !== "string" || !content.includes("[")) return false;
+    return content.split("\n").some((line) => {
+      if (!/^[\t ]*-\s+\[[^\]]*\]\s+/.test(line)) return false;
+      const hasIdentity = /\[(?:tpsid|externaleventid|tpscalendaruid|tpscalendarsourceurl)::\s*[^\]]+\]/i.test(line);
+      if (!hasIdentity) return false;
+      return /\[(?:scheduled|scheduleddate|scheduled-date|due|duedate|due-date|start|startdate|start-date)::\s*[^\]]+\]/i.test(line)
+        || /[📅⏳🛫]\s*\d{4}-\d{2}-\d{2}/.test(line)
+        || /@\{[^}]*\d{4}-\d{2}-\d{2}[^}]*\}/.test(line);
+    });
+  }
+
+  private ensureTaskItemPathAllowed(path: string): void {
+    const normalized = this.normalizeTaskSourcePath(path);
+    if (!normalized) return;
+    if (!this.taskItemAllowedPaths) {
+      this.taskItemAllowedPaths = new Set();
     }
-    return false;
+    this.taskItemAllowedPaths.add(normalized);
+    this.taskItemAllowedPathsKey = this.getTaskItemAllowedPathsKey(this.taskItemAllowedPaths);
   }
 
   private isDailyNoteFile(file: TFile): boolean {
@@ -6957,7 +7497,14 @@ export class CalendarView extends BasesView {
       const resolver = controllerPlugin.api.getDailyNoteResolver();
       if (resolver?.isDailyNoteBasename?.(file.basename)) return true;
     }
-    return false;
+    try {
+      const resolver = getDailyNoteResolver(this.app, {
+        formatOverride: (this.plugin as any)?.settings?.dailyNoteDateFormat,
+      });
+      return resolver.isDailyNoteBasename(file.basename);
+    } catch {
+      return false;
+    }
   }
 
   private isSessionHeadingSourceFile(file: TFile): boolean {
@@ -6969,17 +7516,18 @@ export class CalendarView extends BasesView {
     if (!this.plugin.settings.showTaskItems) return false;
 
     const folderFilter = this.plugin.settings.taskItemFolderFilter || "";
-    const normalizedPath = normalizePath(file.path);
+    const normalizedPath = this.normalizeTaskSourcePath(file.path);
+    const isDailyTaskSurface = this.isDailyNoteFile(file);
     if (folderFilter) {
-      const normalizedFolder = normalizePath(folderFilter);
+      const normalizedFolder = this.normalizeTaskSourcePath(folderFilter);
       const inFolder = normalizedPath.startsWith(normalizedFolder + "/") || normalizedPath === normalizedFolder + ".md";
       const isManagedTaskList = this.getManagedTaskListPaths().has(normalizedPath);
-      if (!inFolder && !isManagedTaskList) {
+      if (!inFolder && !isManagedTaskList && !isDailyTaskSurface) {
         return false;
       }
     }
 
-    if (this.taskItemAllowedPaths && !this.taskItemAllowedPaths.has(file.path)) {
+    if (this.taskItemAllowedPaths && !this.taskItemAllowedPaths.has(normalizedPath)) {
       return false;
     }
 
@@ -6997,7 +7545,8 @@ export class CalendarView extends BasesView {
     }
     this.isFetchingTaskItems = true;
     try {
-      const existing = this.cachedAllTaskItemsForDedup.filter((task) => task.filePath !== file.path);
+      const normalizedFilePath = this.normalizeTaskSourcePath(file.path);
+      const existing = this.cachedAllTaskItemsForDedup.filter((task) => this.normalizeTaskSourcePath(task.filePath) !== normalizedFilePath);
       let nextTasks: ParsedTaskItem[] = [];
       const allowedInCurrentView = this.isTaskItemAllowedInCurrentView(file);
       if (allowedInCurrentView) {
@@ -7015,9 +7564,7 @@ export class CalendarView extends BasesView {
       }
 
       this.cachedAllTaskItemsForDedup = [...existing, ...nextTasks];
-      this.cachedRawTaskItems = this.taskItemAllowedPaths
-        ? this.cachedAllTaskItemsForDedup.filter((task) => this.taskItemAllowedPaths!.has(task.filePath))
-        : this.cachedAllTaskItemsForDedup;
+      this.cachedRawTaskItems = this.filterTaskItemsForAllowedPaths(this.cachedAllTaskItemsForDedup);
       this.lastTaskItemsFetch = Date.now();
       this.taskVisualStyleCache.delete(file.path);
       calendarTrace.debug("Refreshed task items for file", {
@@ -7130,20 +7677,26 @@ export class CalendarView extends BasesView {
   }
 
   private updateExternalCalendarVisibility(): void {
-    this.externalCalendarUrls = this.plugin.getExternalCalendarUrls();
     const calendars = this.plugin.getEffectiveExternalCalendars();
+    const directExternalCalendarUrls = calendars
+      .filter((calendar) => calendar?.url && calendar.enabled !== false)
+      .filter((calendar) => (calendar.autoCreateMode || "note") !== "task-list")
+      .map((calendar) => normalizeCalendarUrl(calendar.url))
+      .filter(Boolean);
+    this.externalCalendarUrls = directExternalCalendarUrls;
     const visibilityByUrl = new Map<string, boolean>();
 
     for (const calendar of calendars) {
       if (!calendar?.url || !calendar.id) continue;
+      if ((calendar.autoCreateMode || "note") === "task-list") continue;
       // Safety check: this.config might be undefined during early load
       if (!this.config) {
-        visibilityByUrl.set(calendar.url, true); // Default to true if config isn't ready
+        visibilityByUrl.set(normalizeCalendarUrl(calendar.url), true); // Default to true if config isn't ready
         continue;
       }
       const stored = this.config.get(this.getExternalCalendarViewKey(calendar.id));
       const isVisible = !(stored === "false" || stored === false);
-      visibilityByUrl.set(calendar.url, isVisible);
+      visibilityByUrl.set(normalizeCalendarUrl(calendar.url), isVisible);
     }
 
     this.visibleExternalCalendarUrls = this.externalCalendarUrls.filter((url) => {
@@ -7400,7 +7953,7 @@ export class CalendarView extends BasesView {
         return;
       }
 
-      const parentKey = (this.plugin.settings.parentLinkKey || "childOf").trim() || "childOf";
+      const parentKey = (this.plugin.settings.parentLinkKey || "parent").trim() || "parent";
       const childKey = (this.plugin.settings.childLinkKey || "").trim();
       const doBidirectional = this.plugin.settings.parentLinkEnabled && !!childKey;
 

@@ -9,7 +9,7 @@ import {
   type TemplateVars,
 } from "../utils/template-variable-service";
 import { resolveTemplateFile as resolveTemplateFilePath } from "../utils/template-resolution-service";
-import { mergeTagInputs, normalizeTagValue } from "../utils/tag-utils";
+import { mergeTagInputs, parseTagInput } from "../utils/tag-utils";
 import { getPluginById } from "../core";
 import { getDailyNoteResolver } from "../../../TPS-Controller (Dev)/src/utils/daily-note-resolver";
 
@@ -418,9 +418,9 @@ export async function createMeetingNoteFromExternalEvent(
   // Apply event frontmatter additively (merge, never overwrite existing values).
   // TPS fields are stamped on top of whatever Templater produced.
   await processFrontmatterSafely(app, file, "external-event-create", (fm) => {
-    const normalizedCalendarTag = normalizeTagValue(calendarTag);
-    if (normalizedCalendarTag) {
-      fm.tags = mergeTagInputs(fm.tags, normalizedCalendarTag);
+    const calendarTags = parseTagInput(calendarTag);
+    if (calendarTags.length) {
+      fm.tags = mergeTagInputs(fm.tags, calendarTags);
     }
     const resolvedFolderPath = file.parent?.path || "/";
     setFrontmatterValueCaseInsensitive(fm, "folderPath", resolvedFolderPath);
@@ -439,11 +439,12 @@ export async function createMeetingNoteFromExternalEvent(
     }
   });
 
-  // Create bidirectional link if parent file is provided
-  if (parentFile && parentLinkKey && childLinkKey) {
+  // Create the child-side parent link when a parent file is provided.
+  // Stored reverse child lists are disabled when childLinkKey is empty.
+  if (parentFile && parentLinkKey) {
     try {
-      await createBidirectionalLink(app, file, parentFile, parentLinkKey, childLinkKey);
-      logger.log(`[CreateMeetingNote] Created bidirectional link: ${file.basename} ↔ ${parentFile.basename}`);
+      await createBidirectionalLink(app, file, parentFile, parentLinkKey, childLinkKey || "");
+      logger.log(`[CreateMeetingNote] Created parent link: ${file.basename} -> ${parentFile.basename}`);
     } catch (error) {
       logger.error(`[CreateMeetingNote] Failed to create bidirectional link:`, error);
       // Don't fail the entire operation if linking fails

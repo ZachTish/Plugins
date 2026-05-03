@@ -763,7 +763,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
   const isMobile = Platform.isMobile;
   const mobileNavHidden = isInternalDragging || isMobileNavHidden;
   const activePlugins = isMobile ? [dayGridPlugin, timeGridPlugin, interactionPlugin] : PLUGINS;
-  const allowEdit = editable;
+  const allowEdit = editable || entries.some((entry) => !!entry.isTask);
   const allowSelect = !!onCreateSelection;
   const floatingNavStyle: React.CSSProperties = {
     position: 'absolute',
@@ -1259,6 +1259,7 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
     defaultEventDuration,
     minEventHeight,
     tick,
+    editable,
     doneStatuses,
   });
 
@@ -1935,34 +1936,35 @@ export const CalendarReactView: React.FC<CalendarReactViewProps> = ({
           dailyNoteDateFormat: dailyNoteDateFormatRef.current,
         });
         applyActiveNoteEventHighlight(element, shouldHighlight);
-        element.setAttribute("draggable", "true");
-        const dragPath = String(event.extendedProps.sourceLinkPath || event.extendedProps.entryPath || "").trim();
-        const handleDragStart = (dragEvent: DragEvent) => {
-          if (!dragEvent.dataTransfer || !dragPath) return;
-          const dragTitle = String(event.extendedProps.calEntryTitle || event.title || "").trim();
-          const wikilink = buildTaskSourceWikilink(dragPath, dragTitle);
-          dragEvent.dataTransfer.effectAllowed = "copy";
-          if (dragTitle) {
-            const cardRefPayload: Record<string, string> = {
-              title: dragTitle,
-              linkPath: dragPath,
-            };
-            if (event.extendedProps.isTask) {
-              cardRefPayload.isTask = "1";
-              cardRefPayload.checkboxState = event.extendedProps.taskIsDone ? "[x]" : "[ ]";
-            }
-            dragEvent.dataTransfer.setData(TASK_REFERENCE_DRAG_TYPE, JSON.stringify(cardRefPayload));
-          }
-          if (wikilink) {
-            dragEvent.dataTransfer.setData("text/plain", wikilink);
-          }
-        };
         const previousDragStartHandler = (element as any)._tpsDragStartHandler as ((dragEvent: DragEvent) => void) | undefined;
         if (previousDragStartHandler) {
           element.removeEventListener("dragstart", previousDragStartHandler);
         }
-        (element as any)._tpsDragStartHandler = handleDragStart;
-        element.addEventListener("dragstart", handleDragStart);
+        (element as any)._tpsDragStartHandler = undefined;
+        if (event.extendedProps.isTask) {
+          element.removeAttribute("draggable");
+        } else {
+          element.setAttribute("draggable", "true");
+          const dragPath = String(event.extendedProps.sourceLinkPath || event.extendedProps.entryPath || "").trim();
+          const handleDragStart = (dragEvent: DragEvent) => {
+            if (!dragEvent.dataTransfer || !dragPath) return;
+            const dragTitle = String(event.extendedProps.calEntryTitle || event.title || "").trim();
+            const wikilink = buildTaskSourceWikilink(dragPath, dragTitle);
+            dragEvent.dataTransfer.effectAllowed = "copy";
+            if (dragTitle) {
+              const cardRefPayload: Record<string, string> = {
+                title: dragTitle,
+                linkPath: dragPath,
+              };
+              dragEvent.dataTransfer.setData(TASK_REFERENCE_DRAG_TYPE, JSON.stringify(cardRefPayload));
+            }
+            if (wikilink) {
+              dragEvent.dataTransfer.setData("text/plain", wikilink);
+            }
+          };
+          (element as any)._tpsDragStartHandler = handleDragStart;
+          element.addEventListener("dragstart", handleDragStart);
+        }
       }
 
       let top = element.querySelector(".bases-calendar-time-top") as HTMLElement;

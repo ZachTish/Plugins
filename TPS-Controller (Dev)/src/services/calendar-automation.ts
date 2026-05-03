@@ -7,7 +7,7 @@ import {
     resolveExternalCalendarNoteTargetFolder,
 } from "./external-calendar-destination";
 import type { TPSControllerSettings, ExternalCalendarConfig } from "../types";
-import { normalizeCalendarUrl, normalizeCalendarTag } from "../utils";
+import { normalizeCalendarUrl } from "../utils";
 import { getDailyNoteResolver } from "../utils/daily-note-resolver";
 import * as logger from "../logger";
 
@@ -156,7 +156,7 @@ export class CalendarAutomationService {
                     {
                         mode: c.autoCreateMode || "note",
                         folder: resolveExternalCalendarNoteTargetFolder(c),
-                        tag: normalizeCalendarTag(c.autoCreateTag || ""),
+                        tag: c.autoCreateTag || "",
                         template: c.autoCreateTemplate || "",
                         taskListPath: c.autoCreateTaskListPath || "",
                         taskListHeading: c.autoCreateTaskListHeading || "",

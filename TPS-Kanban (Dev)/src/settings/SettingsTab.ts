@@ -126,7 +126,7 @@ export class KanbanSettingTab extends PluginSettingTab {
       containerEl,
       'Board Behavior',
       'Lane ordering, task-card placement, and overall board sizing.',
-      false,
+      true,
     );
 
     new Setting(boardSection)
@@ -191,7 +191,7 @@ export class KanbanSettingTab extends PluginSettingTab {
 
     new Setting(boardSection)
       .setName('Kanban line task cards')
-      .setDesc('Show/hide task-level cards parsed from kanban board note checkboxes.')
+      .setDesc('Show checklist items from Kanban board notes as separate cards.')
       .addToggle((toggle) => {
         toggle
           .setValue(this.plugin.settings.enableKanbanTaskCards !== false)

@@ -3,7 +3,6 @@ import { BasesView, QueryController, Menu, BasesEntry, BasesEntryGroup, setIcon,
 import { FileSelectionModal } from '../../../TPS-Calendar-Base (Dev)/src/modals/file-selection-modal';
 import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
 import { ensureDailyNoteFile } from '../../../TPS-Controller (Dev)/src/utils/daily-note-create';
-import { RuleEvaluationContext } from '../../../TPS-Notebook-Navigator-Companion (Dev)/src/types';
 
 export const KANBAN_VIEW_TYPE = 'tps-kanban';
 const TASK_LINE_UPDATED_EVENT = 'tps-task-line-updated';
@@ -34,6 +33,28 @@ type VirtualKanbanTaskMeta = {
   scheduled: string | null;
   rawScheduled: string | null;
   stateMarker: string;
+};
+
+type RuleEvaluationContext = {
+  file: {
+    path: string;
+    name: string;
+    basename: string;
+    extension: string;
+  };
+  frontmatter: Record<string, unknown>;
+  tags: string[];
+  body: string;
+  parent?: {
+    file: {
+      path: string;
+      name: string;
+      basename: string;
+      extension: string;
+    };
+    frontmatter: Record<string, unknown>;
+    tags: string[];
+  };
 };
 
 type ParsedKanbanTask = {
@@ -77,6 +98,13 @@ type GcmTaskSemanticsApi = {
     scheduledTimeToken: string | null;
     checkboxState: string | null;
   } | null;
+  isLineTrackable?: (input: {
+    path: string;
+    line: string;
+    kind?: 'checkbox' | 'bullet' | 'heading' | 'unknown';
+    lineNumber?: number;
+    content?: string;
+  }) => boolean;
 };
 
 class LaneRenameModal extends Modal {
@@ -389,6 +417,11 @@ export class KanbanView extends BasesView {
     this.containerEl?.classList.toggle('tps-kanban-container--list', layoutMode === 'list');
     this.scrollEl?.classList.toggle('tps-kanban-scroll--list', layoutMode === 'list');
     this.bindWheelHandler();
+  }
+
+  refreshFromSettings(): void {
+    this.applyLayoutSettings();
+    this.render();
   }
 
   private getEffectiveLayoutMode(): 'board' | 'list' {
@@ -1092,7 +1125,7 @@ export class KanbanView extends BasesView {
     if (!updated.changed) return false;
 
     lines[meta.lineNumber] = updated.line;
-    const parsed = this.parseKanbanBoardTasks(`${updated.line}\n`)[0];
+    const parsed = this.parseKanbanBoardTasks(`${updated.line}\n`, parentFile.path)[0];
     if (parsed) {
       const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
         ...this.createVirtualTaskMeta(parentFile.path, parsed),
@@ -1140,7 +1173,7 @@ export class KanbanView extends BasesView {
         const newLine = `${prefix.replace(/\[[^\]]\]\s+$/, '')}${strippedBody}`.replace(/-\s+$/, '- ');
         if (newLine === line) return false;
         lines[meta.lineNumber] = newLine;
-        const parsed = this.parseKanbanBoardTasks(`${newLine}\n`)[0];
+        const parsed = this.parseKanbanBoardTasks(`${newLine}\n`, parentFile.path)[0];
         if (parsed) {
           const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
             ...this.createVirtualTaskMeta(parentFile.path, parsed),
@@ -1158,7 +1191,7 @@ export class KanbanView extends BasesView {
       const newLine = `${nextPrefix}${body}`;
       if (newLine === line) return false;
       lines[meta.lineNumber] = newLine;
-      const parsed = this.parseKanbanBoardTasks(`${newLine}\n`)[0];
+      const parsed = this.parseKanbanBoardTasks(`${newLine}\n`, parentFile.path)[0];
       if (parsed) {
         const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
           ...this.createVirtualTaskMeta(parentFile.path, parsed),
@@ -1185,7 +1218,7 @@ export class KanbanView extends BasesView {
       const newLine = `${prefix}${body}`;
       if (newLine === line) return false;
       lines[meta.lineNumber] = newLine;
-      const parsed = this.parseKanbanBoardTasks(`${newLine}\n`)[0];
+      const parsed = this.parseKanbanBoardTasks(`${newLine}\n`, parentFile.path)[0];
       if (parsed) {
         const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
           ...this.createVirtualTaskMeta(parentFile.path, parsed),
@@ -1223,7 +1256,7 @@ export class KanbanView extends BasesView {
     const newLine = `${prefix}${body}`.trimEnd();
     if (newLine === line) return false;
     lines[meta.lineNumber] = newLine;
-    const parsed = this.parseKanbanBoardTasks(`${newLine}\n`)[0];
+    const parsed = this.parseKanbanBoardTasks(`${newLine}\n`, parentFile.path)[0];
     if (parsed) {
       const visual = this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
         ...this.createVirtualTaskMeta(parentFile.path, parsed),
@@ -1271,7 +1304,7 @@ export class KanbanView extends BasesView {
     const updated = mutate(original, parentFile);
     if (!updated || updated === original) return false;
 
-    const parsed = this.parseKanbanBoardTasks(`${updated}\n`)[0];
+    const parsed = this.parseKanbanBoardTasks(`${updated}\n`, parentFile.path)[0];
     const visual = parsed
       ? this.computeVirtualTaskVisualStyleFromRules(this.createSyntheticVirtualTaskEntry(parentFile, parsed.text, meta.lineNumber), {
           ...this.createVirtualTaskMeta(parentFile.path, parsed),
@@ -1288,7 +1321,7 @@ export class KanbanView extends BasesView {
 
   private async syncMostRecentVirtualTaskVisualProperties(file: TFile): Promise<boolean> {
     const content = await this.app.vault.read(file);
-    const tasks = this.parseKanbanBoardTasks(content);
+    const tasks = this.parseKanbanBoardTasks(content, file.path);
     if (!tasks.length) return false;
 
     const latestTask = tasks.reduce((latest, task) => (task.lineNumber > latest.lineNumber ? task : latest));
@@ -1545,7 +1578,7 @@ export class KanbanView extends BasesView {
     await this.applyNotebookNavigatorRulesToFile(file);
     const syncedVisuals = await this.syncMostRecentVirtualTaskVisualProperties(file);
     if (!syncedVisuals) {
-      const createdTasks = this.parseKanbanBoardTasks(next);
+      const createdTasks = this.parseKanbanBoardTasks(next, file.path);
       const createdTask = createdTasks.length > 0 ? createdTasks[createdTasks.length - 1] : null;
       this.emitTaskLineUpdated(file, createdTask?.lineNumber ?? null);
     }
@@ -1636,11 +1669,12 @@ export class KanbanView extends BasesView {
   }
 
   private parseVirtualTaskStateLabel(rawLine: string): string {
-    const state = rawLine.match(/^[\t ]*-\s+\[([^\]]*)\]/)?.[1]?.trim() ?? '';
+    const state = rawLine.match(/^[\t ]*-\s+\[([^\]]*)\]/)?.[1] ?? '';
     if (/^[xX]$/.test(state)) return 'complete';
-    if (state === '-') return 'canceled';
-    if (state === '?') return 'question';
-    return 'open';
+    if (state === '-') return 'wont-do';
+    if (state === '?') return 'holding';
+    if (state === '/') return 'working';
+    return 'todo';
   }
 
   private async revealVirtualTaskLine(meta: VirtualKanbanTaskMeta): Promise<void> {
@@ -1903,7 +1937,9 @@ export class KanbanView extends BasesView {
   }
 
   private getTaskStatusFromMarker(marker: string): string {
-    const normalized = String(marker ?? '').trim();
+    const raw = String(marker ?? '');
+    const normalized = raw.trim();
+    if (!normalized && raw.includes(' ')) return 'todo';
     if (!normalized) return '';
     if (/^[xX]$/.test(normalized)) return 'complete';
     if (normalized === '-') return 'wont-do';
@@ -1949,7 +1985,7 @@ export class KanbanView extends BasesView {
     return dateValue;
   }
 
-  private parseKanbanBoardTasks(content: string): ParsedKanbanTask[] {
+  private parseKanbanBoardTasks(content: string, filePath: string): ParsedKanbanTask[] {
     const lines = content.split('\n');
     const tasks: ParsedKanbanTask[] = [];
     const gcmSemantics = this.getGcmTaskSemanticsApi();
@@ -1957,6 +1993,13 @@ export class KanbanView extends BasesView {
     for (let i = 0; i < lines.length; i++) {
       const parsedTask = gcmSemantics?.parseTaskLine?.(lines[i]);
       if (parsedTask) {
+        if (gcmSemantics?.isLineTrackable && !gcmSemantics.isLineTrackable({
+          path: filePath,
+          line: lines[i],
+          kind: parsedTask.checkboxState ? 'checkbox' : 'bullet',
+          lineNumber: i,
+          content,
+        })) continue;
         const inlineProperties = parsedTask.inlineProperties || {};
         const text = String(parsedTask.text || '').trim();
         if (!text) continue;
@@ -1982,6 +2025,13 @@ export class KanbanView extends BasesView {
       const checkboxMatch = lines[i].match(/^[\t ]*-\s+\[([^\]])\]\s+(.*)$/);
       const bulletMatch = checkboxMatch ? null : lines[i].match(/^[\t ]*-\s+(?!\[[^\]]\]\s+)(.*)$/);
       if (!checkboxMatch && !bulletMatch) continue;
+      if (gcmSemantics?.isLineTrackable && !gcmSemantics.isLineTrackable({
+        path: filePath,
+        line: lines[i],
+        kind: checkboxMatch ? 'checkbox' : 'bullet',
+        lineNumber: i,
+        content,
+      })) continue;
       const rawText = checkboxMatch ? checkboxMatch[2] : (bulletMatch?.[1] ?? '');
       const inlineProperties: Record<string, string> = {};
       const inlineRe = /\[([a-zA-Z0-9_-]+)::\s*([^\]]+)\]/g;
@@ -2127,7 +2177,7 @@ export class KanbanView extends BasesView {
 
         try {
           const content = await this.app.vault.cachedRead(file);
-          const tasks = this.parseKanbanBoardTasks(content);
+          const tasks = this.parseKanbanBoardTasks(content, file.path);
           if (!tasks.length) {
             expandedEntries.push(entry);
             continue;
@@ -2268,7 +2318,6 @@ export class KanbanView extends BasesView {
       ).trim();
       if (configured) keys.add(configured);
     }
-    keys.add('childOf');
     keys.add('parent');
     return Array.from(keys);
   }
@@ -2342,9 +2391,6 @@ export class KanbanView extends BasesView {
       ).trim();
       if (configured) keys.add(configured);
     }
-    keys.add('parentOf');
-    keys.add('children');
-    keys.add('meetings');
     return Array.from(keys);
   }
 
@@ -2984,7 +3030,7 @@ export class KanbanView extends BasesView {
       }
     }
 
-    // Forward direction: child -> parent (e.g. childOf)
+    // Forward direction: child -> parent.
     for (const entry of entries) {
       if (parentByChild.has(entry.file.path)) continue;
       const parentPath = this.resolveParentPath(entry.file);
@@ -2993,7 +3039,7 @@ export class KanbanView extends BasesView {
       parentByChild.set(entry.file.path, parentPath);
     }
 
-    // Reverse direction: parent -> children (e.g. parentOf)
+    // Optional reverse direction for explicitly configured stored child lists.
     const childKeys = this.getChildLinkKeys();
     for (const parentEntry of visibleEntryByPath.values()) {
       const fm = (this.app.metadataCache.getFileCache(parentEntry.file)?.frontmatter || {}) as Record<string, unknown>;
@@ -3074,7 +3120,7 @@ export class KanbanView extends BasesView {
       if (!this.shouldExpandTaskCardsFromFile(file)) continue;
       try {
         const content = await this.app.vault.cachedRead(file);
-        const tasks = this.parseKanbanBoardTasks(content);
+        const tasks = this.parseKanbanBoardTasks(content, file.path);
         const matchingTasks = tasks.filter((task) => task.scheduled && this.normalizeTaskScheduleValue(task.scheduled) === targetDate);
         if (!matchingTasks.length) continue;
         const parentEntry = this.createFileBackedEntry(file);
@@ -3356,6 +3402,13 @@ export class KanbanView extends BasesView {
   private async toggleDynamicEmptyLaneWidth(): Promise<void> {
     const current = !!this.plugin.settings.dynamicEmptyLaneWidth;
     this.plugin.settings.dynamicEmptyLaneWidth = !current;
+    await this.plugin.saveSettings();
+    this.render();
+  }
+
+  private async toggleKanbanTaskCards(): Promise<void> {
+    const current = this.plugin.settings.enableKanbanTaskCards !== false;
+    this.plugin.settings.enableKanbanTaskCards = !current;
     await this.plugin.saveSettings();
     this.render();
   }
@@ -3900,6 +3953,14 @@ export class KanbanView extends BasesView {
         })
         .addEventListener('click', () => {
           void this.toggleDynamicEmptyLaneWidth();
+        });
+      controls
+        .createEl('button', {
+          cls: 'tps-kanban-view-toggle',
+          text: this.plugin.settings.enableKanbanTaskCards === false ? 'Checklist cards: off' : 'Checklist cards: on',
+        })
+        .addEventListener('click', () => {
+          void this.toggleKanbanTaskCards();
         });
 
     const boardClasses = ['tps-kanban-board'];

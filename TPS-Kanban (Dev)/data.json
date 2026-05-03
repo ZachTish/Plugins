@@ -3,42 +3,42 @@
   "colorKey": "color",
   "frontmatterColorTarget": "both",
   "ungroupedPosition": "first",
-  "defaultCreateMode": "task",
+  "defaultCreateMode": "note",
   "defaultCreateDestination": "",
   "laneOrderByView": {
     "unknown-base::HCA unscheduled Kanban": [
       "ungrouped",
       "key:working",
       "key:waiting",
-      "key:blocked",
+      "key:holding",
       "key:complete",
       "key:wont-do"
     ],
     "unknown-base::Kanban all": [
       "ungrouped",
       "key:working",
-      "key:blocked",
+      "key:holding",
       "key:complete",
       "key:wont-do"
     ],
     "unknown-base::Subitems": [
       "ungrouped",
       "key:working",
-      "key:blocked",
+      "key:holding",
       "key:complete",
       "key:wont-do"
     ],
     "unknown-base::Area Items": [
       "ungrouped",
       "key:working",
-      "key:blocked",
+      "key:holding",
       "key:complete",
       "key:wont-do"
     ],
     "unknown-base::Subtasks": [
       "ungrouped",
       "key:working",
-      "key:blocked",
+      "key:holding",
       "key:complete",
       "key:wont-do"
     ],
@@ -80,21 +80,21 @@
     "unknown-base::Kanban": "list"
   },
   "dynamicEmptyLaneWidth": false,
-  "enableKanbanTaskCards": true,
+  "enableKanbanTaskCards": false,
   "laneLabelAliasesByView": {
     "unknown-base::Subitems": {
-      "key:blocked": "blocked or waiting",
+      "key:holding": "holding or waiting",
       "ungrouped": "Working"
     },
     "unknown-base::Area Items": {
-      "key:blocked": "waiting or blocked",
-      "ungrouped": "open"
+      "key:holding": "waiting or holding",
+      "ungrouped": "todo"
     },
     "unknown-base::3 day": {
-      "ungrouped": "open"
+      "ungrouped": "todo"
     },
     "unknown-base::Subtasks": {
-      "key:blocked": "holding"
+      "key:holding": "holding"
     }
   },
   "boards": {

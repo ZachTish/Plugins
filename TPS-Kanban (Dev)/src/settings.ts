@@ -39,7 +39,7 @@ export const DEFAULT_SETTINGS: KanbanSettings = {
   scale: 1,
   layoutModeByView: {},
   dynamicEmptyLaneWidth: false,
-  enableKanbanTaskCards: true,
+  enableKanbanTaskCards: false,
   laneLabelAliasesByView: {},
 };
 

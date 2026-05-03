@@ -53,6 +53,15 @@ export const normalizeCalendarUrl = (url: string | null | undefined): string => 
     return trimmed;
 };
 
+export function buildSourceScopedIdentityKey(
+    sourceUrl: string | null | undefined,
+    identity: string,
+    fallbackSource = "unknown-source",
+): string {
+    const source = normalizeCalendarUrl(sourceUrl).trim() || fallbackSource;
+    return `${source}::${String(identity || '').trim()}`;
+}
+
 export const normalizeCalendarTag = (tag: string | null | undefined): string => {
     const raw = typeof tag === "string" ? tag.trim() : "";
     if (!raw) return "";

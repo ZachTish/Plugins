@@ -3,7 +3,7 @@ import * as logger from "../logger";
 import { ExternalCalendarService } from "./external-calendar-service";
 import { ExternalCalendarEvent } from "../types";
 import { buildExternalEventNoteBasename, createMeetingNoteFromExternalEvent } from "./external-event-modal";
-import { formatDateTimeForFrontmatter, parseFrontmatterDate, matchesExclusionPattern, normalizeCalendarUrl, normalizeComparablePath } from "../utils";
+import { buildSourceScopedIdentityKey, formatDateTimeForFrontmatter, parseFrontmatterDate, matchesExclusionPattern, normalizeCalendarUrl, normalizeComparablePath } from "../utils";
 import { mergeTagInputs, normalizeTagValue, parseTagInput } from "../utils/tag-utils";
 import { evaluateIconColorRules } from "../../../TPS-Global-Context-Menu (Dev)/src/utils/rule-resolver";
 import type { RuleEvaluationContext } from "../../../TPS-Global-Context-Menu (Dev)/src/types";
@@ -689,8 +689,10 @@ export class AutoCreateService {
         state.itemsByEventId.clear();
         for (let lineNumber = 0; lineNumber < state.lines.length; lineNumber++) {
             const parsed = this.parseTaskListLine(state.lines[lineNumber], lineNumber);
-            if (parsed && !state.itemsByEventId.has(parsed.eventId)) {
-                state.itemsByEventId.set(parsed.eventId, parsed);
+            if (!parsed) continue;
+            const key = this.buildTaskListIdentityKey(parsed.sourceUrl, parsed.eventId);
+            if (!state.itemsByEventId.has(key)) {
+                state.itemsByEventId.set(key, parsed);
             }
         }
     }
@@ -745,8 +747,9 @@ export class AutoCreateService {
     private touchTaskListItem(
         state: TaskListState,
         eventId: string,
+        sourceUrl: string | null,
     ): void {
-        state.touchedEventIds.add(eventId);
+        state.touchedEventIds.add(this.buildTaskListIdentityKey(sourceUrl, eventId));
     }
 
     private emitTaskLineUpdated(file: TFile, lineNumber: number | null): void {
@@ -785,6 +788,8 @@ export class AutoCreateService {
             this.config.sourceUrlKey.toLowerCase(),
             this.config.startProperty.toLowerCase(),
             this.config.endProperty.toLowerCase(),
+            this.config.statusKey.toLowerCase(),
+            "status",
         ]);
         const passthroughProperties = Object.entries({
             ...(existingInlineProperties || {}),
@@ -814,7 +819,7 @@ export class AutoCreateService {
             ?? (this.app as any)?.plugins?.plugins?.["TPS-Global-Context-Menu (Dev)"]
             ?? null;
         const rules = Array.isArray(gcm?.settings?.notebookNavigatorRules) ? gcm.settings.notebookNavigatorRules : [];
-        if (!gcm?.settings?.enabled || rules.length === 0) {
+        if (!gcm?.settings || rules.length === 0) {
             return {};
         }
 
@@ -829,7 +834,7 @@ export class AutoCreateService {
             }
         }
 
-        mergedFrontmatter.status = String(existingInlineProperties.status || this.getStatusForCheckboxState(checkboxState)).trim();
+        mergedFrontmatter.status = this.getStatusForCheckboxState(checkboxState);
         mergedFrontmatter.title = event.title;
         mergedFrontmatter.name = event.title;
         mergedFrontmatter.text = event.title;
@@ -894,7 +899,7 @@ export class AutoCreateService {
         if (normalized === '-') return 'wont-do';
         if (normalized === '/') return 'working';
         if (normalized === '?') return 'holding';
-        return 'open';
+        return 'todo';
     }
 
     private formatTaskInlineColorPropertyValue(value: unknown): string | null {
@@ -966,7 +971,7 @@ export class AutoCreateService {
 
             const items = Array.from(uniqueItems.values())
                 .filter((item) => !!item.sourceUrl)
-                .filter((item) => !state.touchedEventIds.has(item.eventId))
+                .filter((item) => !state.touchedEventIds.has(this.buildTaskListIdentityKey(item.sourceUrl, item.eventId)))
                 .filter((item) => successfulUrls.has(item.sourceUrl!))
                 .filter((item) => !failedUrls.has(item.sourceUrl!))
                 .filter((item) => {
@@ -987,8 +992,9 @@ export class AutoCreateService {
 
     private async flushTaskListStates(): Promise<void> {
         for (const state of this.taskListStateByPath.values()) {
+            const deduped = this.removeDuplicateTaskListItems(state);
             const resorted = this.sortTaskListSection(state);
-            if (!state.changed && !resorted) continue;
+            if (!state.changed && !deduped && !resorted) continue;
 
             const desiredContent = state.lines.join("\n");
             const editor = this.getEditorForFile(state.file);
@@ -1377,41 +1383,48 @@ export class AutoCreateService {
         const state = await this.ensureTaskListState(taskListPath, calendarInfo?.taskListHeading || null, event.startDate);
         if (!state) return { action: "none" };
 
-        const existing = state.itemsByEventId.get(event.id) || null;
+        const eventSourceUrl = this.normalizeSourceUrl(event.sourceUrl);
+        const eventIdentityKey = this.buildTaskListIdentityKey(eventSourceUrl, event.id);
+        const existing = state.itemsByEventId.get(eventIdentityKey) || null;
         if (existing) {
-            this.touchTaskListItem(state, event.id);
+            this.touchTaskListItem(state, event.id, eventSourceUrl);
         }
 
         if (event.isCancelled) {
             if (!existing) return { action: "none", file: state.file };
-            this.touchTaskListItem(state, event.id);
-            const graceCycles = this.config.orphanArchiveGraceCycles;
-            if (graceCycles <= 0) return { action: "none", file: state.file };
-            this.removeTaskListLine(state, existing.lineNumber);
-            this.emitTaskLineUpdated(state.file, existing.lineNumber);
-            return { action: "deleted", file: state.file };
-        }
-
-        if (calendarInfo?.autoCreateEnabled === false) {
-            if (existing) this.touchTaskListItem(state, event.id);
-            return { action: "none" };
-        }
-
-        if (filterTerms.some((t) => event.title.toLowerCase().includes(t))) {
-            if (existing) this.touchTaskListItem(state, event.id);
-            return { action: "none" };
-        }
-
-        const desiredLine = this.buildTaskListLine(state.file, event, existing?.checkboxState || " ", existing?.inlineProperties || {});
-        if (existing) {
-            this.touchTaskListItem(state, event.id);
+            this.touchTaskListItem(state, event.id, eventSourceUrl);
+            const desiredLine = this.buildTaskListLine(state.file, event, "-", existing.inlineProperties || {});
             if (existing.line === desiredLine) {
                 return { action: "none", file: state.file };
             }
             state.lines[existing.lineNumber] = desiredLine;
             state.changed = true;
             this.rebuildTaskListIndex(state);
-            this.touchTaskListItem(state, event.id);
+            this.touchTaskListItem(state, event.id, eventSourceUrl);
+            this.emitTaskLineUpdated(state.file, existing.lineNumber);
+            return { action: "updated", file: state.file };
+        }
+
+        if (calendarInfo?.autoCreateEnabled === false) {
+            if (existing) this.touchTaskListItem(state, event.id, eventSourceUrl);
+            return { action: "none" };
+        }
+
+        if (filterTerms.some((t) => event.title.toLowerCase().includes(t))) {
+            if (existing) this.touchTaskListItem(state, event.id, eventSourceUrl);
+            return { action: "none" };
+        }
+
+        const desiredLine = this.buildTaskListLine(state.file, event, existing?.checkboxState || " ", existing?.inlineProperties || {});
+        if (existing) {
+            this.touchTaskListItem(state, event.id, eventSourceUrl);
+            if (existing.line === desiredLine) {
+                return { action: "none", file: state.file };
+            }
+            state.lines[existing.lineNumber] = desiredLine;
+            state.changed = true;
+            this.rebuildTaskListIndex(state);
+            this.touchTaskListItem(state, event.id, eventSourceUrl);
             this.emitTaskLineUpdated(state.file, existing.lineNumber);
             return { action: "updated", file: state.file };
         }
@@ -1421,7 +1434,7 @@ export class AutoCreateService {
         state.lines.splice(insertAt, 0, desiredLine);
         state.changed = true;
         this.rebuildTaskListIndex(state);
-        this.touchTaskListItem(state, event.id);
+        this.touchTaskListItem(state, event.id, eventSourceUrl);
         this.emitTaskLineUpdated(state.file, insertAt);
         return { action: "created", file: state.file };
     }
@@ -1440,7 +1453,7 @@ export class AutoCreateService {
     // ========================================================================
 
     private async markCancelledWithoutDelete(file: TFile): Promise<boolean> {
-        const cancelledStatus = this.normalizeIdentityValue(this.config.canceledStatusValue) || "cancelled";
+        const cancelledStatus = this.normalizeIdentityValue(this.config.canceledStatusValue) || "wont-do";
         const cancelledAt = new Date().toISOString();
         const fm = await this.getFrontmatterForFile(file);
         const currentStatus = this.normalizeIdentityValue(this.findKeyInsensitive(fm || {}, this.config.statusKey));
@@ -1682,7 +1695,37 @@ export class AutoCreateService {
     }
 
     private buildSourceScopedKey(sourceUrl: string, identity: string): string {
-        return `${sourceUrl}::${identity}`;
+        return buildSourceScopedIdentityKey(sourceUrl, identity);
+    }
+
+    private buildTaskListIdentityKey(sourceUrl: string | null, eventId: string): string {
+        const source = this.normalizeSourceUrl(sourceUrl) || "unknown-source";
+        return this.buildSourceScopedKey(source, eventId);
+    }
+
+    private removeDuplicateTaskListItems(state: TaskListState): boolean {
+        const seen = new Set<string>();
+        const duplicateLineNumbers: number[] = [];
+        for (let lineNumber = 0; lineNumber < state.lines.length; lineNumber++) {
+            const parsed = this.parseTaskListLine(state.lines[lineNumber], lineNumber);
+            if (!parsed) continue;
+            const key = this.buildTaskListIdentityKey(parsed.sourceUrl, parsed.eventId);
+            if (seen.has(key)) {
+                duplicateLineNumbers.push(lineNumber);
+                continue;
+            }
+            seen.add(key);
+        }
+        if (duplicateLineNumbers.length === 0) return false;
+        duplicateLineNumbers.sort((a, b) => b - a);
+        for (const lineNumber of duplicateLineNumbers) {
+            this.removeTaskListLine(state, lineNumber);
+            this.emitTaskLineUpdated(state.file, lineNumber);
+        }
+        state.changed = true;
+        this.rebuildTaskListIndex(state);
+        logger.warn(`[AutoCreateService] Removed ${duplicateLineNumbers.length} duplicate calendar task-list item(s) from ${state.file.path}`);
+        return true;
     }
 
     private pruneOrphanDeletionTombstones(now: number = Date.now()): void {

@@ -5,32 +5,7 @@
   "debugLogging": true,
   "renderMode": "inline",
   "inlinePlacement": "after-title",
-  "rules": [
-    {
-      "id": "rule-1777240667810",
-      "basePath": "_attachments/list.base",
-      "enabled": true,
-      "conditions": {
-        "tags": [
-          "list"
-        ]
-      },
-      "renderPlacement": "after-title",
-      "kind": "base",
-      "dataviewjsCode": ""
-    },
-    {
-      "id": "rule-1777507153656",
-      "basePath": "",
-      "enabled": true,
-      "conditions": {
-        "requireProperty": "scheduled"
-      },
-      "renderPlacement": "after-title",
-      "kind": "dataviewjs",
-      "dataviewjsCode": "// Daily scheduled agenda\nconst current = dv.current();\nconst terminalStatuses = new Set(['complete', 'completed', 'done', 'wont-do']);\nconst dateFormats = [moment.ISO_8601, 'YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD', 'dddd, MMMM Do YYYY', 'ddd, MMM D YYYY'];\nconst archivePathPattern = /(^|\\/)(99 Archive|Archive|System\\/Archive)(\\/|$)/i;\nconst toMoment = (value) => {\n  if (!value) return null;\n  if (moment.isMoment(value)) return value.clone();\n  if (typeof value === 'string') {\n    const parsed = moment(value, dateFormats, true);\n    if (parsed.isValid()) return parsed;\n    const fallback = moment(value);\n    return fallback.isValid() ? fallback : null;\n  }\n  if (typeof value.toISO === 'function') {\n    const iso = value.toISO();\n    if (iso) {\n      const parsed = moment(iso);\n      if (parsed.isValid()) return parsed;\n    }\n  }\n  if (typeof value.ts === 'number') {\n    const parsed = moment(value.ts);\n    if (parsed.isValid()) return parsed;\n  }\n  if (value instanceof Date) {\n    const parsed = moment(value);\n    return parsed.isValid() ? parsed : null;\n  }\n  const parsed = moment(String(value));\n  return parsed.isValid() ? parsed : null;\n};\nconst normalizeDay = (value) => {\n  const parsed = toMoment(value);\n  return parsed ? parsed.format('YYYY-MM-DD') : null;\n};\nconst sortValue = (value) => {\n  const parsed = toMoment(value);\n  return parsed ? parsed.valueOf() : Number.MAX_SAFE_INTEGER;\n};\nconst collectTags = (page) => {\n  const tags = new Set();\n  for (const tag of Array.from(page?.file?.etags ?? [])) tags.add(String(tag).replace(/^#/, '').toLowerCase());\n  const directTags = page?.tags;\n  if (Array.isArray(directTags)) {\n    for (const tag of directTags) tags.add(String(tag).replace(/^#/, '').toLowerCase());\n  } else if (directTags) {\n    tags.add(String(directTags).replace(/^#/, '').toLowerCase());\n  }\n  return tags;\n};\nconst isArchivedPage = (page) => {\n  const path = String(page?.file?.path || '');\n  if (archivePathPattern.test(path)) return true;\n  if (String(page?.status ?? '').trim().toLowerCase() === 'archived') return true;\n  return page?.archived === true;\n};\nconst cleanTaskText = (text) => String(text ?? '').replace(/\\s*\\[[^\\]]+::[^\\]]*\\]/g, '').trim();\nconst openFile = (path) => (event) => {\n  event.preventDefault();\n  app.workspace.openLinkText(path, current.file.path, false);\n};\nconst dayKey = normalizeDay(current.scheduled) || normalizeDay(current.file?.name);\ndv.container.empty();\nif (!dayKey) {\n  dv.paragraph('No scheduled day found on this note.');\n} else {\n  const items = [];\n  const seen = new Set();\n  for (const page of dv.pages().array()) {\n    if (!page?.file?.path) continue;\n    if (isArchivedPage(page)) continue;\n    const pagePath = page.file.path;\n    const taskMatches = [];\n    for (const task of Array.from(page.file.tasks ?? [])) {\n      if (normalizeDay(task.scheduled ?? task.due ?? null) !== dayKey) continue;\n      const taskLabel = cleanTaskText(task.text);\n      const taskKey = `task:${pagePath}:${task.line ?? taskLabel}`;\n      if (seen.has(taskKey)) continue;\n      seen.add(taskKey);\n      taskMatches.push({\n        kind: 'task',\n        checked: Boolean(task.completed),\n        sort: sortValue(task.scheduled ?? task.due),\n        label: taskLabel,\n        path: pagePath,\n        meta: page.file.name\n      });\n    }\n    if (taskMatches.length > 0) {\n      items.push(...taskMatches);\n      continue;\n    }\n    if (pagePath === current.file.path) continue;\n    if (normalizeDay(page.scheduled) !== dayKey) continue;\n    if (collectTags(page).has('dailynote')) continue;\n    const noteKey = `note:${pagePath}`;\n    if (seen.has(noteKey)) continue;\n    seen.add(noteKey);\n    items.push({\n      kind: 'note',\n      checked: terminalStatuses.has(String(page.status ?? '').trim().toLowerCase()) || page.checklistDone === true,\n      sort: sortValue(page.scheduled),\n      label: page.file.name,\n      path: pagePath,\n      meta: page.scheduled ? String(page.scheduled) : ''\n    });\n  }\n  items.sort((a, b) => a.sort - b.sort || Number(a.checked) - Number(b.checked) || a.label.localeCompare(b.label));\n  if (items.length === 0) {\n    dv.paragraph('Nothing scheduled for this day.');\n  } else {\n    const list = dv.container.createEl('ul', { cls: 'contains-task-list' });\n    for (const item of items) {\n      const row = list.createEl('li', { cls: 'task-list-item' });\n      const checkbox = row.createEl('input', { type: 'checkbox', cls: 'task-list-item-checkbox' });\n      checkbox.checked = item.checked;\n      checkbox.disabled = true;\n      const label = row.createEl('a', { cls: 'internal-link', text: item.label || item.path });\n      label.href = item.path;\n      label.addEventListener('click', openFile(item.path));\n      if (item.meta) {\n        const meta = row.createSpan();\n        meta.textContent = ` - ${item.meta}`;\n        meta.style.opacity = '0.7';\n      }\n    }\n  }\n}"
-    }
-  ],
+  "rules": [],
   "excludeFiles": "",
   "defaultExpanded": true,
   "accordionMode": false,

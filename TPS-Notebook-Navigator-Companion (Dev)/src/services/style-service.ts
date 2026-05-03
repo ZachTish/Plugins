@@ -61,6 +61,36 @@ export class StyleService {
         filter: drop-shadow(0 0 6px color-mix(in srgb, var(--interactive-accent) 60%, transparent));
         transform: translateY(-0.5px);
       }
+
+      .notebook-navigator [data-tps-tag-page='false'] .nn-file-tag,
+      .view-content.notebook-navigator [data-tps-tag-page='false'] .nn-file-tag,
+      .notebook-navigator [data-tps-tag-page='false'] .nn-navitem-name,
+      .view-content.notebook-navigator [data-tps-tag-page='false'] .nn-navitem-name,
+      .notebook-navigator .nn-file-tag[data-tps-tag-page='false'],
+      .view-content.notebook-navigator .nn-file-tag[data-tps-tag-page='false'],
+      .notebook-navigator [data-tps-property-page='false'] .nn-navitem-name,
+      .view-content.notebook-navigator [data-tps-property-page='false'] .nn-navitem-name,
+      .notebook-navigator .nn-navitem-name[data-tps-property-page='false'] {
+        cursor: default !important;
+        text-decoration: none !important;
+        filter: none !important;
+      }
+
+      .notebook-navigator [data-tps-tag-page='open'] .nn-file-tag,
+      .view-content.notebook-navigator [data-tps-tag-page='open'] .nn-file-tag,
+      .notebook-navigator [data-tps-tag-page='open'] .nn-navitem-name,
+      .view-content.notebook-navigator [data-tps-tag-page='open'] .nn-navitem-name,
+      .notebook-navigator .nn-file-tag[data-tps-tag-page='open'],
+      .view-content.notebook-navigator .nn-file-tag[data-tps-tag-page='open'],
+      .notebook-navigator [data-tps-property-page='open'] .nn-navitem-name,
+      .view-content.notebook-navigator [data-tps-property-page='open'] .nn-navitem-name,
+      .notebook-navigator .nn-navitem-name[data-tps-property-page='open'] {
+        cursor: pointer !important;
+        color: var(--link-color, var(--text-accent)) !important;
+        text-decoration: underline !important;
+        text-underline-offset: 0.12em;
+        text-decoration-thickness: 1px;
+      }
     `;
     }
 

@@ -16,12 +16,19 @@ export const DEFAULT_CHECKBOX_STATE_TO_STATUS: Record<CheckboxStateChar, Checkbo
 
 export const DEFAULT_STATUS_TO_CHECKBOX_STATE: Record<string, CheckboxStateChar> = {
     todo: ' ',
+    open: ' ',
+    pending: ' ',
+    backlog: ' ',
     complete: 'x',
+    completed: 'x',
     working: '/',
+    blocked: '?',
     holding: '?',
     'wont-do': '-',
     wont_do: '-',
     wontdo: '-',
+    canceled: '-',
+    cancelled: '-',
 };
 
 export const CHECKBOX_STATE_TO_STATUS = DEFAULT_CHECKBOX_STATE_TO_STATUS;
@@ -93,8 +100,8 @@ function resolveSettingsMappings(app: App | null): {
         for (const entry of mappings) {
             const bracketedState = String(entry?.checkboxState || "").trim();
             if (!bracketedState) continue;
-            const innerChar = bracketedState.replace(/^\[|\]$/g, '').trim();
-            if (!innerChar) continue;
+            const innerCharRaw = bracketedState.replace(/^\[|\]$/g, '');
+            const innerChar = innerCharRaw === '' ? ' ' : innerCharRaw;
             const statuses: string[] = Array.isArray(entry?.statuses) ? entry.statuses : [];
             if (!statuses.length) continue;
 
@@ -115,12 +122,13 @@ function resolveSettingsMappings(app: App | null): {
 }
 
 export function statusForCheckboxState(state: string, app?: App | null): CheckboxStatus | null {
+    const normalizedState = String(state || '');
     if (app) {
         const { stateToStatus } = resolveSettingsMappings(app);
-        const result = stateToStatus[String(state).trim()];
+        const result = stateToStatus[normalizedState] ?? stateToStatus[normalizedState.trim()];
         if (result) return result as CheckboxStatus;
     }
-    return DEFAULT_CHECKBOX_STATE_TO_STATUS[state as CheckboxStateChar] ?? null;
+    return DEFAULT_CHECKBOX_STATE_TO_STATUS[normalizedState as CheckboxStateChar] ?? null;
 }
 
 export function checkboxStateForStatus(status: string, app?: App | null): CheckboxStateChar | null {

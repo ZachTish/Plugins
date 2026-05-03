@@ -275,7 +275,7 @@ export class NotificationView extends ItemView {
             const gcmPlugin = getPluginById(this.app, 'tps-global-context-menu') as (Plugin & GcmPluginAPI) | null;
             const statusOptions: string[] = gcmPlugin?.settings?.properties
                 ?.find((p: any) => p.key === 'status')?.options
-                ?? ['open', 'working', 'blocked', 'wont-do', 'complete'];
+                ?? ['todo', 'working', 'holding', 'wont-do', 'complete'];
 
             const currentStatus = item.status || '';
             const isTaskItem = item.sourceType === 'task-item' || item.sourceType === 'kanban-task';

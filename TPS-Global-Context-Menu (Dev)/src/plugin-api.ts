@@ -129,6 +129,20 @@ export function setupPluginApi(plugin: TPSGlobalContextMenuPlugin): void {
         parseMarkdownLine: (line: string) => plugin.itemSemanticsService.parseMarkdownLine(line),
         parseTaskLine: (line: string) => plugin.itemSemanticsService.parseTaskLine(line),
         mapStatusToCheckboxState: (status: string) => plugin.itemSemanticsService.mapStatusToCheckboxState(status),
+        isDesignatedTaskSurfacePath: (path: string) => {
+            return plugin.isLineTrackingSurfacePath(path);
+        },
+        isLineTrackingSurfacePath: (path: string) => plugin.isLineTrackingSurfacePath(path),
+        lineHasTpsIdentity: (line: string) => plugin.lineHasTpsIdentity(line),
+        isLineTrackingHeadingContext: (content: string, lineNumber: number) =>
+            plugin.isLineTrackingHeadingContext(content, lineNumber),
+        isLineTrackable: (input: {
+            path: string;
+            line: string;
+            kind?: 'checkbox' | 'bullet' | 'heading' | 'unknown';
+            lineNumber?: number;
+            content?: string;
+        }) => plugin.isLineTrackable(input),
 
         // ── Frontmatter mutations ─────────────────────────────────────────────
         /** Bulk-update frontmatter on one or more files. */

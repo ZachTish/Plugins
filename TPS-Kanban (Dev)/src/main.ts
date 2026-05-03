@@ -29,7 +29,7 @@ export default class TPSKanbanPlugin extends Plugin {
       this.settings.dynamicEmptyLaneWidth = false;
     }
     if (typeof this.settings.enableKanbanTaskCards !== 'boolean') {
-      this.settings.enableKanbanTaskCards = true;
+      this.settings.enableKanbanTaskCards = false;
     }
     if (!this.settings.laneLabelAliasesByView || typeof this.settings.laneLabelAliasesByView !== 'object') {
       this.settings.laneLabelAliasesByView = {};
@@ -67,7 +67,7 @@ export default class TPSKanbanPlugin extends Plugin {
     this.app.workspace.iterateAllLeaves((leaf) => {
       if (leaf.view.getViewType() === KANBAN_VIEW_TYPE) {
         const view = leaf.view as unknown as KanbanView;
-        view.applyLayoutSettings();
+        view.refreshFromSettings();
       }
     });
 

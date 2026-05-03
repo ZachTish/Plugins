@@ -9,7 +9,7 @@ import {
   type TemplateVars,
 } from "../utils/template-variable-service";
 import { resolveTemplateFile as resolveTemplateFilePath } from "../utils/template-resolution-service";
-import { mergeTagInputs, normalizeTagValue } from "../utils/tag-utils";
+import { mergeTagInputs, normalizeTagValue, parseTagInput } from "../utils/tag-utils";
 import { getPluginById, getErrorMessage } from "../core";
 import { getDailyNoteResolver } from "../utils/daily-note-resolver";
 
@@ -309,13 +309,14 @@ export async function createMeetingNoteFromExternalEvent(
       if (!gcmApi?.createCalendarNote) {
         throw new Error('TPS Global Context Menu API unavailable for external event note creation');
       }
+      const calendarTags = parseTagInput(calendarTag);
       file = await gcmApi.createCalendarNote({
         path: deterministicPath,
         initialContent: bodyContent,
         frontmatterOverrides: {
           ...frontmatter,
           folderPath: folder || '/',
-          tags: calendarTag ? [normalizeTagValue(calendarTag)] : undefined,
+          tags: calendarTags.length ? calendarTags : undefined,
         },
         parentFile: parentFile ?? null,
         dedupe: {
@@ -330,9 +331,9 @@ export async function createMeetingNoteFromExternalEvent(
   // Apply identity/event frontmatter in one place so templates with existing
   // frontmatter are merged safely without duplicate YAML blocks.
   await processFrontmatterSafely(app, file, "external-event-create", (fm) => {
-    const normalizedCalendarTag = normalizeTagValue(calendarTag);
-    if (normalizedCalendarTag) {
-      fm.tags = mergeTagInputs(fm.tags, normalizedCalendarTag);
+    const normalizedCalendarTags = parseTagInput(calendarTag);
+    if (normalizedCalendarTags.length) {
+      fm.tags = mergeTagInputs(fm.tags, normalizedCalendarTags);
     }
     const resolvedFolderPath = file.parent?.path || "/";
     setFrontmatterValueCaseInsensitive(fm, "folderPath", resolvedFolderPath);
@@ -345,11 +346,12 @@ export async function createMeetingNoteFromExternalEvent(
   }, gcmApi);
 
 
-  // Create bidirectional link if parent file is provided
-  if (parentFile && parentLinkKey && childLinkKey) {
+  // Create the child-side parent link when a parent file is provided.
+  // Stored reverse child lists are disabled when childLinkKey is empty.
+  if (parentFile && parentLinkKey) {
     try {
-      await createBidirectionalLink(app, file, parentFile, parentLinkKey, childLinkKey);
-      logger.log(`[CreateMeetingNote] Created bidirectional link: ${file.basename} ↔ ${parentFile.basename}`);
+      await createBidirectionalLink(app, file, parentFile, parentLinkKey, childLinkKey || "");
+      logger.log(`[CreateMeetingNote] Created parent link: ${file.basename} -> ${parentFile.basename}`);
     } catch (error) {
       logger.error(`[CreateMeetingNote] Failed to create bidirectional link:`, error);
       // Don't fail the entire operation if linking fails

@@ -423,7 +423,6 @@ function getParentLinkKeys(app: App): string[] {
   const gcm = getRuleHost(app) as any;
   return Array.from(new Set([
     String(gcm?.settings?.parentLinkFrontmatterKey || '').trim(),
-    'childOf',
     'parent',
   ].filter(Boolean)));
 }

@@ -269,7 +269,7 @@ export class TPSControllerSettingTab extends PluginSettingTab {
             .setName('Canceled Status Value')
             .setDesc('The status value to set when an event is canceled.')
             .addText(text => text
-                .setPlaceholder('cancelled')
+                .setPlaceholder('wont-do')
                 .setValue(this.plugin.settings.canceledStatusValue)
                 .onChange((value) => {
                     this.plugin.settings.canceledStatusValue = value;
@@ -1427,10 +1427,11 @@ export class TPSControllerSettingTab extends PluginSettingTab {
                         }));
 
                 new Setting(acContent)
-                    .setName("Tag")
+                    .setName("Tags")
+                    .setDesc("Comma-separated tags to add to created event notes, with or without #.")
                     .addText(t => t
                         .setValue(calendar.autoCreateTag || "")
-                        .setPlaceholder("#tag")
+                        .setPlaceholder("#work, calendar/event")
                         .onChange(async (val) => {
                             calendar.autoCreateTag = val;
                             await save();

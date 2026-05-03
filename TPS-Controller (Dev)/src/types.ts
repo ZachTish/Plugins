@@ -187,7 +187,7 @@ export const DEFAULT_CONTROLLER_SETTINGS: TPSControllerSettings = {
     syncIntervalMinutes: 5,
     archiveFolder: "Archive",
     archiveNotePath: "Archive/Archive.md",
-    canceledStatusValue: "cancelled",
+    canceledStatusValue: "wont-do",
     orphanArchiveGraceCycles: 5,
     externalCalendarFilter: "",
     externalCalendars: [],

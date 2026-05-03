@@ -374,7 +374,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       .setDesc('Status applied to newly promoted/created subitems. Leave empty to write no status.')
       .addText((text) =>
         text
-          .setPlaceholder('open')
+          .setPlaceholder('todo')
           .setValue(this.plugin.settings.defaultNewSubitemStatus ?? '')
           .onChange((value) => {
             this.plugin.settings.defaultNewSubitemStatus = value.trim();
@@ -1392,6 +1392,79 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       );
 
     new Setting(taskCompletion)
+      .setName('Designated task surfaces')
+      .setDesc('Markdown files where checkbox rows are first-class TPS task instances. Checkboxes elsewhere stay local unless they carry an explicit TPS identity.')
+      .addTextArea((t) => {
+        t
+          .setPlaceholder('Hca Calendar.md\nWorkouts.md')
+          .setValue((this.plugin.settings.taskSurfacePaths || []).join('\n'))
+          .onChange(async (v) => {
+            this.plugin.settings.taskSurfacePaths = v
+              .split(/[\n,]/)
+              .map((path) => path.trim())
+              .filter(Boolean);
+            await this.plugin.saveSettings();
+          });
+        t.inputEl.rows = 3;
+      });
+
+    new Setting(taskCompletion)
+      .setName('Line-tracked folders')
+      .setDesc('Optional folders where bullets, checkboxes, and headings can become line-level TPS records. Leave blank to keep ordinary notes note-first.')
+      .addTextArea((t) => {
+        t
+          .setPlaceholder('Markdown/04 Lists/Workout Logs')
+          .setValue((this.plugin.settings.lineTrackingSurfaceFolders || []).join('\n'))
+          .onChange(async (v) => {
+            this.plugin.settings.lineTrackingSurfaceFolders = v
+              .split(/[\n,]/)
+              .map((path) => path.trim())
+              .filter(Boolean);
+            await this.plugin.saveSettings();
+          });
+        t.inputEl.rows = 2;
+      });
+
+    new Setting(taskCompletion)
+      .setName('Line-tracked heading names')
+      .setDesc('Optional heading labels that opt their contained bullets/checklists into line tracking, such as Workout or Food.')
+      .addTextArea((t) => {
+        t
+          .setPlaceholder('Workout\nFood')
+          .setValue((this.plugin.settings.lineTrackingHeadingNames || []).join('\n'))
+          .onChange(async (v) => {
+            this.plugin.settings.lineTrackingHeadingNames = v
+              .split(/[\n,]/)
+              .map((heading) => heading.trim())
+              .filter(Boolean);
+            await this.plugin.saveSettings();
+          });
+        t.inputEl.rows = 2;
+      });
+
+    new Setting(taskCompletion)
+      .setName('Treat daily notes as line surfaces')
+      .setDesc('When off, daily-note checkboxes stay normal Obsidian Markdown unless a line has explicit TPS identity.')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.lineTrackingTreatDailyNotesAsSurface)
+          .onChange(async (v) => {
+            this.plugin.settings.lineTrackingTreatDailyNotesAsSurface = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(taskCompletion)
+      .setName('Require a line surface for promotion')
+      .setDesc('When on, the promote-to-note affordance appears only in configured line-tracked contexts.')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.lineTrackingPromotionRequiresSurface)
+          .onChange(async (v) => {
+            this.plugin.settings.lineTrackingPromotionRequiresSurface = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(taskCompletion)
       .setName('Checkbox → Status mappings')
       .setDesc('One mapping per line: "[ ]: todo => complete". The toggle target (after =>) is the status to cycle to when clicked. These statuses are what reminder rules match against.')
       .addTextArea((t) => {
@@ -1488,10 +1561,10 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
       'Parent/child linking, top-of-note navigation, and linked-note completion behavior.',
       true
     );
-    new Setting(relationshipsSection).setName('Parent frontmatter key').setDesc('Canonical child-side parent list key. Markdown parents are derived from body links; base parents live only here.').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'childOf'; await this.plugin.saveSettings(); }));
+    new Setting(relationshipsSection).setName('Parent frontmatter key').setDesc('Canonical child-side parent list key. Markdown parents are derived from body links; base parents live only here.').addText(t => t.setValue(this.plugin.settings.parentLinkFrontmatterKey || 'parent').onChange(async v => { this.plugin.settings.parentLinkFrontmatterKey = v.trim() || 'parent'; await this.plugin.saveSettings(); }));
     new Setting(relationshipsSection)
       .setName('Auto self-link parent in parent key')
-      .setDesc('When enabled, parent notes keep a self-reference in the parent key (for example childOf: [[This Note]]).')
+      .setDesc('When enabled, parent notes keep a self-reference in the parent key (for example parent: [[This Note]]).')
       .addToggle((t) =>
         t.setValue(this.plugin.settings.autoSelfLinkParentInParentKey ?? false).onChange(async (v) => {
           this.plugin.settings.autoSelfLinkParentInParentKey = v;

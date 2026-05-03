@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import {
+    buildSourceScopedIdentityKey,
     matchesExclusionPattern,
     matchesRequiredPath,
     normalizeCalendarTag,
@@ -37,4 +38,16 @@ test('matchesExclusionPattern supports regex and folder rules', () => {
 test('matchesRequiredPath matches nested folders regardless of leading vault segments', () => {
     assert.equal(matchesRequiredPath('Markdown/Action Items/Sub/task.md', 'Action Items'), true);
     assert.equal(matchesRequiredPath('Markdown/Projects/task.md', 'Action Items'), false);
+});
+
+test('buildSourceScopedIdentityKey keeps identical event IDs distinct by source calendar', () => {
+    const eventId = 'event-123';
+    assert.equal(
+        buildSourceScopedIdentityKey('webcal://calendar.example.com/work.ics', eventId),
+        'https://calendar.example.com/work.ics::event-123',
+    );
+    assert.notEqual(
+        buildSourceScopedIdentityKey('https://calendar.example.com/work.ics', eventId),
+        buildSourceScopedIdentityKey('https://calendar.example.com/personal.ics', eventId),
+    );
 });

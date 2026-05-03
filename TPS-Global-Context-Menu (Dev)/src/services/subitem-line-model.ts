@@ -12,7 +12,7 @@ import { normalizeTagValue } from '../utils/tag-utils';
 
 export type SubitemLineKind = 'bare' | 'bullet' | 'checkbox' | 'heading';
 
-export type VisualState = 'open' | 'complete' | 'canceled' | 'working';
+export type VisualState = 'open' | 'complete' | 'canceled' | 'working' | 'holding';
 
 export interface PropertyPill {
   label: string;
@@ -112,6 +112,7 @@ export class SubitemLineModelService {
     if (/[xX]/.test(checkboxState)) return 'complete';
     if (checkboxState.includes('-')) return 'canceled';
     if (checkboxState.includes('/')) return 'working';
+    if (checkboxState.includes('?')) return 'holding';
     return 'open';
   }
 

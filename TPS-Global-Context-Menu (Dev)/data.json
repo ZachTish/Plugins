@@ -6,7 +6,14 @@
   "enableInSidePanels": true,
   "inlineMenuOnly": false,
   "nativeMenuPlacement": "tps-first",
-  "enableLineItems": false,
+  "enableLineItems": true,
+  "lineTrackingSurfaceFolders": [],
+  "lineTrackingHeadingNames": [],
+  "lineTrackingTreatDailyNotesAsSurface": false,
+  "lineTrackingPromotionRequiresSurface": true,
+  "lineTrackingTrackCheckboxes": true,
+  "lineTrackingTrackBullets": true,
+  "lineTrackingTrackHeadings": true,
   "suppressMobileKeyboard": true,
   "properties": [
     {
@@ -627,14 +634,14 @@
           "source": "backlink",
           "field": "",
           "operator": "is",
-          "value": "childOf"
+          "value": "parent"
         }
       ]
     },
     {
       "id": "rule-1776189607051-n5hmt57",
       "name": "Status exists - non complete",
-      "enabled": true,
+      "enabled": false,
       "property": "status",
       "operator": "!is",
       "value": "",
@@ -660,12 +667,6 @@
           "field": "status",
           "operator": "exists",
           "value": ""
-        },
-        {
-          "source": "frontmatter",
-          "field": "status",
-          "operator": "!is",
-          "value": "note"
         }
       ]
     },
@@ -1009,13 +1010,7 @@
           },
           {
             "source": "frontmatter",
-            "field": "parentOf",
-            "operator": "!exists",
-            "value": ""
-          },
-          {
-            "source": "frontmatter",
-            "field": "childOf",
+            "field": "parent",
             "operator": "!exists",
             "value": ""
           }
@@ -1088,12 +1083,12 @@
       {
         "id": "bucket-005-action-open-subitems",
         "enabled": true,
-        "name": "projects",
+        "name": "parents",
         "match": "all",
         "conditions": [
           {
             "source": "frontmatter",
-            "field": "childOf",
+            "field": "parent",
             "operator": "is-not-empty",
             "value": ""
           },
@@ -1199,7 +1194,7 @@
           },
           {
             "source": "frontmatter",
-            "field": "childOf",
+            "field": "parent",
             "operator": "is-not-empty",
             "value": ""
           },
@@ -1517,7 +1512,7 @@
           },
           {
             "source": "frontmatter",
-            "field": "childOf",
+            "field": "parent",
             "operator": "is-not-empty",
             "value": ""
           },
@@ -1660,11 +1655,11 @@
                 "output": "001"
               },
               {
-                "input": "open",
+                "input": "todo",
                 "output": "002"
               },
               {
-                "input": "blocked",
+                "input": "holding",
                 "output": "003"
               },
               {
@@ -1762,11 +1757,11 @@
                 "output": "001"
               },
               {
-                "input": "open",
+                "input": "todo",
                 "output": "002"
               },
               {
-                "input": "blocked",
+                "input": "holding",
                 "output": "003"
               },
               {
@@ -1932,12 +1927,10 @@
   "recurrencePromptTimeout": 5,
   "recurrenceCompletionStatuses": [
     "complete",
-    "wont-do",
-    "note",
-    "blocked"
+    "wont-do"
   ],
   "recurrenceDefaultStatus": "",
-  "recurringTemplateFolder": "/",
+  "recurringTemplateFolder": "_templates",
   "enableAutoRename": true,
   "dateSuffixFormat": "",
   "autoSyncTitleFromFilename": true,
@@ -1948,9 +1941,9 @@
   "folderExclusions": "System/Templates",
   "checkOpenChecklistItems": true,
   "checkParentLinkStatuses": true,
-  "parentLinkFrontmatterKey": "projects",
-  "childLinkFrontmatterKey": "parentOf",
-  "autoSelfLinkParentInParentKey": true,
+  "parentLinkFrontmatterKey": "parent",
+  "childLinkFrontmatterKey": "",
+  "autoSelfLinkParentInParentKey": false,
   "parentLinkFormat": "markdown-title",
   "parentTagOnChildLink": "project",
   "parentCompletionStatuses": [
@@ -1963,7 +1956,7 @@
   "viewModeIgnoredFolders": "",
   "viewModeRules": [
     {
-      "mode": "reading",
+      "mode": "source",
       "match": "all",
       "conditions": [
         {
@@ -1978,9 +1971,27 @@
       "match": "all",
       "conditions": [
         {
+          "type": "frontmatter",
+          "key": "status",
+          "operator": "not-equals",
+          "value": "compelte"
+        },
+        {
           "type": "path",
-          "operator": "contains",
-          "value": "0"
+          "operator": "not-contains",
+          "value": "_"
+        }
+      ]
+    },
+    {
+      "mode": "reading",
+      "match": "all",
+      "conditions": [
+        {
+          "type": "frontmatter",
+          "key": "status",
+          "operator": "equals",
+          "value": "complete"
         }
       ]
     }
@@ -1989,13 +2000,17 @@
     "complete",
     "wont-do"
   ],
-  "enableLinkedSubitemCheckboxes": true,
+  "taskSurfacePaths": [
+    "Hca Calendar.md",
+    "Workouts.md"
+  ],
+  "enableLinkedSubitemCheckboxes": false,
   "linkedSubitemCheckboxStyle": "soft-link",
   "linkedSubitemCheckboxMappings": [
     {
       "checkboxState": "[ ]",
       "statuses": [
-        "open"
+        "todo"
       ],
       "toggleTargetStatus": "complete",
       "icon": "square",
@@ -2006,7 +2021,7 @@
       "statuses": [
         "complete"
       ],
-      "toggleTargetStatus": "open",
+      "toggleTargetStatus": "todo",
       "icon": "check",
       "label": "Complete"
     },
@@ -2024,7 +2039,7 @@
       "statuses": [
         "holding"
       ],
-      "toggleTargetStatus": "open",
+      "toggleTargetStatus": "todo",
       "icon": "help-circle",
       "label": "Holding"
     },
@@ -2033,17 +2048,16 @@
       "statuses": [
         "wont-do"
       ],
-      "toggleTargetStatus": "open",
+      "toggleTargetStatus": "todo",
       "icon": "minus",
       "label": "Won’t Do"
     }
   ],
   "linkedSubitemDefaultOpenState": "[ ]",
   "linkedSubitemUncheckedStatuses": [
-    "open",
+    "todo",
     "working",
-    "holding",
-    "note"
+    "holding"
   ],
   "linkedSubitemCheckedStatuses": [
     "complete"
@@ -2052,13 +2066,13 @@
     "wont-do"
   ],
   "linkedSubitemToggleCheckedStatus": "complete",
-  "linkedSubitemToggleUncheckedStatus": "open",
+  "linkedSubitemToggleUncheckedStatus": "todo",
   "enableArchiveTagMove": true,
   "archiveTag": "archive",
   "archiveFolderPath": "Archive",
   "archiveFolderMode": "monthly",
   "archiveUseDailyFolder": false,
-  "lastArchiveTagSweepDate": "2026-05-02",
+  "lastArchiveTagSweepDate": "2026-05-03",
   "workspaceRibbonButtons": false,
   "workspaceRibbonIcons": {
     "Calendar": "calendar"
@@ -2120,8 +2134,8 @@
     "archive"
   ],
   "enableAutoInsertBlankLineOnOpen": false,
-  "defaultAttachmentsPath": "Markdown/Notes",
-  "defaultSubitemsPath": "Markdown",
+  "defaultAttachmentsPath": "",
+  "defaultSubitemsPath": "",
   "defaultNewSubitemStatus": "",
   "defaultNewSubitemPriority": "",
   "checklistPromotionBehavior": "remove",
@@ -2452,7 +2466,7 @@
         {
           "source": "property:status",
           "operator": "!is",
-          "value": "blocked"
+          "value": "holding"
         }
       ],
       "enabled": true,
@@ -2501,13 +2515,13 @@
     },
     {
       "id": "Dywu2",
-      "name": "blocked low",
+      "name": "holding low",
       "match": "all",
       "conditions": [
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         },
         {
           "source": "property:priority",
@@ -2526,13 +2540,13 @@
     },
     {
       "id": "xaUGZ",
-      "name": "blocked note normal",
+      "name": "holding note normal",
       "match": "all",
       "conditions": [
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         },
         {
           "source": "property:priority",
@@ -2551,13 +2565,13 @@
     },
     {
       "id": "DyeNu",
-      "name": "blocked note medium",
+      "name": "holding note medium",
       "match": "all",
       "conditions": [
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         },
         {
           "source": "property:priority",
@@ -2576,13 +2590,13 @@
     },
     {
       "id": "IusAw",
-      "name": "blocked note high",
+      "name": "holding note high",
       "match": "all",
       "conditions": [
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         },
         {
           "source": "property:priority",
@@ -2815,13 +2829,13 @@
     },
     {
       "id": "xuHis",
-      "name": "todo open low",
+      "name": "todo low",
       "match": "all",
       "conditions": [
         {
           "source": "property:status",
           "operator": "is",
-          "value": "open"
+          "value": "todo"
         },
         {
           "source": "property:priority",
@@ -2840,13 +2854,13 @@
     },
     {
       "id": "GJO21",
-      "name": "todo open normal",
+      "name": "todo normal",
       "match": "all",
       "conditions": [
         {
           "source": "property:status",
           "operator": "is",
-          "value": "open"
+          "value": "todo"
         },
         {
           "source": "property:priority",
@@ -2865,7 +2879,7 @@
     },
     {
       "id": "5Gzl9",
-      "name": "todo open medium",
+      "name": "todo medium",
       "match": "all",
       "conditions": [
         {
@@ -2890,13 +2904,13 @@
     },
     {
       "id": "uuSIR",
-      "name": "todo open high",
+      "name": "todo high",
       "match": "all",
       "conditions": [
         {
           "source": "property:status",
           "operator": "is",
-          "value": "open"
+          "value": "todo"
         },
         {
           "source": "property:priority",
@@ -2934,7 +2948,7 @@
     },
     {
       "id": "yT1iH",
-      "name": "blocked note",
+      "name": "holding note",
       "match": "all",
       "conditions": [
         {
@@ -2945,7 +2959,7 @@
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         }
       ],
       "enabled": true,

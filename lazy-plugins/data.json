@@ -62,6 +62,9 @@
       },
       "tps-notebook-navigator-companion": {
         "startupType": "instant"
+      },
+      "datacore": {
+        "startupType": "instant"
       }
     }
   }

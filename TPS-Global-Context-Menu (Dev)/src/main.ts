@@ -41,6 +41,7 @@ import { CalendarNoteMutationService } from './services/calendar-note-mutation-s
 import { ParentChildMutationService } from './services/parent-child-mutation-service';
 import { ItemSemanticsService } from './services/item-semantics-service';
 import { LinkedSubitemMigrationService } from './services/linked-subitem-migration-service';
+import { getDailyNoteResolver } from '../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
 
 
 export default class TPSGlobalContextMenuPlugin extends Plugin {
@@ -186,6 +187,128 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
       companion?.shouldSuppressNotebookNavigatorStatusIconContextMenu?.(file.path) ||
       companion?.api?.shouldSuppressNotebookNavigatorStatusIconContextMenu?.(file.path),
     );
+  }
+
+  public normalizeLineTrackingPath(value: unknown): string {
+    return normalizePath(String(value || '').trim().replace(/^\/+/, ''));
+  }
+
+  public getLineTrackingSurfacePathSet(): Set<string> {
+    const paths = new Set<string>();
+    const addPath = (value: unknown) => {
+      const normalized = this.normalizeLineTrackingPath(value);
+      if (normalized) paths.add(normalized);
+    };
+
+    for (const path of this.settings.taskSurfacePaths || []) addPath(path);
+
+    const controller =
+      (this.app as any)?.plugins?.getPlugin?.('tps-controller') ??
+      (this.app as any)?.plugins?.plugins?.['TPS-Controller (Dev)'] ??
+      null;
+    for (const calendar of controller?.settings?.externalCalendars || []) {
+      if ((calendar?.autoCreateMode || 'note') !== 'task-list') continue;
+      addPath(calendar?.autoCreateTaskListPath);
+    }
+
+    return paths;
+  }
+
+  public isLineTrackingSurfacePath(path: string): boolean {
+    if (!this.settings.enableLineItems) return false;
+    const normalized = this.normalizeLineTrackingPath(path);
+    if (!normalized) return false;
+
+    if (this.getLineTrackingSurfacePathSet().has(normalized)) return true;
+
+    const normalizedLower = normalized.toLowerCase();
+    for (const rawFolder of this.settings.lineTrackingSurfaceFolders || []) {
+      const folder = this.normalizeLineTrackingPath(rawFolder).replace(/\/+$/, '');
+      if (!folder) continue;
+      const folderLower = folder.toLowerCase();
+      if (normalizedLower === folderLower || normalizedLower.startsWith(`${folderLower}/`)) return true;
+    }
+
+    if (this.settings.lineTrackingTreatDailyNotesAsSurface) {
+      try {
+        const resolver = getDailyNoteResolver(this.app, {
+          formatOverride: (this as any)?.settings?.dailyNoteDateFormat,
+        });
+        const file = this.app.vault.getAbstractFileByPath(normalized);
+        if (file instanceof TFile && resolver.isDailyNoteBasename(file.basename)) return true;
+      } catch {
+        // Daily-note detection is optional; fall through to explicit line identity.
+      }
+    }
+
+    return false;
+  }
+
+  public lineHasTpsIdentity(line: string): boolean {
+    const properties = this.itemSemanticsService?.parseInlineProperties?.(line) || {};
+    return ['tpsid', 'externaleventid', 'tpscalendaruid', 'tpscalendarsourceurl', 'timerid'].some((key) => {
+      const value = properties[key];
+      return typeof value === 'string' && value.trim().length > 0;
+    });
+  }
+
+  public isLineTrackingHeadingContext(content: string, lineNumber: number): boolean {
+    const configuredNames = new Set(
+      (this.settings.lineTrackingHeadingNames || [])
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean),
+    );
+    const lines = String(content || '').split('\n');
+    let currentDepth = Number.POSITIVE_INFINITY;
+
+    for (let index = Math.min(Math.max(lineNumber, 0), lines.length - 1); index >= 0; index -= 1) {
+      const line = lines[index] || '';
+      const match = line.match(/^\s*(#{1,6})\s+(.+)$/);
+      if (!match) continue;
+      const depth = match[1].length;
+      if (depth >= currentDepth) continue;
+      currentDepth = depth;
+
+      if (this.lineHasTpsIdentity(line)) return true;
+
+      const cleanHeading = String(match[2] || '')
+        .replace(/\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, '')
+        .replace(/#+\s*$/, '')
+        .trim()
+        .toLowerCase();
+      if (cleanHeading && configuredNames.has(cleanHeading)) return true;
+    }
+
+    return false;
+  }
+
+  public isLineTrackable(input: {
+    path: string;
+    line: string;
+    kind?: 'checkbox' | 'bullet' | 'heading' | 'unknown';
+    lineNumber?: number;
+    content?: string;
+  }): boolean {
+    if (!this.settings.enableLineItems) return false;
+    const line = String(input.line || '');
+    const kind = input.kind || (line.match(/^\s*(?:[-*+]|\d+\.)\s+\[[^\]]*\]\s+/)
+      ? 'checkbox'
+      : line.match(/^\s*(?:[-*+]|\d+\.)\s+/)
+        ? 'bullet'
+        : line.match(/^\s*#{1,6}\s+/)
+          ? 'heading'
+          : 'unknown');
+
+    if (kind === 'checkbox' && !this.settings.lineTrackingTrackCheckboxes) return false;
+    if (kind === 'bullet' && !this.settings.lineTrackingTrackBullets) return false;
+    if (kind === 'heading' && !this.settings.lineTrackingTrackHeadings) return false;
+
+    if (this.lineHasTpsIdentity(line)) return true;
+    if (this.isLineTrackingSurfacePath(input.path)) return true;
+    if (typeof input.content === 'string' && typeof input.lineNumber === 'number') {
+      return this.isLineTrackingHeadingContext(input.content, input.lineNumber);
+    }
+    return false;
   }
 
   private suppressCanvasActivationEvent(evt: MouseEvent): boolean {
@@ -754,6 +877,20 @@ export default class TPSGlobalContextMenuPlugin extends Plugin {
     if (this.settings.linkedSubitemCheckboxMappings.length === 0) {
       this.settings.linkedSubitemCheckboxMappings = this.getStrictLinkedSubitemMappings();
     }
+    this.settings.taskSurfacePaths = Array.isArray(this.settings.taskSurfacePaths)
+      ? this.settings.taskSurfacePaths.map((path) => String(path || '').trim()).filter(Boolean)
+      : [...DEFAULT_SETTINGS.taskSurfacePaths];
+    this.settings.lineTrackingSurfaceFolders = Array.isArray(this.settings.lineTrackingSurfaceFolders)
+      ? this.settings.lineTrackingSurfaceFolders.map((path) => String(path || '').trim()).filter(Boolean)
+      : [];
+    this.settings.lineTrackingHeadingNames = Array.isArray(this.settings.lineTrackingHeadingNames)
+      ? this.settings.lineTrackingHeadingNames.map((heading) => String(heading || '').trim()).filter(Boolean)
+      : [];
+    this.settings.lineTrackingTreatDailyNotesAsSurface = this.settings.lineTrackingTreatDailyNotesAsSurface === true;
+    this.settings.lineTrackingPromotionRequiresSurface = this.settings.lineTrackingPromotionRequiresSurface !== false;
+    this.settings.lineTrackingTrackCheckboxes = this.settings.lineTrackingTrackCheckboxes !== false;
+    this.settings.lineTrackingTrackBullets = this.settings.lineTrackingTrackBullets !== false;
+    this.settings.lineTrackingTrackHeadings = this.settings.lineTrackingTrackHeadings !== false;
     let shouldPersistSettings = this.normalizeScheduledPropertyProfilesForRootVault();
     shouldPersistSettings = this.normalizeRootVaultDailyNoteNotebookRules() || shouldPersistSettings;
     shouldPersistSettings = this.normalizeRootVaultActionItemNotebookRules() || shouldPersistSettings;

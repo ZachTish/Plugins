@@ -92,7 +92,7 @@ export class ItemSemanticsService {
     if (taskMatch) {
       return {
         kind: 'task',
-        checkboxState: `[${String(taskMatch[1] || '').trim()}]`,
+        checkboxState: `[${String(taskMatch[1] ?? '')}]`,
         body: String(taskMatch[2] || ''),
       };
     }
@@ -124,7 +124,7 @@ export class ItemSemanticsService {
     const body = String(taskMatch ? taskMatch[2] : bulletMatch?.[1] ?? '');
     return {
       kind: taskMatch ? 'task' : 'bullet',
-      checkboxState: taskMatch ? `[${String(taskMatch[1] || '').trim()}]` : null,
+      checkboxState: taskMatch ? `[${String(taskMatch[1] ?? '')}]` : null,
       body,
       text: this.cleanTaskText(body),
       inlineProperties: this.parseInlineProperties(body),

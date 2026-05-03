@@ -246,8 +246,8 @@ export async function createBidirectionalLink(
     childLinkKey: string
 ): Promise<void> {
     try {
-        const parentKey = String(parentLinkKey || "childOf").trim() || "childOf";
-        const childKey = String(childLinkKey || "parentOf").trim() || "parentOf";
+        const parentKey = String(parentLinkKey || "parent").trim() || "parent";
+        const childKey = String(childLinkKey || "").trim();
         const tagsToAdd = getParentTagOnChildLink(app);
 
         await withFileLock(childFile.path, async () => {
@@ -260,15 +260,17 @@ export async function createBidirectionalLink(
             logger.log(`[ParentChildLink] Added parent link to ${childFile.path}: ${parentKey} = ${parentLink}`);
         });
 
-        await withFileLock(parentFile.path, async () => {
-            const gcmApi = getGlobalContextMenuApi(app);
-            if (!gcmApi?.addChildLink) {
-                throw new Error('TPS Global Context Menu API unavailable for child link mutation');
-            }
-            const childLink = buildLink(app, parentFile.path, childFile);
-            await gcmApi.addChildLink({ parentFile, childKey, childLink, childFile, tagsToAdd });
-            logger.log(`[ParentChildLink] Added child link to ${parentFile.path}: ${childKey}`);
-        });
+        if (childKey) {
+            await withFileLock(parentFile.path, async () => {
+                const gcmApi = getGlobalContextMenuApi(app);
+                if (!gcmApi?.addChildLink) {
+                    throw new Error('TPS Global Context Menu API unavailable for child link mutation');
+                }
+                const childLink = buildLink(app, parentFile.path, childFile);
+                await gcmApi.addChildLink({ parentFile, childKey, childLink, childFile, tagsToAdd });
+                logger.log(`[ParentChildLink] Added child link to ${parentFile.path}: ${childKey}`);
+            });
+        }
 
         logger.log(`[ParentChildLink] ✓ Bidirectional link created: ${childFile.basename} ↔ ${parentFile.basename}`);
     } catch (error) {

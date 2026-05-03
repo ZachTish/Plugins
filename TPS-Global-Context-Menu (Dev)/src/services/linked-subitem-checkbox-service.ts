@@ -1477,7 +1477,7 @@ export class LinkedSubitemCheckboxService {
 
   private async applyLinkedSubitemStatusChange(file: TFile, normalizedStatus: string): Promise<void> {
     if (normalizedStatus === 'complete' || normalizedStatus === 'wont-do') {
-      await this.plugin.timeTrackingService.stopFirstRunningTimer(file);
+      await this.plugin.timeTrackingService.stopFirstRunningTimer(file, normalizedStatus);
     }
     await this.plugin.bulkEditService.setStatus([file], normalizedStatus);
     await this.syncCheckboxStateAcrossParents(file, normalizedStatus);

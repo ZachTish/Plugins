@@ -63,6 +63,7 @@ interface UseCalendarEventsOptions {
   defaultEventDuration: number;
   minEventHeight: number;
   tick: number;
+  editable: boolean;
   /** Status values that are considered "done" and should be dimmed. */
   doneStatuses?: string[];
 }
@@ -77,6 +78,7 @@ export function useCalendarEvents({
   defaultEventDuration,
   minEventHeight,
   tick,
+  editable,
   doneStatuses = ["complete", "wont-do", "wont do"],
 }: UseCalendarEventsOptions) {
   const basesEntryMap = useMemo(() => {
@@ -105,7 +107,7 @@ export function useCalendarEvents({
           : (calEntry.backgroundColor || "var(--background-modifier-border)");
       const backgroundColor = effectiveColor;
       const borderColor = calEntry.borderColor || (isAdditionalDateSource ? "var(--background-modifier-border)" : backgroundColor);
-      const taskColor = calEntry.isTask && !isAdditionalDateSource ? backgroundColor : "";
+      const taskColor = calEntry.isTask && !isAdditionalDateSource ? (calEntry.backgroundColor || "") : "";
       const eventMinHeightValue = calEntry.isTask && !isAllDayTask(calEntry)
         ? 0
         : minEventHeight;
@@ -143,6 +145,9 @@ export function useCalendarEvents({
 
       const baseTitle = calEntry.title || calEntry.entry?.file?.basename || "Untitled";
       const title = calEntry.isGhost ? `${baseTitle} (upcoming)` : baseTitle;
+      const isEditable = calEntry.isTask
+        ? true
+        : editable && !calEntry.isExternal && !calEntry.isGhost;
 
       return {
         id: calEntry.isGhost
@@ -165,6 +170,9 @@ export function useCalendarEvents({
         end: eventEnd,
         allDay: isAllDay,
         classNames: [...classNames, isAllDay ? "bases-all-day-event" : "", isPast ? "is-past" : ""],
+        editable: isEditable,
+        startEditable: isEditable,
+        durationEditable: isEditable,
         extendedProps: {
           calendarEntry: calEntry,
           entry: calEntry.entry,
@@ -220,7 +228,7 @@ export function useCalendarEvents({
     });
 
     return mappedEvents;
-  }, [entries, allDayProperty, minEventHeight, tick]);
+  }, [entries, allDayProperty, defaultEventDuration, minEventHeight, tick, editable, doneStatuses]);
 
   return { basesEntryMap, events };
 }

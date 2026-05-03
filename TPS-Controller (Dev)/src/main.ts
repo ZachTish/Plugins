@@ -696,8 +696,8 @@ export default class TPSControllerPlugin extends Plugin {
         if (typeof reconcile !== "function" && typeof ensureSelfLink !== "function") return;
         this.parentChildMaintenanceActivated = true;
 
-        const parentKey = String(gcm?.settings?.parentLinkFrontmatterKey || "childOf").trim() || "childOf";
-        const childKey = String(gcm?.settings?.childLinkFrontmatterKey || "parentOf").trim() || "parentOf";
+        const parentKey = String(gcm?.settings?.parentLinkFrontmatterKey || "parent").trim() || "parent";
+        const childKey = String(gcm?.settings?.childLinkFrontmatterKey || "").trim();
 
         const parentCandidates = new Map<string, TFile>();
         const files = this.app.vault.getMarkdownFiles();
@@ -705,7 +705,7 @@ export default class TPSControllerPlugin extends Plugin {
             const frontmatter = (this.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
             if (!frontmatter || typeof frontmatter !== "object") continue;
 
-            if (this.hasFrontmatterKeyCaseInsensitive(frontmatter, childKey)) {
+            if (childKey && this.hasFrontmatterKeyCaseInsensitive(frontmatter, childKey)) {
                 parentCandidates.set(file.path, file);
             }
 

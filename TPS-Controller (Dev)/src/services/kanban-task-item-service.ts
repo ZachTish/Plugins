@@ -25,6 +25,13 @@ export interface GcmTaskSemanticsApi {
         scheduledDateToken: string | null;
         scheduledTimeToken: string | null;
     } | null;
+    isLineTrackable?: (input: {
+        path: string;
+        line: string;
+        kind?: "checkbox" | "bullet" | "heading" | "unknown";
+        lineNumber?: number;
+        content?: string;
+    }) => boolean;
 }
 
 export function isKanbanBoardFileFromFrontmatter(frontmatter: Record<string, unknown> | undefined): boolean {
@@ -40,7 +47,7 @@ function combineKanbanDateTime(datePart: string, timePart: string | null): strin
     return t ? `${d} ${t}` : d;
 }
 
-export function parseKanbanCheckboxTasks(content: string, semanticsApi?: GcmTaskSemanticsApi | null): KanbanCheckboxTaskItem[] {
+export function parseKanbanCheckboxTasks(content: string, semanticsApi?: GcmTaskSemanticsApi | null, filePath = ""): KanbanCheckboxTaskItem[] {
     const lines = String(content || "").split("\n");
     const tasks: KanbanCheckboxTaskItem[] = [];
 
@@ -48,6 +55,13 @@ export function parseKanbanCheckboxTasks(content: string, semanticsApi?: GcmTask
         const line = lines[i];
         const parsed = semanticsApi?.parseTaskLine?.(line) || null;
         if (parsed) {
+            if (semanticsApi?.isLineTrackable && !semanticsApi.isLineTrackable({
+                path: filePath,
+                line,
+                kind: "checkbox",
+                lineNumber: i,
+                content,
+            })) continue;
             const checkboxState = String(parsed.checkboxState || "").trim();
             tasks.push({
                 lineNumber: i,
@@ -64,6 +78,13 @@ export function parseKanbanCheckboxTasks(content: string, semanticsApi?: GcmTask
 
         const m = line.match(/^[\t ]*(?:[-*+]|\d+\.)\s+\[([^\]]*)\]\s+(.*)$/);
         if (!m) continue;
+        if (semanticsApi?.isLineTrackable && !semanticsApi.isLineTrackable({
+            path: filePath,
+            line,
+            kind: "checkbox",
+            lineNumber: i,
+            content,
+        })) continue;
         const checkboxState = String(m[1] || "").trim();
         const checked = checkboxState.toLowerCase() === "x";
         const rawText = String(m[2] || "");

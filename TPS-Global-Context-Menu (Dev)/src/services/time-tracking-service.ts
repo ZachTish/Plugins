@@ -327,12 +327,13 @@ export class TimeTrackingService {
     _view: MarkdownView | null,
     lineNumber: number,
     _isReadingView = false,
+    finalStatus: string = 'complete',
   ): Promise<boolean> {
     if (!this.isMarkdownFile(file)) return false;
     const content = await this.plugin.app.vault.read(file);
     const lines = content.split('\n');
     if (lineNumber < 0 || lineNumber >= lines.length) return false;
-    const stoppedLine = this.buildStoppedTimerLine(lines[lineNumber]);
+    const stoppedLine = this.buildStoppedTimerLine(lines[lineNumber], finalStatus);
     if (!stoppedLine || stoppedLine === lines[lineNumber]) {
       new Notice('No running timer found on that line.');
       return false;
@@ -344,7 +345,7 @@ export class TimeTrackingService {
     return true;
   }
 
-  async stopFirstRunningTimer(file: TFile): Promise<boolean> {
+  async stopFirstRunningTimer(file: TFile, finalStatus: string = 'complete'): Promise<boolean> {
     if (!this.isMarkdownFile(file)) return false;
     const content = await this.plugin.app.vault.read(file);
     const lines = content.split('\n');
@@ -353,7 +354,7 @@ export class TimeTrackingService {
       new Notice('No running timer found in this note.');
       return false;
     }
-    const stoppedLine = this.buildStoppedTimerLine(lines[index]);
+    const stoppedLine = this.buildStoppedTimerLine(lines[index], finalStatus);
     if (!stoppedLine) return false;
     lines[index] = stoppedLine;
     await this.plugin.app.vault.modify(file, lines.join('\n'));
@@ -366,15 +367,16 @@ export class TimeTrackingService {
     return this.startForNote(file, label);
   }
 
-  async stopTimerForTerminalTaskState(file: TFile, lineNumber: number): Promise<boolean> {
+  async stopTimerForTerminalTaskState(file: TFile, lineNumber: number, finalStatus?: string): Promise<boolean> {
     if (!this.isMarkdownFile(file)) return false;
     const content = await this.plugin.app.vault.read(file);
     const lines = content.split('\n');
     if (lineNumber < 0 || lineNumber >= lines.length) return false;
 
     const line = lines[lineNumber] || '';
+    const resolvedFinalStatus = this.normalizeTerminalTimerStatus(finalStatus || this.inferTerminalStatusFromCheckboxLine(line));
     if (this.isRunningTimerLine(line)) {
-      const stoppedLine = this.buildStoppedTimerLine(line);
+      const stoppedLine = this.buildStoppedTimerLine(line, resolvedFinalStatus);
       if (!stoppedLine || stoppedLine === line) return false;
       lines[lineNumber] = stoppedLine;
       await this.plugin.app.vault.modify(file, lines.join('\n'));
@@ -385,10 +387,10 @@ export class TimeTrackingService {
     const active = await this.getActiveTimerInfo();
     if (!active) return false;
     if (active.sourcePath === file.path && active.sourceLineNumber === lineNumber) {
-      return this.stopFirstRunningTimer(active.file);
+      return this.stopFirstRunningTimer(active.file, resolvedFinalStatus);
     }
     if (!this.lineReferencesActiveTimer(line, file.path, active, lineNumber)) return false;
-    return this.stopFirstRunningTimer(active.file);
+    return this.stopFirstRunningTimer(active.file, resolvedFinalStatus);
   }
 
   async setTimerStatusForLine(file: TFile, lineNumber: number, targetStatus: string): Promise<boolean> {
@@ -1123,6 +1125,30 @@ export class TimeTrackingService {
     return fallback || ' ';
   }
 
+  private normalizeTerminalTimerStatus(status: string | null | undefined): string {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'wont-do' || normalized === 'wont do' || normalized === 'cancelled' || normalized === 'canceled') {
+      return 'wont-do';
+    }
+    return 'complete';
+  }
+
+  private isTerminalTimerStatus(status: string | null | undefined): boolean {
+    const normalized = String(status || '').trim().toLowerCase();
+    return normalized === 'complete'
+      || normalized === 'completed'
+      || normalized === 'done'
+      || normalized === 'wont-do'
+      || normalized === 'wont do'
+      || normalized === 'cancelled'
+      || normalized === 'canceled';
+  }
+
+  private inferTerminalStatusFromCheckboxLine(line: string): string {
+    const checkboxState = this.getCheckboxStateChar(line);
+    return checkboxState === '-' ? 'wont-do' : 'complete';
+  }
+
   private getInlinePropertyValue(properties: Record<string, string>, keys: readonly string[]): string {
     for (const key of keys) {
       const value = properties[String(key || '').trim().toLowerCase()];
@@ -1269,7 +1295,7 @@ export class TimeTrackingService {
     return segments.join(' ');
   }
 
-  private buildStoppedTimerLine(line: string): string | null {
+  private buildStoppedTimerLine(line: string, finalStatus: string = 'complete'): string | null {
     const metadata = this.parseTimerMetadata(line);
     if (!metadata?.start) return null;
     if (metadata.status !== 'working' && metadata.minutes !== null) return null;
@@ -1277,7 +1303,9 @@ export class TimeTrackingService {
     const statusKey = this.getStatusPropertyKey();
     const timeEstimateKey = this.getTimeEstimatePropertyKey();
     const end = new Date();
-    const minutes = Math.max(0, Math.round((end.getTime() - metadata.start.getTime()) / 60000));
+    const elapsedMs = Math.max(0, end.getTime() - metadata.start.getTime());
+    const minutes = elapsedMs > 0 ? Math.max(1, Math.round(elapsedMs / 60000)) : 0;
+    const normalizedFinalStatus = this.normalizeTerminalTimerStatus(finalStatus);
     const isSessionHeading = this.isSessionHeadingLine(line);
 
     if (isSessionHeading) {
@@ -1287,38 +1315,41 @@ export class TimeTrackingService {
       return `${nextLine} [${scheduledKey}:: ${this.formatScheduledTimestamp(metadata.start)}] [${timeEstimateKey}:: ${minutes}]`;
     }
 
-    let nextLine = line.replace(/^(\s*(?:[-*+]|\d+\.)\s*)\[[^\]]*\]/, '$1[x]');
+    const checkboxState = this.getCheckboxStateCharForStatus(normalizedFinalStatus, this.getCheckboxStateChar(line));
+    let nextLine = line.replace(/^(\s*(?:[-*+]|\d+\.)\s*)\[[^\]]*\]/, `$1[${checkboxState}]`);
     nextLine = this.stripInlinePropertyKeys(nextLine, [statusKey, this.getStatusPropertyKey(), ...TIMER_LEGACY_PROPERTY_ALIASES.status]);
     nextLine = this.stripInlinePropertyKeys(nextLine, [timeEstimateKey, this.getTimeEstimatePropertyKey(), ...TIMER_LEGACY_PROPERTY_ALIASES.minutes, ...TIMER_LEGACY_PROPERTY_ALIASES.seconds, ...TIMER_LEGACY_PROPERTY_ALIASES.end, ...TIMER_LEGACY_PROPERTY_ALIASES.id]);
     nextLine = this.stripInlinePropertyKeys(nextLine, [scheduledKey, this.getScheduledPropertyKey(), ...TIMER_LEGACY_PROPERTY_ALIASES.start]);
-    return `${nextLine} [${scheduledKey}:: ${this.formatScheduledTimestamp(metadata.start)}] [${timeEstimateKey}:: ${minutes}] [${statusKey}:: complete]`;
+    return `${nextLine} [${scheduledKey}:: ${this.formatScheduledTimestamp(metadata.start)}] [${timeEstimateKey}:: ${minutes}] [${statusKey}:: ${normalizedFinalStatus}]`;
   }
 
   private buildTimerLineForStatus(line: string, metadata: TimerMetadata, targetStatus: string): string | null {
     const normalizedTargetStatus = String(targetStatus || '').trim().toLowerCase();
     if (!normalizedTargetStatus) return null;
     if (this.isSessionHeadingLine(line)) {
-      if (normalizedTargetStatus === 'complete' || normalizedTargetStatus === 'wont-do') {
-        return this.buildStoppedTimerLine(line);
+      if (this.isTerminalTimerStatus(normalizedTargetStatus)) {
+        return this.buildStoppedTimerLine(line, normalizedTargetStatus);
       }
       if (normalizedTargetStatus === 'working') {
         const scheduledKey = this.getScheduledPropertyKey();
+        const statusKey = this.getStatusPropertyKey();
         const timeEstimateKey = this.getTimeEstimatePropertyKey();
-        let nextLine = this.stripInlinePropertyKeys(line, [timeEstimateKey, this.getTimeEstimatePropertyKey(), ...TIMER_LEGACY_PROPERTY_ALIASES.minutes, ...TIMER_LEGACY_PROPERTY_ALIASES.seconds, ...TIMER_LEGACY_PROPERTY_ALIASES.end, ...TIMER_LEGACY_PROPERTY_ALIASES.id]);
+        let nextLine = this.stripInlinePropertyKeys(line, [statusKey, this.getStatusPropertyKey(), ...TIMER_LEGACY_PROPERTY_ALIASES.status]);
+        nextLine = this.stripInlinePropertyKeys(nextLine, [timeEstimateKey, this.getTimeEstimatePropertyKey(), ...TIMER_LEGACY_PROPERTY_ALIASES.minutes, ...TIMER_LEGACY_PROPERTY_ALIASES.seconds, ...TIMER_LEGACY_PROPERTY_ALIASES.end, ...TIMER_LEGACY_PROPERTY_ALIASES.id]);
         nextLine = this.stripInlinePropertyKeys(nextLine, [scheduledKey, this.getScheduledPropertyKey(), ...TIMER_LEGACY_PROPERTY_ALIASES.start]);
         return `${nextLine} [${scheduledKey}:: ${this.formatScheduledTimestamp(metadata.start)}]`;
       }
       return line;
     }
-    if (normalizedTargetStatus === 'complete' && metadata.status === 'working') {
-      return this.buildStoppedTimerLine(line);
+    if (this.isTerminalTimerStatus(normalizedTargetStatus) && metadata.status === 'working') {
+      return this.buildStoppedTimerLine(line, normalizedTargetStatus);
     }
 
     const scheduledKey = this.getScheduledPropertyKey();
     const statusKey = this.getStatusPropertyKey();
     const timeEstimateKey = this.getTimeEstimatePropertyKey();
     const checkboxState = this.getCheckboxStateCharForStatus(normalizedTargetStatus, this.getCheckboxStateChar(line));
-    const preservedMinutes = normalizedTargetStatus === 'complete'
+    const preservedMinutes = this.isTerminalTimerStatus(normalizedTargetStatus)
       ? metadata.minutes
       : normalizedTargetStatus === 'working'
       ? null
@@ -1425,18 +1456,10 @@ export class TimeTrackingService {
   }
 
   private getPreferredRelationshipKeys(): string[] {
-    const configured = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim();
+    const configured = String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim();
     const keys = new Set<string>();
-    if (configured) {
-      keys.add(configured);
-      if (configured.endsWith('s')) {
-        keys.add(configured.slice(0, -1));
-      } else {
-        keys.add(`${configured}s`);
-      }
-    }
-    keys.add('project');
-    keys.add('projects');
+    if (configured) keys.add(configured);
+    keys.add('parent');
     return Array.from(keys).filter(Boolean);
   }
 
@@ -1457,7 +1480,7 @@ export class TimeTrackingService {
     const derivedStatus = this.isSessionHeadingLine(text)
       ? this.inferSessionHeadingStatus(Number.isFinite(minutes) ? minutes : null)
       : explicitStatus || this.inferTimerStatusFromCheckbox(text, Number.isFinite(minutes) ? minutes : null);
-    if (scheduled && (derivedStatus === 'working' || derivedStatus === 'complete')) {
+    if (scheduled && (derivedStatus === 'working' || this.isTerminalTimerStatus(derivedStatus) || derivedStatus === 'holding')) {
       return {
         start: scheduled,
         status: derivedStatus,
@@ -1510,8 +1533,10 @@ export class TimeTrackingService {
 
   private inferTimerStatusFromCheckbox(line: string, minutes: number | null): string {
     const checkboxState = this.getCheckboxStateChar(line);
-    if (checkboxState === '/' || checkboxState === '?') return 'working';
-    if (checkboxState === 'x' || checkboxState === 'X' || checkboxState === '-') return 'complete';
+    if (checkboxState === '/') return 'working';
+    if (checkboxState === '?') return Number.isFinite(minutes) && minutes !== null ? 'holding' : 'working';
+    if (checkboxState === 'x' || checkboxState === 'X') return 'complete';
+    if (checkboxState === '-') return 'wont-do';
     if (checkboxState === ' ') {
       return Number.isFinite(minutes) && minutes !== null ? 'complete' : 'working';
     }

@@ -43,6 +43,7 @@ export class ParentChildMutationService {
   }
 
   async addChildLink(input: AddChildLinkInput): Promise<boolean> {
+    if (!String(input.childKey || '').trim()) return false;
     return this.plugin.calendarNoteMutationService.applyFrontmatterMutation({
       file: input.parentFile,
       folderPath: input.parentFile.parent?.path || '/',
@@ -78,26 +79,29 @@ export class ParentChildMutationService {
       },
     });
 
-    await this.plugin.calendarNoteMutationService.applyFrontmatterMutation({
-      file: input.parentFile,
-      folderPath: input.parentFile.parent?.path || '/',
-      transform: (fm) => {
-        const existingRaw = getFrontmatterValueCaseInsensitive(fm, input.childKey);
-        if (Array.isArray(existingRaw)) {
-          const filtered = existingRaw.filter((link: unknown) => !linkReferencesFile(this.plugin.app, link, input.parentFile.path, input.childFile));
-          if (filtered.length > 0) setFrontmatterValueCaseInsensitive(fm, input.childKey, filtered);
-          else deleteFrontmatterValueCaseInsensitive(fm, input.childKey);
-          return;
-        }
+    if (String(input.childKey || '').trim()) {
+      await this.plugin.calendarNoteMutationService.applyFrontmatterMutation({
+        file: input.parentFile,
+        folderPath: input.parentFile.parent?.path || '/',
+        transform: (fm) => {
+          const existingRaw = getFrontmatterValueCaseInsensitive(fm, input.childKey);
+          if (Array.isArray(existingRaw)) {
+            const filtered = existingRaw.filter((link: unknown) => !linkReferencesFile(this.plugin.app, link, input.parentFile.path, input.childFile));
+            if (filtered.length > 0) setFrontmatterValueCaseInsensitive(fm, input.childKey, filtered);
+            else deleteFrontmatterValueCaseInsensitive(fm, input.childKey);
+            return;
+          }
 
-        if (linkReferencesFile(this.plugin.app, existingRaw, input.parentFile.path, input.childFile)) {
-          deleteFrontmatterValueCaseInsensitive(fm, input.childKey);
-        }
-      },
-    });
+          if (linkReferencesFile(this.plugin.app, existingRaw, input.parentFile.path, input.childFile)) {
+            deleteFrontmatterValueCaseInsensitive(fm, input.childKey);
+          }
+        },
+      });
+    }
   }
 
   async removeDetachedChildLink(input: RemoveDetachedChildLinkInput): Promise<boolean> {
+    if (!String(input.childKey || '').trim()) return false;
     return this.plugin.calendarNoteMutationService.applyFrontmatterMutation({
       file: input.parentFile,
       folderPath: input.parentFile.parent?.path || '/',

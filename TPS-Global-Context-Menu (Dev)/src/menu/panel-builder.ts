@@ -20,7 +20,7 @@ import { resolveLinkValueToFile } from '../handlers/parent-link-format';
 import { PanelActionService } from './panel-action-service';
 import { SubitemMetadataService, SubitemRelationEntry, SubitemRelationKind } from './subitem-metadata-service';
 import { getDailyNoteResolver } from '../../../TPS-Controller (Dev)/src/utils/daily-note-resolver';
-import { generateSubitemId, SUBITEM_ID_KEY } from '../utils/subitem-id';
+import { generateSubitemId, LEGACY_SUBITEM_ID_KEY, SUBITEM_ID_KEY } from '../utils/subitem-id';
 import type { ProjectedTimeBlock } from '../services/time-tracking-service';
 
 interface SubitemNode {
@@ -360,7 +360,9 @@ export class PanelBuilder {
     switch (status) {
       case 'complete': return 'circle-check';
       case 'working': return 'clock';
-      case 'blocked': return 'circle-alert';
+      case 'holding':
+      case 'blocked':
+        return 'circle-alert';
       case 'wont-do': return 'circle-x';
       default: return 'circle';
     }
@@ -1940,7 +1942,7 @@ export class PanelBuilder {
 
     const stateBadge = document.createElement('span');
     stateBadge.className = 'tps-gcm-subitem-relation';
-    stateBadge.textContent = item.state === '?' ? 'question' : item.state === '-' ? 'canceled' : 'open';
+    stateBadge.textContent = item.state === '?' ? 'holding' : item.state === '-' ? 'wont-do' : 'todo';
     metaRow.appendChild(stateBadge);
 
     const lineInfo = document.createElement('span');
@@ -2122,7 +2124,8 @@ export class PanelBuilder {
   }
 
   private extractChecklistSubitemId(rawText: string): string {
-    return String(this.extractChecklistInlineProperties(rawText)[SUBITEM_ID_KEY] || '').trim();
+    const properties = this.extractChecklistInlineProperties(rawText);
+    return String(properties[SUBITEM_ID_KEY] || properties[LEGACY_SUBITEM_ID_KEY] || '').trim();
   }
 
   private isCalendarSyncedChecklistProperties(properties: Record<string, string>): boolean {
@@ -2304,7 +2307,7 @@ export class PanelBuilder {
 
   private normalizeChecklistText(text: string): string {
     return String(text || '')
-      .replace(/\s*\[subitemId::\s*[^\]]+\]/gi, '')
+      .replace(/\s*\[(?:tpsId|subitemId)::\s*[^\]]+\]/gi, '')
       .replace(/\s+/g, ' ')
       .trim()
       .toLowerCase();
@@ -2519,7 +2522,7 @@ export class PanelBuilder {
     ]);
 
     // Fold children & parent into mentions
-    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+    const parentKey = String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent';
     const parentIndex = this.subitemMetadataService.buildParentToChildrenIndex();
     const childFiles = parentIndex.get(rootFile.path) || [];
     const existingMentionPaths = new Set(mentions.map((m) => m.file.path));
@@ -3556,7 +3559,7 @@ export class PanelBuilder {
         const identity = getIdentity(file);
         if (identity.isComplete || identity.isWontDo) return 4;
         if (identity.allStatuses.some((status) => status === 'working' || status === 'in-progress')) return 1;
-        if (identity.allStatuses.includes('blocked')) return 2;
+        if (identity.allStatuses.some((status) => status === 'holding' || status === 'blocked')) return 2;
         if (identity.isPending || identity.allStatuses.length === 0) return 3;
         return 5;
       };

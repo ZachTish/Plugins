@@ -41,6 +41,7 @@ export default class ObsidianCalendarPlugin
     });
     this.addSettingTab(new CalendarPluginSettingsTab(this.app, this));
     await this.loadSettings();
+    this.externalCalendarService.loadSnapshot(this.settings.externalEventCache);
     this.setupPluginAPI();
     this.refreshCalendarViews();
     this.registerMarkdownPostProcessor(EmbedRenderer(this));
@@ -148,6 +149,11 @@ export default class ObsidianCalendarPlugin
     this.refreshCalendarViews();
     // Fire a custom workspace event so Bases-registered views also get notified.
     this.app.workspace.trigger("tps-calendar-settings-changed" as any);
+  }
+
+  async persistExternalEventCache(): Promise<void> {
+    this.settings.externalEventCache = this.externalCalendarService.exportSnapshot();
+    await this.saveData(this.settings);
   }
 
   private async setDayLinkTarget(target: "daily-note" | "daily-canvas"): Promise<void> {

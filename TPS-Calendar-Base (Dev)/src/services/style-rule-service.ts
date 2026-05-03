@@ -18,7 +18,7 @@ import {
 // --- Constants ---
 
 export const PRIORITY_KEYS = ["low", "normal", "medium", "high"];
-export const STATUS_KEYS = ["open", "complete", "wont-do", "working", "blocked"];
+export const STATUS_KEYS = ["todo", "working", "holding", "wont-do", "complete"];
 
 export const CALENDAR_OPERATORS: CalendarOperator[] = [
   "is",

@@ -482,7 +482,7 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
 
     new Setting(handlingSection)
       .setName("Parent-Child Linking")
-      .setDesc("Enable bidirectional linking between calendar events and parent projects/notes.")
+      .setDesc("Enable parent links between calendar events and parent notes.")
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.parentLinkEnabled)
@@ -498,26 +498,26 @@ export class CalendarPluginSettingsTab extends PluginSettingTab {
 
     new Setting(linkDetails)
       .setName("Parent Link Key")
-      .setDesc("Key in Child Note pointing to Parent (e.g. 'childOf').")
+      .setDesc("Key in Child Note pointing to Parent (e.g. 'parent').")
       .addText((text) =>
         text
-          .setPlaceholder("childOf")
-          .setValue(this.plugin.settings.parentLinkKey || "childOf")
+          .setPlaceholder("parent")
+          .setValue(this.plugin.settings.parentLinkKey || "parent")
           .onChange(async (value) => {
-            this.plugin.settings.parentLinkKey = value.trim() || "childOf";
+            this.plugin.settings.parentLinkKey = value.trim() || "parent";
             await this.plugin.saveSettings();
           }),
       );
 
     new Setting(linkDetails)
-      .setName("Child Link Key")
-      .setDesc("Key in Parent Note pointing to Children (e.g. 'meetings').")
+      .setName("Stored Child List Key")
+      .setDesc("Disabled by default. Leave empty so child lists are derived from child-side parent links.")
       .addText((text) =>
         text
-          .setPlaceholder("meetings")
-          .setValue(this.plugin.settings.childLinkKey || "meetings")
+          .setPlaceholder("disabled")
+          .setValue(this.plugin.settings.childLinkKey || "")
           .onChange(async (value) => {
-            this.plugin.settings.childLinkKey = value.trim() || "meetings";
+            this.plugin.settings.childLinkKey = value.trim();
             await this.plugin.saveSettings();
           }),
       );

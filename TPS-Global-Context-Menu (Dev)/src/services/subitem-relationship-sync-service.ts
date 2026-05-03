@@ -43,7 +43,7 @@ export class SubitemRelationshipSyncService {
 
     const bodyLinks = this.plugin.bodySubitemLinkService.scanText(parentFile, raw);
     // Live editor reconciliation is additive-only so temporary line removals
-    // during reorder/move operations do not strip childOf links mid-edit.
+    // during reorder/move operations do not strip parent links mid-edit.
     return await this.reconcileMarkdownParentLinks(parentFile, bodyLinks, { removeStaleParents: false });
   }
 

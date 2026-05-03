@@ -60,7 +60,7 @@ export function usesConditionValue(operator: SmartRuleOperator): boolean {
 
 export function getDefaultField(source: RuleConditionSource): string {
   if (source === 'frontmatter' || source === 'parent-frontmatter') return 'status';
-  if (source === 'backlink') return 'childOf';
+  if (source === 'backlink') return 'parent';
   return '';
 }
 

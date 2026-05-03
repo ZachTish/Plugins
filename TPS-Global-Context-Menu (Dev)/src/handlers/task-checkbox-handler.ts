@@ -42,10 +42,12 @@ export class TaskCheckboxHandler {
         const content = await this.app.vault.read(file);
         const lines = content.split('\n');
         let changed = false;
+        const isTaskSurface = this.isDesignatedTaskSurfaceFile(file);
 
         for (let index = 0; index < lines.length; index++) {
             const currentLine = lines[index];
             if (!CheckboxPatterns.ANY_CHECKBOX_CONTENT.test(currentLine)) continue;
+            if (!isTaskSurface && !this.taskLineHasTpsIdentity(currentLine)) continue;
             const nextLine = this.applyTaskVisualInlineProperties(file, currentLine);
             if (nextLine === currentLine) continue;
             lines[index] = nextLine;
@@ -83,6 +85,7 @@ export class TaskCheckboxHandler {
         const isReadingView = !!checkboxEl.closest('.markdown-reading-view, .markdown-preview-view');
         const lineNumber = this.findTaskLineNumber(checkboxEl, view, isReadingView);
         if (lineNumber < 0) return;
+        if (!this.isFirstClassTaskAtLine(file, view, lineNumber, isReadingView)) return;
 
         if (this.longPressTimerId !== null) {
             window.clearTimeout(this.longPressTimerId);
@@ -241,6 +244,7 @@ export class TaskCheckboxHandler {
         const isReadingView = !!targetEl.closest('.markdown-reading-view, .markdown-preview-view');
         const lineNumber = this.findTaskLineNumber(targetEl, view, isReadingView);
         if (lineNumber >= 0) {
+            if (!this.isFirstClassTaskAtLine(file, view, lineNumber, isReadingView)) return null;
             return { view, file, lineNumber, isReadingView };
         }
 
@@ -266,12 +270,16 @@ export class TaskCheckboxHandler {
         const lineNumber = await this.findRenderedTaskSourceLine(sourceFile, taskHost);
         if (lineNumber < 0) return null;
 
-        return {
+        const context = {
             view,
             file: sourceFile,
             lineNumber,
             isReadingView: true,
         };
+        const content = await this.app.vault.cachedRead(sourceFile);
+        const line = content.split('\n')[lineNumber] || '';
+        if (!this.isFirstClassTaskLine(sourceFile, line, lineNumber, content)) return null;
+        return context;
     }
 
     private resolveRenderedTaskSourcePath(taskHost: HTMLElement): string | null {
@@ -434,14 +442,17 @@ export class TaskCheckboxHandler {
         const next = this.applyNextTaskStateToLine(lines[candidateLine]);
         if (!next) return false;
         const previousState = this.getTaskLineState(lines[candidateLine]);
-        lines[candidateLine] = this.applyTaskVisualInlineProperties(file, next.nextLine);
+        const isFirstClassTask = this.isFirstClassTaskLine(file, lines[candidateLine]);
+        lines[candidateLine] = isFirstClassTask ? this.applyTaskVisualInlineProperties(file, next.nextLine) : next.nextLine;
         const updatedContent = lines.join('\n');
         if (updatedContent === content) return false;
         await this.app.vault.modify(file, updatedContent);
-        await this.applyRulesAfterTaskMutation(file);
-        await this.maybeStopTimerOnTerminalState(file, previousState, next.nextState, candidateLine);
-        await this.maybePromptToCompleteNote(file, previousState, next.nextState, lines);
-        this.scheduleChecklistReorder(file);
+        if (isFirstClassTask) {
+            await this.applyRulesAfterTaskMutation(file);
+            await this.maybeStopTimerOnTerminalState(file, previousState, next.nextState, candidateLine);
+            await this.maybePromptToCompleteNote(file, previousState, next.nextState, lines);
+            this.scheduleChecklistReorder(file);
+        }
         return true;
     }
 
@@ -467,14 +478,17 @@ export class TaskCheckboxHandler {
         const previousState = this.getTaskLineState(lines[candidateLine]);
         const nextLine = this.applySpecificTaskStateToLine(lines[candidateLine], targetState);
         if (!nextLine || nextLine === lines[candidateLine]) return false;
-        lines[candidateLine] = this.applyTaskVisualInlineProperties(file, nextLine);
+        const isFirstClassTask = this.isFirstClassTaskLine(file, lines[candidateLine]);
+        lines[candidateLine] = isFirstClassTask ? this.applyTaskVisualInlineProperties(file, nextLine) : nextLine;
         const updatedContent = lines.join('\n');
         if (updatedContent === content) return false;
         await this.app.vault.modify(file, updatedContent);
-        await this.applyRulesAfterTaskMutation(file);
-        await this.maybeStopTimerOnTerminalState(file, previousState, targetState, candidateLine);
-        await this.maybePromptToCompleteNote(file, previousState, targetState, lines);
-        this.scheduleChecklistReorder(file);
+        if (isFirstClassTask) {
+            await this.applyRulesAfterTaskMutation(file);
+            await this.maybeStopTimerOnTerminalState(file, previousState, targetState, candidateLine);
+            await this.maybePromptToCompleteNote(file, previousState, targetState, lines);
+            this.scheduleChecklistReorder(file);
+        }
         return true;
     }
 
@@ -495,6 +509,7 @@ export class TaskCheckboxHandler {
     private applyTaskVisualInlineProperties(file: TFile, line: string): string {
         const parsed = this.plugin.itemSemanticsService.parseTaskLine(line);
         if (!parsed || parsed.kind !== 'task') return line;
+        if (!this.isFirstClassTaskLine(file, line)) return line;
 
         const rules = Array.isArray(this.plugin.settings.notebookNavigatorRules)
             ? this.plugin.settings.notebookNavigatorRules
@@ -512,7 +527,7 @@ export class TaskCheckboxHandler {
             }
         }
 
-        const taskStatus = String(parsed.inlineProperties.status || this.getRuleTaskStatusFromCheckbox(parsed.checkboxState || '[ ]')).trim();
+        const taskStatus = this.getRuleTaskStatusFromCheckbox(parsed.checkboxState || '[ ]');
         if (taskStatus) {
             mergedFrontmatter.status = taskStatus;
         }
@@ -596,7 +611,7 @@ export class TaskCheckboxHandler {
         if (normalized === '-') return 'wont-do';
         if (normalized === '/') return 'working';
         if (normalized === '?') return 'holding';
-        return 'open';
+        return 'todo';
     }
 
     private showTaskStateSelectorMenu(
@@ -624,14 +639,16 @@ export class TaskCheckboxHandler {
             });
         }
 
-        menu.addSeparator();
-        menu.addItem((item) => {
-            item.setTitle('Start Time Tracking')
-                .setIcon('timer')
-                .onClick(() => {
-                    void this.plugin.timeTrackingService.startFromTaskLine(file, view, lineNumber, isReadingView);
-                });
-        });
+        if (this.isFirstClassTaskAtLine(file, view, lineNumber, isReadingView)) {
+            menu.addSeparator();
+            menu.addItem((item) => {
+                item.setTitle('Start Time Tracking')
+                    .setIcon('timer')
+                    .onClick(() => {
+                        void this.plugin.timeTrackingService.startFromTaskLine(file, view, lineNumber, isReadingView);
+                    });
+            });
+        }
 
         menu.showAtPosition({ x, y });
     }
@@ -644,7 +661,11 @@ export class TaskCheckboxHandler {
     ): Promise<void> {
         if ((nextState !== 'x' && nextState !== '-') || previousState === nextState) return;
         try {
-            await this.plugin.timeTrackingService.stopTimerForTerminalTaskState(file, lineNumber);
+            await this.plugin.timeTrackingService.stopTimerForTerminalTaskState(
+                file,
+                lineNumber,
+                nextState === '-' ? 'wont-do' : 'complete',
+            );
         } catch (error) {
             logger.warn('[TPS GCM] Failed stopping timer from task terminal state change', { file: file.path, lineNumber, error });
         }
@@ -686,6 +707,7 @@ export class TaskCheckboxHandler {
         nextState: CheckboxStateChar,
         updatedLines: string[],
     ): Promise<void> {
+        if (!this.isDesignatedTaskSurfaceFile(file)) return;
         await this.maybePromptToCompleteNote(file, previousState, nextState, updatedLines);
         this.scheduleChecklistReorder(file);
     }
@@ -760,6 +782,7 @@ export class TaskCheckboxHandler {
     }
 
     scheduleChecklistReorder(file: TFile): void {
+        if (!this.isDesignatedTaskSurfaceFile(file)) return;
         const key = file.path;
         const existingTimer = this.pendingChecklistReorderTimers.get(key);
         if (typeof existingTimer === 'number') window.clearTimeout(existingTimer);
@@ -768,6 +791,34 @@ export class TaskCheckboxHandler {
             void this.runDelayedChecklistReorder(key);
         }, 5000);
         this.pendingChecklistReorderTimers.set(key, timerId);
+    }
+
+    private isFirstClassTaskAtLine(file: TFile, view: MarkdownView, lineNumber: number, isReadingView: boolean): boolean {
+        const source = this.getViewSourceText(view);
+        const line = source.split('\n')[lineNumber] || '';
+        return this.isFirstClassTaskLine(file, line, lineNumber, source);
+    }
+
+    private isFirstClassTaskLine(file: TFile, line: string, lineNumber?: number, content?: string): boolean {
+        return this.plugin.isLineTrackable({
+            path: file.path,
+            line,
+            kind: 'checkbox',
+            lineNumber,
+            content,
+        });
+    }
+
+    private taskLineHasTpsIdentity(line: string): boolean {
+        return this.plugin.lineHasTpsIdentity(line);
+    }
+
+    private isDesignatedTaskSurfaceFile(file: TFile): boolean {
+        return this.plugin.isLineTrackingSurfacePath(file?.path || '');
+    }
+
+    private getDesignatedTaskSurfacePathSet(): Set<string> {
+        return this.plugin.getLineTrackingSurfacePathSet();
     }
 
     private async runDelayedChecklistReorder(filePath: string): Promise<void> {

@@ -13,11 +13,11 @@
       "enabled": true,
       "autoCreateEnabled": true,
       "autoCreateTypeFolder": "",
-      "autoCreateFolder": "02 Events",
+      "autoCreateFolder": "",
       "autoCreateTag": "hca",
       "autoCreateTemplate": "",
-      "autoCreateMode": "task-list",
-      "autoCreateTaskListPath": "/Hca Calendar.md"
+      "autoCreateMode": "note",
+      "autoCreateTaskListPath": "Hca Calendar.md"
     },
     {
       "id": "calendar-1770138596600-4208",
@@ -26,11 +26,11 @@
       "enabled": true,
       "autoCreateEnabled": true,
       "autoCreateTypeFolder": "",
-      "autoCreateFolder": "02 Events",
+      "autoCreateFolder": "",
       "autoCreateTag": "exercise",
       "autoCreateTemplate": "",
-      "autoCreateMode": "task-list",
-      "autoCreateTaskListPath": "/Workouts.md"
+      "autoCreateMode": "note",
+      "autoCreateTaskListPath": "Workouts.md"
     }
   ],
   "syncBackfillDays": 5,
@@ -79,7 +79,7 @@
       "allDayBaseTime": "09:00",
       "mode": "task",
       "requiredStatuses": [
-        "open"
+        "todo"
       ],
       "label": "All day 9am",
       "requiredPaths": []
@@ -254,8 +254,7 @@
       "ignoreStatuses": [
         "complete",
         "wont-do",
-        "working",
-        "note"
+        "working"
       ],
       "allDayFilter": "any",
       "requiredStatuses": []
@@ -267,13 +266,12 @@
   "editorDropLinkHeadingLevel": 2,
   "editorDropLinkTemplate": "{{heading}} {{wikilink}}",
   "globalIgnorePaths": [
-    "*/02 Notes/*",
-    "re:(^|/)_[^/]*($|/|$)",
-    "re: ^[^/]+\\.md$"
+    "re:(^|/)_[^/]*($|/|$)"
   ],
   "globalIgnoreTags": [
     "archive",
-    "template"
+    "template",
+    "dailynote"
   ],
   "globalIgnoreStatuses": [
     "complete",
@@ -282,8 +280,8 @@
   "snoozeProperty": "reminderSnooze",
   "defaultAllDayBaseTime": "09:00",
   "kanbanTaskReminders": {
-    "enabled": true,
-    "includeBoardFileTarget": true,
+    "enabled": false,
+    "includeBoardFileTarget": false,
     "parseInlineProperties": true,
     "parseKanbanDateTokens": true,
     "parseTasksEmojiDates": true,

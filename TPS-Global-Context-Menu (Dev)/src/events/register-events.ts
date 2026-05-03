@@ -536,9 +536,9 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
             }
             if (file instanceof TFile) {
                 // ── Note-open reconciliation hooks ─────────────────────────────────
-                // 0. Repair broken parent body links from childOf backlinks before any
+                // 0. Repair broken parent body links from parent references before any
                 // other subitem reconciliation runs. This prevents transient broken
-                // lines like `- [ ] [[` from stripping childOf links on open.
+                // lines like `- [ ] [[` from stripping parent links on open.
                 // Keep note-open reconciliation non-destructive beyond broken-link repair;
                 // rewriting valid body links here causes vault-wide metadata churn.
                 void plugin.subitemRelationshipSyncService?.repairBrokenBodyLinksForParent(file);
@@ -624,7 +624,7 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
             // Force refresh so frontmatter edits made while typing are reflected immediately.
             plugin.persistentMenuManager.refreshMenusForFile(file, true);
 
-            const parentKey = String(plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf';
+            const parentKey = String(plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent';
             const fm = (plugin.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
             const fmParentKey = Object.keys(fm).find((k) => k.toLowerCase() === parentKey.toLowerCase());
             if (fmParentKey !== undefined) {

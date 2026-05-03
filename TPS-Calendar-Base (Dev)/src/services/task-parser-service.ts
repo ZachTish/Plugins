@@ -1,10 +1,17 @@
-import { App } from "obsidian";
+import { App, normalizePath, TFile } from "obsidian";
 
 interface GcmItemSemanticsApi {
     parseInlineProperties?: (text: string) => Record<string, string>;
     extractInlineProperty?: (text: string, ...keys: string[]) => string | null;
     extractInlineNumberProperty?: (text: string, ...keys: string[]) => number | null;
     cleanTaskText?: (text: string) => string;
+    isLineTrackable?: (input: {
+        path: string;
+        line: string;
+        kind?: "checkbox" | "bullet" | "heading" | "unknown";
+        lineNumber?: number;
+        content?: string;
+    }) => boolean;
 }
 
 /**
@@ -279,6 +286,16 @@ export function parseTasksFromContent(
         const inlineProperties = semanticsApi?.parseInlineProperties
             ? semanticsApi.parseInlineProperties(rawText)
             : extractAllInlineProperties(rawText);
+        if (semanticsApi?.isLineTrackable) {
+            const trackable = semanticsApi.isLineTrackable({
+                path: filePath,
+                line: lines[i],
+                kind: taskMatch ? "checkbox" : "bullet",
+                lineNumber: i,
+                content,
+            });
+            if (!trackable) continue;
+        }
         const externalEventId = semanticsApi?.extractInlineProperty
             ? semanticsApi.extractInlineProperty(rawText, 'externaleventid', 'external-event-id')
             : extractInlineStringProperty(rawText, 'externaleventid', 'external-event-id');
@@ -336,25 +353,31 @@ export async function parseAllTaskItems(
     allowedFilePaths?: Set<string> | null,
     explicitIncludeFilePaths?: Set<string> | null,
 ): Promise<ParsedTaskItem[]> {
+    const normalizeTaskPath = (path: string): string =>
+        normalizePath(String(path || "").trim()).replace(/^\/+/, "");
     const prefixes = folderFilter
         .split(",")
         .map((s) => {
-            const t = s.trim().toLowerCase();
+            const t = normalizeTaskPath(s).toLowerCase();
             return t && !t.endsWith("/") ? t + "/" : t;
         })
         .filter(Boolean);
 
     const results: ParsedTaskItem[] = [];
     const semanticsApi = getGcmItemSemanticsApi(app);
+    const allowedPaths = allowedFilePaths
+        ? new Set(Array.from(allowedFilePaths).map(normalizeTaskPath).filter(Boolean))
+        : null;
+    const explicitPaths = explicitIncludeFilePaths
+        ? new Set(Array.from(explicitIncludeFilePaths).map(normalizeTaskPath).filter(Boolean))
+        : null;
 
-    for (const file of app.vault.getMarkdownFiles()) {
-        if (allowedFilePaths && !allowedFilePaths.has(file.path)) continue;
-        const isExplicitlyIncluded = explicitIncludeFilePaths?.has(file.path) ?? false;
+    const parseFile = async (file: TFile): Promise<void> => {
+        const isExplicitlyIncluded = explicitPaths?.has(file.path) ?? false;
 
-        // Apply optional folder filter.
         if (!isExplicitlyIncluded && prefixes.length > 0) {
             const lp = file.path.toLowerCase();
-            if (!prefixes.some((p) => lp.startsWith(p))) continue;
+            if (!prefixes.some((p) => lp.startsWith(p))) return;
         }
 
         const cache = app.metadataCache.getFileCache(file);
@@ -370,6 +393,20 @@ export async function parseAllTaskItems(
         } catch {
             // skip unreadable files
         }
+    };
+
+    if (allowedPaths && allowedPaths.size > 0) {
+        for (const path of allowedPaths) {
+            const file = app.vault.getAbstractFileByPath(path);
+            if (file instanceof TFile) {
+                await parseFile(file);
+            }
+        }
+        return results;
+    }
+
+    for (const file of app.vault.getMarkdownFiles()) {
+        await parseFile(file);
     }
 
     return results;

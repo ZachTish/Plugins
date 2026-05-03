@@ -64,6 +64,10 @@ export class InlineTaskSubtaskService {
       this.removeForView(view);
       return;
     }
+    if (this.plugin.settings.lineTrackingPromotionRequiresSurface && !this.plugin.isLineTrackingSurfacePath(file.path) && !(this.plugin.settings.lineTrackingHeadingNames || []).length) {
+      this.removeForView(view);
+      return;
+    }
 
     if (this.hoverStates.has(view)) return;
 
@@ -636,6 +640,7 @@ export class InlineTaskSubtaskService {
       if (context) {
         if (this.isLineInFrontmatter(this.getViewSourceText(view).split('\n'), context.lineNumber)) return false;
         if (this.plugin.bodySubitemLinkService.parseLine(context.rawLine)) return false;
+        if (!this.isPromotionAllowedForLine(view, context.rawLine, context.lineNumber)) return false;
         return !!this.parseListLine(context.rawLine);
       }
       const text = this.getPrimaryListItemText(host).replace(/\s+/g, ' ').trim();
@@ -651,6 +656,7 @@ export class InlineTaskSubtaskService {
       if (context) {
         if (this.isLineInFrontmatter(this.getViewSourceText(view).split('\n'), context.lineNumber)) return false;
         if (this.plugin.bodySubitemLinkService.parseLine(context.rawLine)) return false;
+        if (!this.isPromotionAllowedForLine(view, context.rawLine, context.lineNumber)) return false;
         return !!this.parseListLine(context.rawLine);
       }
       const text = this.getPrimaryListItemText(host).replace(/\s+/g, ' ').trim();
@@ -662,10 +668,24 @@ export class InlineTaskSubtaskService {
       if (!context) return false;
       if (this.isLineInFrontmatter(this.getViewSourceText(view).split('\n'), context.lineNumber)) return false;
       if (this.plugin.bodySubitemLinkService.parseLine(context.rawLine)) return false;
+      if (!this.isPromotionAllowedForLine(view, context.rawLine, context.lineNumber)) return false;
       return !!this.parseListLine(context.rawLine);
     }
 
     return false;
+  }
+
+  private isPromotionAllowedForLine(view: MarkdownView, line: string, lineNumber: number): boolean {
+    if (!this.plugin.settings.lineTrackingPromotionRequiresSurface) return true;
+    const file = view.file;
+    if (!(file instanceof TFile)) return false;
+    return this.plugin.isLineTrackable({
+      path: file.path,
+      line,
+      kind: line.match(TASK_LINE_REGEX) ? 'checkbox' : 'bullet',
+      lineNumber,
+      content: this.getViewSourceText(view),
+    });
   }
 
   private isDirectLinkedSubitemHost(host: HTMLElement): boolean {

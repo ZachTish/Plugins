@@ -41,6 +41,10 @@ export function useEventRenderer({
       const isGhost = props.isGhost || false;
       const isTask = props.isTask || false;
       const taskCheckboxState = typeof props.taskCheckboxState === "string" ? props.taskCheckboxState.trim() : "";
+      const status = typeof props.status === "string" ? props.status.trim() : "";
+      const displayTaskCheckboxState = isTask
+        ? resolveTaskCheckboxState(taskCheckboxState, status)
+        : taskCheckboxState;
       const taskInlineProperties = (props.taskInlineProperties || {}) as Record<string, string>;
       const taskIsDone = !!props.taskIsDone;
       const iconName = typeof props.iconName === "string" ? props.iconName.trim() : "";
@@ -48,7 +52,9 @@ export function useEventRenderer({
       const taskColor = typeof props.taskColor === "string" ? props.taskColor.trim() : "";
       const eventHasColoredBackground = Boolean(eventInfo.event.backgroundColor || props.backgroundColor);
       const resolvedIconColor = iconColor || (eventHasColoredBackground ? "var(--text-on-accent)" : "currentColor");
-      const resolvedCheckboxColor = taskColor || iconColor || (eventHasColoredBackground ? "var(--text-on-accent)" : "currentColor");
+      const resolvedCheckboxColor = isTask && (taskColor || eventHasColoredBackground)
+        ? "var(--text-on-accent)"
+        : (iconColor || "currentColor");
 
       const propertyChips: React.ReactElement[] = [];
       if (isTask && sanitizedProperties && sanitizedProperties.length > 0) {
@@ -111,7 +117,8 @@ export function useEventRenderer({
         return (
           <div
             className="bases-calendar-event-content bases-calendar-event-content--allday tps-calendar-entry"
-            data-path={entryPath}
+            data-path={eventInfo.event.extendedProps?.isExternal ? undefined : entryPath}
+            data-tps-external-calendar-event={eventInfo.event.extendedProps?.isExternal ? "true" : undefined}
             style={{
               overflow: 'hidden',
               display: 'flex',
@@ -142,10 +149,10 @@ export function useEventRenderer({
                   <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
                 </svg>
               )}
-              {iconName
+              {!isTask && iconName
                 ? <EventIcon iconName={iconName} color={resolvedIconColor} />
                 : isTask
-                  ? renderTaskCheckboxIcon(taskCheckboxState, 12, resolvedCheckboxColor)
+                  ? renderTaskCheckboxIcon(displayTaskCheckboxState, 12, resolvedCheckboxColor)
                   : null}
               {hasRenderableTitleValue ? (
                 <RenderedValue
@@ -209,7 +216,8 @@ export function useEventRenderer({
       return (
         <div
           className="bases-calendar-event-content tps-calendar-entry"
-          data-path={entryPath}
+          data-path={eventInfo.event.extendedProps?.isExternal ? undefined : entryPath}
+          data-tps-external-calendar-event={eventInfo.event.extendedProps?.isExternal ? "true" : undefined}
           style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'stretch', justifyContent: 'flex-start', paddingBottom: '0.5em' }}
         >
 	          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, width: '100%', flex: '0 0 auto' }}>
@@ -230,10 +238,10 @@ export function useEventRenderer({
                 <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
               </svg>
             )}
-            {iconName
+            {!isTask && iconName
               ? <EventIcon iconName={iconName} color={resolvedIconColor} />
               : isTask
-                ? renderTaskCheckboxIcon(taskCheckboxState, 14, resolvedCheckboxColor)
+                ? renderTaskCheckboxIcon(displayTaskCheckboxState, 14, resolvedCheckboxColor)
                 : null}
             {hasRenderableTitleValue ? (
               <RenderedValue
@@ -344,6 +352,15 @@ const EventIcon: React.FC<{ iconName: string; color?: string }> = ({ iconName, c
     />
   );
 };
+
+function resolveTaskCheckboxState(markerState: string, status: string): string {
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  if (normalizedStatus === "complete" || normalizedStatus === "completed" || normalizedStatus === "done") return "x";
+  if (normalizedStatus === "wont-do" || normalizedStatus === "wont do" || normalizedStatus === "cancelled" || normalizedStatus === "canceled") return "-";
+  if (normalizedStatus === "holding" || normalizedStatus === "hold" || normalizedStatus === "blocked") return "?";
+  if (normalizedStatus === "working" || normalizedStatus === "in-progress" || normalizedStatus === "in progress") return "/";
+  return String(markerState || "").trim();
+}
 
 function renderTaskCheckboxIcon(state: string, size: number, color = "currentColor"): React.ReactElement {
   const common = {

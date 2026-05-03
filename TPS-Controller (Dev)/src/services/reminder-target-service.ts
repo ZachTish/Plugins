@@ -46,7 +46,7 @@ export async function buildReminderTargetsForFile(
     let tasks: KanbanCheckboxTaskItem[] = [];
     try {
         const content = await app.vault.cachedRead(file);
-        tasks = parseKanbanCheckboxTasks(content, getGcmTaskSemanticsApi(app));
+        tasks = parseKanbanCheckboxTasks(content, getGcmTaskSemanticsApi(app), file.path);
     } catch {
         tasks = [];
     }
@@ -127,7 +127,7 @@ export function buildEffectiveReminderContextForTarget(
             tpsCalendarSourceUrl: event.sourceUrl || "",
             location: event.location || "",
             organizer: event.organizer || "",
-            status: event.isCancelled ? "cancelled" : "scheduled",
+            status: event.isCancelled ? (settings.canceledStatusValue || "wont-do") : "todo",
         };
         if (settings.scheduledDateProperty) {
             frontmatter[settings.scheduledDateProperty] = scheduledValue.split(" ")[0];

@@ -243,6 +243,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
         [
           ".nn-file-tag[data-tps-tag-page='open']",
           ".nn-navitem-name[data-tps-tag-page='open']",
+          ".nn-navitem.nn-tag[data-tps-tag-page='open'] .nn-navitem-name",
           ".tps-tag-page-icon",
         ].join(", "),
       ) as HTMLElement | null;
@@ -265,6 +266,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       if (!isPrimaryClick || event.defaultPrevented) return;
       const propertyActionTarget = target.closest([
         ".nn-navitem-name[data-tps-property-page='open']",
+        ".nn-navitem.nn-property[data-tps-property-page='open'] .nn-navitem-name",
         ".tps-property-page-icon",
       ].join(", ")) as HTMLElement | null;
       if (!propertyActionTarget) return;
@@ -718,7 +720,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       return null;
     }
 
-    const tagEl = target.closest(".nn-file-tag, .nn-navitem[data-nav-item-type='tag'], .nn-navitem[data-drop-zone='tag'][data-tag], [data-drop-zone='tag'][data-tag], [data-drop-zone='tag-root']") as HTMLElement | null;
+    const tagEl = target.closest(".nn-file-tag, .nn-navitem[data-nav-item-type='tag'], .nn-navitem.nn-tag, .nn-navitem[data-drop-zone='tag'][data-tag], [data-drop-zone='tag'][data-tag], [data-drop-zone='tag-root']") as HTMLElement | null;
     if (!tagEl) return null;
 
     const rawTagAttr = tagEl.getAttribute("data-tag")
@@ -753,17 +755,37 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   }
 
   private resolveNotebookNavigatorPropertyFromTarget(target: HTMLElement): string | null {
-    const row = target.closest(".nn-navitem[data-nav-item-type='property'], .nn-navitem[data-drop-zone='property']") as HTMLElement | null;
+    const row = target.closest(".nn-navitem[data-nav-item-type='property'], .nn-navitem.nn-property, .nn-navitem[data-drop-zone='property'], [data-property-node]") as HTMLElement | null;
     if (!row) return null;
-    const raw = row.getAttribute("data-node-id")
+    const raw = row.getAttribute("data-property-node")
+      || row.getAttribute("data-node-id")
       || row.getAttribute("data-property")
+      || row.getAttribute("data-drag-path")
+      || row.getAttribute("data-drop-path")
       || row.dataset.nodeId
       || row.dataset.property
       || row.querySelector(".nn-navitem-name")?.textContent
       || row.textContent
       || "";
-    const normalized = String(raw || "").replace(/\s+\d+$/, "").trim();
+    const normalized = this.normalizeNotebookNavigatorPropertyKey(raw);
     return normalized || null;
+  }
+
+  private normalizeNotebookNavigatorPropertyKey(raw: string | null | undefined): string {
+    const value = String(raw || "").replace(/\s+\d+$/, "").trim();
+    if (!value) return "";
+
+    const keyMatch = value.match(/(?:^|[|/\u0000\s])key:([^|/\u0000]+)/i);
+    if (keyMatch?.[1]) {
+      return keyMatch[1].trim();
+    }
+
+    const propertyMatch = value.match(/(?:^|[|/\u0000\s])property:([^|/\u0000]+)/i);
+    if (propertyMatch?.[1]) {
+      return propertyMatch[1].trim();
+    }
+
+    return value.replace(/^key:/i, "").replace(/^property:/i, "").trim();
   }
 
   private isSidebarLeaf(leaf: WorkspaceLeaf | null | undefined): boolean {
@@ -790,7 +812,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
 
   private refreshNotebookNavigatorTagAffordances(): void {
     const tagRows = Array.from(document.querySelectorAll(
-      ".notebook-navigator .nn-navitem[data-nav-item-type='tag'], .notebook-navigator .nn-navitem[data-drop-zone='tag'][data-tag], .notebook-navigator [data-drop-zone='tag-root'], .view-content.notebook-navigator .nn-navitem[data-nav-item-type='tag'], .view-content.notebook-navigator .nn-navitem[data-drop-zone='tag'][data-tag], .view-content.notebook-navigator [data-drop-zone='tag-root']"
+      ".notebook-navigator .nn-navitem[data-nav-item-type='tag'], .notebook-navigator .nn-navitem.nn-tag, .notebook-navigator .nn-navitem[data-drop-zone='tag'][data-tag], .notebook-navigator [data-drop-zone='tag-root'], .view-content.notebook-navigator .nn-navitem[data-nav-item-type='tag'], .view-content.notebook-navigator .nn-navitem.nn-tag, .view-content.notebook-navigator .nn-navitem[data-drop-zone='tag'][data-tag], .view-content.notebook-navigator [data-drop-zone='tag-root']"
     )) as HTMLElement[];
     const tagLabels = Array.from(document.querySelectorAll(
       ".notebook-navigator .nn-file-tag, .view-content.notebook-navigator .nn-file-tag"
@@ -803,7 +825,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       const tagPageState = this.tagPageManager.hasTagPage(tag) ? "open" : "false";
       const isClickable = tagPageState === "open";
       el.setAttr("data-tps-tag-page", tagPageState);
-      const row = el.closest(".nn-navitem[data-nav-item-type='tag'], .nn-navitem[data-drop-zone='tag'][data-tag], [data-drop-zone='tag-root']") as HTMLElement | null;
+      const row = el.closest(".nn-navitem[data-nav-item-type='tag'], .nn-navitem.nn-tag, .nn-navitem[data-drop-zone='tag'][data-tag], [data-drop-zone='tag-root']") as HTMLElement | null;
       row?.setAttr("data-tps-tag-page", tagPageState);
       el.classList.toggle("nn-file-property-link", isClickable);
       const nameEl = row?.querySelector('.nn-navitem-name') as HTMLElement | null;
@@ -831,7 +853,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     }
 
     const propertyRows = Array.from(document.querySelectorAll(
-      ".notebook-navigator .nn-navitem[data-nav-item-type='property'], .notebook-navigator .nn-navitem[data-drop-zone='property'], .view-content.notebook-navigator .nn-navitem[data-nav-item-type='property'], .view-content.notebook-navigator .nn-navitem[data-drop-zone='property']"
+      ".notebook-navigator .nn-navitem[data-nav-item-type='property'], .notebook-navigator .nn-navitem.nn-property, .notebook-navigator .nn-navitem[data-drop-zone='property'], .notebook-navigator [data-property-node], .view-content.notebook-navigator .nn-navitem[data-nav-item-type='property'], .view-content.notebook-navigator .nn-navitem.nn-property, .view-content.notebook-navigator .nn-navitem[data-drop-zone='property'], .view-content.notebook-navigator [data-property-node]"
     )) as HTMLElement[];
     for (const row of propertyRows) {
       const property = this.resolveNotebookNavigatorPropertyFromTarget(row);
@@ -1256,4 +1278,3 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   }
 
 }
-

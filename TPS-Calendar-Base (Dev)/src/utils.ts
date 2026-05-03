@@ -15,11 +15,13 @@ export const DEFAULT_PRIORITY_COLOR_MAP: Record<string, string> = {
 };
 
 export const DEFAULT_STATUS_STYLE_MAP: Record<string, string> = {
+  todo: "normal",
   open: "normal",
   complete: "strikethrough",
   completed: "strikethrough",
   "wont-do": "strikethrough",
   working: "bold",
+  holding: "italic",
   blocked: "italic",
 };
 
@@ -148,9 +150,8 @@ export const normalizeExternalCalendar = (
       typeof calendar?.autoCreateFolder === "string"
         ? calendar.autoCreateFolder.trim()
         : "",
-    autoCreateTag: normalizeCalendarTag(
-      typeof calendar?.autoCreateTag === "string" ? calendar.autoCreateTag : "",
-    ),
+    autoCreateTag:
+      typeof calendar?.autoCreateTag === "string" ? calendar.autoCreateTag.trim() : "",
     autoCreateTemplate:
       typeof calendar?.autoCreateTemplate === "string"
         ? calendar.autoCreateTemplate.trim()

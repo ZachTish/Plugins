@@ -143,7 +143,7 @@ export class CalendarNoteMutationService {
     }, { userInitiated: true });
 
     if (input.parentFile instanceof TFile) {
-      await applyParentLinkToChild(this.plugin.app, created, input.parentFile, String(this.plugin.settings.parentLinkFrontmatterKey || 'childOf').trim() || 'childOf');
+      await applyParentLinkToChild(this.plugin.app, created, input.parentFile, String(this.plugin.settings.parentLinkFrontmatterKey || 'parent').trim() || 'parent');
     }
 
     await this.finalizeMutation(created);

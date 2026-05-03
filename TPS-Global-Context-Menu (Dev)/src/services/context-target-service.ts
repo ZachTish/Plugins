@@ -132,6 +132,7 @@ export class ContextTargetService {
     isManualContextInterceptTarget(target: HTMLElement | null): boolean {
         if (!target) return false;
         if (target.closest('[data-tps-task-context="true"]')) return false;
+        if (target.closest('[data-tps-external-calendar-event="true"], .bases-calendar-event.is-external, .is-external .tps-calendar-entry, [data-path^="external:"]')) return false;
         if (this.isNativeMenuManagedTarget(target)) return false;
         if (this.resolveEmbedTarget(target)) return true;
 

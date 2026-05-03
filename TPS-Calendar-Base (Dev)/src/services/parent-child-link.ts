@@ -212,7 +212,7 @@ export async function applyParentLinkToChild(
     parentFile: TFile,
     parentLinkKey: string,
 ): Promise<void> {
-    const parentKey = String(parentLinkKey || "childOf").trim() || "childOf";
+    const parentKey = String(parentLinkKey || "parent").trim() || "parent";
     const parentLink = buildParentLinkValue(app, childFile.path, parentFile);
 
     const gcmApi = getGlobalContextMenuApi(app);
@@ -243,14 +243,16 @@ export async function createBidirectionalLink(
     try {
         await applyParentLinkToChild(app, childFile, parentFile, parentLinkKey);
 
-        const gcmApi = getGlobalContextMenuApi(app);
-        if (!gcmApi?.addChildLink) {
-            throw new Error('TPS Global Context Menu API unavailable for child link mutation');
+        const childKey = String(childLinkKey || "").trim();
+        if (childKey) {
+            const gcmApi = getGlobalContextMenuApi(app);
+            if (!gcmApi?.addChildLink) {
+                throw new Error('TPS Global Context Menu API unavailable for child link mutation');
+            }
+            const childLink = buildParentLinkValue(app, parentFile.path, childFile);
+            await gcmApi.addChildLink({ parentFile, childKey, childLink, childFile, tagsToAdd: getParentTagOnChildLink(app) });
+            logger.log(`[ParentChildLink] Added child link to ${parentFile.path}: ${childKey}`);
         }
-        const childKey = String(childLinkKey || "").trim() || "children";
-        const childLink = buildParentLinkValue(app, parentFile.path, childFile);
-        await gcmApi.addChildLink({ parentFile, childKey, childLink, childFile, tagsToAdd: getParentTagOnChildLink(app) });
-        logger.log(`[ParentChildLink] Added child link to ${parentFile.path}: ${childKey}`);
 
         logger.log(`[ParentChildLink] ✓ Bidirectional link created: ${childFile.basename} ↔ ${parentFile.basename}`);
     } catch (error) {
