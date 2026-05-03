@@ -65,6 +65,23 @@ export function registerGcmCommands(plugin: TPSGlobalContextMenuPlugin): void {
     });
 
     plugin.addCommand({
+        id: 'repair-missing-titles',
+        name: 'Repair missing titles from filenames',
+        callback: async () => {
+            new Notice('TPS GCM: Repairing missing titles...');
+            try {
+                const result = await plugin.fileNamingService.repairMissingTitlesAcrossVault();
+                new Notice(
+                    `TPS GCM: Missing-title repair complete. Updated ${result.updated} of ${result.scanned} scanned notes${result.failed > 0 ? ` (${result.failed} failed)` : ''}.`,
+                );
+            } catch (error) {
+                logger.error('[TPS GCM] Failed to repair missing titles', error);
+                new Notice('TPS GCM: Missing-title repair failed. Check console logs.');
+            }
+        },
+    });
+
+    plugin.addCommand({
         id: 'toggle-inline-ui',
         name: 'Toggle inline context menu UI',
         callback: async () => {

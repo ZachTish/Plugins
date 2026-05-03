@@ -32,7 +32,7 @@ export const DEFAULT_SETTINGS: TPSGlobalContextMenuSettings = {
 
   // File naming settings
   enableAutoRename: true,
-  autoSyncTitleFromFilename: false,
+  autoSyncTitleFromFilename: true,
   autoSaveFolderPath: false,
   seedNewSubitemVisualMetadata: false,
   applyCompanionRulesOnSubitemCreate: false,

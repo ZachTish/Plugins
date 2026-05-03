@@ -395,11 +395,28 @@ export function registerGcmEvents(plugin: TPSGlobalContextMenuPlugin): void {
     // ── Vault events ─────────────────────────────────────────────────────────
 
     plugin.registerEvent(
+        plugin.app.vault.on('create', (file) => {
+            if (file instanceof TFile && file.extension === 'md') {
+                setTimeout(() => {
+                    plugin.fileNamingService.syncTitleFromFilename(file, {
+                        force: true,
+                        onlyIfMissing: true,
+                        bypassCreationGrace: true,
+                    });
+                }, 1500);
+            }
+        }),
+    );
+
+    plugin.registerEvent(
         plugin.app.vault.on('rename', (file) => {
             if (file instanceof TFile && file.extension === 'md') {
                 plugin.persistentMenuManager.refreshMenusForFile(file);
                 setTimeout(() => {
-                    plugin.fileNamingService.syncTitleFromFilename(file);
+                    plugin.fileNamingService.syncTitleFromFilename(file, {
+                        force: true,
+                        bypassCreationGrace: true,
+                    });
                 }, 150);
             }
         }),

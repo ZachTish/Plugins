@@ -74,6 +74,15 @@ export class FileNamingService {
         const candidates = [
             scheduledDate.format(this.getDailyNoteDateFormat()),
             scheduledDate.format('YYYY-MM-DD'),
+            scheduledDate.format('YYYY_MM_DD'),
+            scheduledDate.format('YYYYMMDD'),
+            scheduledDate.format('ddd, MMM D YYYY h.mma'),
+            scheduledDate.format('ddd, MMM D YYYY h:mma'),
+            scheduledDate.format('ddd, MMM D YYYY'),
+            scheduledDate.format('ddd, MMM D'),
+            scheduledDate.format('MMM D YYYY h.mma'),
+            scheduledDate.format('MMM D YYYY h:mma'),
+            scheduledDate.format('MMM D YYYY'),
         ].map((v) => String(v || '').trim()).filter(Boolean);
 
         for (const suffix of candidates) {
@@ -249,7 +258,7 @@ export class FileNamingService {
      */
     async syncTitleFromFilename(
         file: TFile,
-        options: { onlyIfTemplateDerived?: boolean; force?: boolean; bypassCreationGrace?: boolean } = {},
+        options: { onlyIfTemplateDerived?: boolean; onlyIfMissing?: boolean; force?: boolean; bypassCreationGrace?: boolean } = {},
     ): Promise<void> {
         if (!options.force && !this.plugin.settings.autoSyncTitleFromFilename) {
             return;
@@ -287,9 +296,40 @@ export class FileNamingService {
         return { scanned, updated, skipped, failed };
     }
 
+    async repairMissingTitlesAcrossVault(): Promise<{ scanned: number; updated: number; skipped: number; failed: number }> {
+        const files = this.plugin.app.vault.getMarkdownFiles().filter((file) => this.shouldProcess(file, { bypassCreationGrace: true }));
+        let scanned = 0;
+        let updated = 0;
+        let skipped = 0;
+        let failed = 0;
+
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            scanned += 1;
+
+            try {
+                const result = await this.syncTitleFromFilenameWithOptions(file, {
+                    onlyIfMissing: true,
+                    force: true,
+                    bypassCreationGrace: true,
+                });
+                if (result === "updated") updated += 1;
+                else skipped += 1;
+            } catch {
+                failed += 1;
+            }
+
+            if ((i + 1) % 50 === 0) {
+                await this.yieldToEventLoop();
+            }
+        }
+
+        return { scanned, updated, skipped, failed };
+    }
+
     private async syncTitleFromFilenameWithOptions(
         file: TFile,
-        options: { onlyIfTemplateDerived?: boolean; force?: boolean; bypassCreationGrace?: boolean },
+        options: { onlyIfTemplateDerived?: boolean; onlyIfMissing?: boolean; force?: boolean; bypassCreationGrace?: boolean },
     ): Promise<"updated" | "skipped"> {
         if (!options.force && !this.plugin.settings.autoSyncTitleFromFilename) return "skipped";
         if (!this.shouldProcess(file, options)) return "skipped";
@@ -317,15 +357,17 @@ export class FileNamingService {
             if (rawBasename.toLowerCase().includes('template')) return "skipped";
 
             const scheduled = fm.scheduled;
-            let nextTitle = rawBasename;
+            const scheduledDate = scheduled ? window.moment(scheduled) : null;
+            let nextTitle = scheduledDate?.isValid?.()
+                ? this.stripKnownDateSuffix(rawBasename, scheduledDate)
+                : stripDateSuffix(rawBasename);
 
             // If the filename ends with a YYYY-MM-DD suffix, strip it from the title.
             // This keeps the "title" canonical and allows the filename to carry the date.
             const { base: before, dateStr } = extractDateSuffix(nextTitle);
             if (dateStr) {
 
-                if (scheduled) {
-                    const scheduledDate = window.moment(scheduled);
+                if (scheduledDate) {
                     const suffixDate = window.moment(dateStr, 'YYYY-MM-DD', true);
                     if (scheduledDate.isValid() && suffixDate.isValid()) {
                         const scheduledStr = scheduledDate.format('YYYY-MM-DD');
@@ -342,6 +384,9 @@ export class FileNamingService {
 
             nextTitle = nextTitle.replace(/\s+/g, ' ').trim();
             const currentTitle = this.getFrontmatterStringValueCaseInsensitive(fm, 'title').trim();
+            if (options.onlyIfMissing && currentTitle) {
+                return "skipped";
+            }
             const templateDerivedTitle = this.isTemplateDerivedTitle(currentTitle, rawBasename);
             if (options.onlyIfTemplateDerived && !templateDerivedTitle) {
                 return "skipped";

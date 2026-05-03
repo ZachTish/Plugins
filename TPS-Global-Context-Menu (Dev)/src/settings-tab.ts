@@ -1524,7 +1524,7 @@ export class TPSGlobalContextMenuSettingTab extends PluginSettingTab {
     new Setting(advancedAutomation).setName('Auto-Rename Files').setDesc('Rename based on title/date criteria').addToggle(t => t.setValue(this.plugin.settings.enableAutoRename).onChange(async v => { this.plugin.settings.enableAutoRename = v; await this.plugin.saveSettings(); }));
     new Setting(advancedAutomation)
       .setName('Auto-sync title from filename')
-      .setDesc('Keep frontmatter `title` aligned to the current filename on open/rename. Disabled by default to avoid surprise metadata writes.')
+      .setDesc('Keep frontmatter `title` aligned to the current filename on create/open/rename while excluding the scheduled date suffix.')
       .addToggle(t => t.setValue(this.plugin.settings.autoSyncTitleFromFilename).onChange(async v => { this.plugin.settings.autoSyncTitleFromFilename = v; await this.plugin.saveSettings(); }));
     new Setting(advancedAutomation).setName('Auto-Save Folder').setDesc('Save path to frontmatter').addToggle(t => t.setValue(this.plugin.settings.autoSaveFolderPath).onChange(async v => { this.plugin.settings.autoSaveFolderPath = v; await this.plugin.saveSettings(); }));
     new Setting(advancedAutomation)
