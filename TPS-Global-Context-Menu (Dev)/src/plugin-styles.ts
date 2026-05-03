@@ -22,13 +22,15 @@ export const PLUGIN_STYLES = `
       .tps-daily-note-nav {
         z-index: 50;
         display: flex;
+        flex-direction: column;
         align-items: center;
         gap: calc(8px * var(--tps-gcm-daily-nav-scale));
-        background: var(--background-secondary);
-        border: 1px solid var(--background-modifier-border);
-        border-radius: calc(20px * var(--tps-gcm-daily-nav-scale));
-        padding: calc(4px * var(--tps-gcm-daily-nav-scale)) calc(12px * var(--tps-gcm-daily-nav-scale));
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        max-width: 100%;
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        padding: 0;
+        box-shadow: none;
         user-select: none;
         -webkit-user-select: none;
         -webkit-touch-callout: none;
@@ -94,11 +96,61 @@ export const PLUGIN_STYLES = `
 
       .tps-daily-note-nav--under-title {
         position: relative;
-        display: inline-flex;
-        margin: 8px 0 10px;
+        display: flex;
+        align-items: flex-start;
+        width: 100%;
+        margin: 0 0 22px;
         opacity: 1;
         pointer-events: auto;
         z-index: 4;
+      }
+
+      .tps-daily-nav-timeline,
+      .tps-daily-nav-controls {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        max-width: 100%;
+      }
+
+      .tps-daily-nav-timeline {
+        gap: calc(2px * var(--tps-gcm-daily-nav-scale));
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+
+      .tps-daily-nav-timeline::-webkit-scrollbar {
+        display: none;
+      }
+
+      .tps-daily-nav-controls {
+        gap: calc(8px * var(--tps-gcm-daily-nav-scale));
+      }
+
+      .tps-daily-nav-day {
+        height: calc(30px * var(--tps-gcm-daily-nav-scale));
+        min-width: calc(64px * var(--tps-gcm-daily-nav-scale));
+        border: none;
+        border-radius: calc(6px * var(--tps-gcm-daily-nav-scale));
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: calc(12px * var(--tps-gcm-daily-nav-scale));
+        font-weight: 500;
+        padding: 0 calc(10px * var(--tps-gcm-daily-nav-scale));
+        transition: color 0.15s ease, background-color 0.15s ease;
+        white-space: nowrap;
+      }
+
+      .tps-daily-nav-day:hover {
+        color: var(--text-normal);
+        background: var(--background-modifier-hover);
+      }
+
+      .tps-daily-nav-day.is-active {
+        color: var(--text-on-accent);
+        background: var(--color-purple, var(--interactive-accent));
+        font-weight: 700;
       }
 
       .tps-daily-nav-btn {
@@ -127,7 +179,7 @@ export const PLUGIN_STYLES = `
         font-size: calc(12px * var(--tps-gcm-daily-nav-scale));
         font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0;
         color: var(--text-accent);
         cursor: pointer;
         padding: calc(2px * var(--tps-gcm-daily-nav-scale)) calc(8px * var(--tps-gcm-daily-nav-scale));

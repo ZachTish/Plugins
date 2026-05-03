@@ -7,6 +7,7 @@ export class DailyNoteNavManager extends Component {
     currentNav: HTMLElement | null = null;
     private currentHost: HTMLElement | null = null;
     private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    private _layoutRetryTimers: ReturnType<typeof setTimeout>[] = [];
     private _navAbortController: AbortController | null = null;
     private _currentLeaf: WorkspaceLeaf | null = null;
 
@@ -25,6 +26,15 @@ export class DailyNoteNavManager extends Component {
         this.registerEvent(
             this.plugin.app.workspace.on("layout-change", () => this._scheduleRefresh())
         );
+        this.plugin.app.workspace.onLayoutReady(() => {
+            for (const delay of [100, 500, 1200]) {
+                const timer = setTimeout(() => {
+                    this._layoutRetryTimers = this._layoutRetryTimers.filter((candidate) => candidate !== timer);
+                    this._scheduleRefresh();
+                }, delay);
+                this._layoutRetryTimers.push(timer);
+            }
+        });
         // Initial refresh
         this.refresh();
     }
@@ -43,6 +53,8 @@ export class DailyNoteNavManager extends Component {
             clearTimeout(this._refreshTimer);
             this._refreshTimer = null;
         }
+        for (const timer of this._layoutRetryTimers) clearTimeout(timer);
+        this._layoutRetryTimers = [];
         this._navAbortController?.abort();
         this._navAbortController = null;
     }
@@ -154,7 +166,7 @@ export class DailyNoteNavManager extends Component {
         if (titleAnchor) {
             nav.addClass("tps-daily-note-nav--under-title");
             host.addClass("tps-daily-note-nav-anchor");
-            titleAnchor.insertAdjacentElement("afterend", nav);
+            titleAnchor.insertAdjacentElement("beforebegin", nav);
         } else {
             nav.addClass("tps-daily-note-nav--floating");
             host.appendChild(nav);
@@ -166,8 +178,39 @@ export class DailyNoteNavManager extends Component {
             nav.dataset.restVisible = "true";
         }
 
+        const m = (window as any).moment;
+        const activeDate = m(isoDateStr, "YYYY-MM-DD");
+        const weekStart = activeDate.clone().isoWeekday(1);
+
+        const timeline = nav.createDiv({ cls: "tps-daily-nav-timeline" });
+        this.hardenNavControl(timeline);
+        for (let offset = 0; offset < 7; offset++) {
+            const day = weekStart.clone().add(offset, "days");
+            const dayIso = day.format("YYYY-MM-DD");
+            const dayBtn = timeline.createEl("button", {
+                cls: "tps-daily-nav-day",
+                text: day.format("ddd D")
+            });
+            dayBtn.type = "button";
+            dayBtn.toggleClass("is-active", dayIso === isoDateStr);
+            dayBtn.setAttribute("aria-label", `Open ${day.format("dddd, MMMM D, YYYY")}`);
+            dayBtn.setAttribute("aria-current", dayIso === isoDateStr ? "date" : "false");
+            this.hardenNavControl(dayBtn);
+            dayBtn.onclick = (e) => {
+                this.suppressNavEvent(e);
+                this.goToDate(dayIso, 0, leaf);
+            };
+            dayBtn.addEventListener("touchend", (e) => {
+                this.suppressNavEvent(e);
+                this.goToDate(dayIso, 0, leaf);
+            }, { passive: false });
+        }
+
+        const controls = nav.createDiv({ cls: "tps-daily-nav-controls" });
+        this.hardenNavControl(controls);
+
         // Left Arrow (Prev)
-        const prevBtn = nav.createEl("button", { cls: "tps-daily-nav-btn" });
+        const prevBtn = controls.createEl("button", { cls: "tps-daily-nav-btn" });
         prevBtn.type = "button";
         setIcon(prevBtn, "chevron-left");
         this.hardenNavControl(prevBtn);
@@ -182,7 +225,7 @@ export class DailyNoteNavManager extends Component {
 
         // Today Button (optional)
         if (this.plugin.settings.dailyNavShowToday !== false) {
-            const todayBtn = nav.createEl("button", {
+            const todayBtn = controls.createEl("button", {
                 cls: "tps-daily-nav-today",
                 text: "Today"
             });
@@ -199,7 +242,7 @@ export class DailyNoteNavManager extends Component {
         }
 
         // Right Arrow (Next)
-        const nextBtn = nav.createEl("button", { cls: "tps-daily-nav-btn" });
+        const nextBtn = controls.createEl("button", { cls: "tps-daily-nav-btn" });
         nextBtn.type = "button";
         setIcon(nextBtn, "chevron-right");
         this.hardenNavControl(nextBtn);
