@@ -5,7 +5,7 @@
   "applyOnStartup": true,
   "startupDelayMs": 800,
   "metadataDebounceMs": 350,
-  "syncTitleFromFilename": false,
+  "syncTitleFromFilename": true,
   "syncFilenameFromTitle": false,
   "frontmatterIconField": "icon",
   "frontmatterColorField": "color",
@@ -16,7 +16,7 @@
     "childOf",
     "attachments"
   ],
-  "frontmatterWriteExclusions": "re:(^|/)_[^/]*($|/|$)\nre: ^[^/]+\\.md$",
+  "frontmatterWriteExclusions": "re:(^|/)_[^/]*($|/|$)",
   "noteCheckboxIconColor": "#e62828",
   "clearIconWhenNoMatch": true,
   "clearColorWhenNoMatch": true,
@@ -236,7 +236,7 @@
     {
       "id": "rule-1772492075794-iaajh7p",
       "name": "",
-      "enabled": true,
+      "enabled": false,
       "property": "title",
       "operator": "exists",
       "value": "",
@@ -377,7 +377,7 @@
       "property": "status",
       "operator": "is",
       "value": "complete",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "clock-check",
       "color": "#324e33",
       "match": "all",
@@ -386,7 +386,7 @@
           "source": "path",
           "field": "",
           "operator": "starts",
-          "value": "Markdown/Action Items"
+          "value": "Action Items"
         },
         {
           "source": "frontmatter",
@@ -421,7 +421,7 @@
       "property": "status",
       "operator": "is",
       "value": "complete",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar-check",
       "color": "#324e33",
       "match": "all",
@@ -430,7 +430,7 @@
           "source": "path",
           "field": "",
           "operator": "starts",
-          "value": "Markdown/Action Items"
+          "value": "Action Items"
         },
         {
           "source": "frontmatter",
@@ -452,8 +452,8 @@
       "enabled": true,
       "property": "status",
       "operator": "is",
-      "value": "blocked",
-      "pathPrefix": "Markdown/Action Items",
+      "value": "holding",
+      "pathPrefix": "Action Items",
       "icon": "circle-minus",
       "color": "#4c512a",
       "match": "all",
@@ -468,7 +468,7 @@
           "source": "path",
           "field": "",
           "operator": "starts",
-          "value": "Markdown/Action Items"
+          "value": "Action Items"
         },
         {
           "source": "frontmatter",
@@ -490,8 +490,8 @@
       "enabled": true,
       "property": "status",
       "operator": "is",
-      "value": "blocked",
-      "pathPrefix": "Markdown/Action Items",
+      "value": "holding",
+      "pathPrefix": "Action Items",
       "icon": "list-x",
       "color": "#4c512a",
       "match": "all",
@@ -506,7 +506,7 @@
           "source": "path",
           "field": "",
           "operator": "starts",
-          "value": "Markdown/Action Items"
+          "value": "Action Items"
         },
         {
           "source": "frontmatter",
@@ -651,7 +651,7 @@
       "property": "status",
       "operator": "is",
       "value": "complete",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:check-square-2",
       "color": "#30412a",
       "match": "all",
@@ -664,7 +664,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "",
       "match": "all",
@@ -690,7 +690,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#8a906a",
       "match": "all",
@@ -722,7 +722,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#cdc842",
       "match": "all",
@@ -748,7 +748,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#3b586d",
       "match": "all",
@@ -780,7 +780,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#3b586d",
       "match": "all",
@@ -812,7 +812,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#416bbe",
       "match": "all",
@@ -844,7 +844,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#416bbe",
       "match": "all",
@@ -876,7 +876,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#5c5f61",
       "match": "all",
@@ -908,7 +908,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#b3b3b3",
       "match": "all",
@@ -940,7 +940,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#765151",
       "match": "all",
@@ -972,7 +972,7 @@
       "property": "scheduled",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "lucide:calendar",
       "color": "#ea6161",
       "match": "all",
@@ -998,7 +998,7 @@
       "property": "status",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "square",
       "color": "",
       "match": "all",
@@ -1030,7 +1030,7 @@
       "property": "status",
       "operator": "!is",
       "value": "",
-      "pathPrefix": "Markdown/Action Items",
+      "pathPrefix": "Action Items",
       "icon": "circle",
       "color": "",
       "match": "all",
@@ -1086,7 +1086,7 @@
       "id": "rule-1770921568202-jo37jsz",
       "name": "",
       "enabled": true,
-      "property": "Priority",
+      "property": "priority",
       "operator": "is",
       "value": "medium",
       "pathPrefix": "",
@@ -2017,11 +2017,11 @@
                 "output": "001"
               },
               {
-                "input": "open",
+                "input": "todo",
                 "output": "002"
               },
               {
-                "input": "blocked",
+                "input": "holding",
                 "output": "003"
               },
               {
@@ -2119,11 +2119,11 @@
                 "output": "001"
               },
               {
-                "input": "open",
+                "input": "todo",
                 "output": "002"
               },
               {
-                "input": "blocked",
+                "input": "holding",
                 "output": "003"
               },
               {

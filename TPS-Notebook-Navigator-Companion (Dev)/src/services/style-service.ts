@@ -43,6 +43,15 @@ export class StyleService {
       .obsidian-icon-folder-icon {
         color: var(--nn-active-file-color, inherit) !important;
       }
+      .notebook-navigator .tps-nn-page-link {
+        color: var(--link-color) !important;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .notebook-navigator .tps-nn-page-link:hover {
+        color: var(--link-color-hover) !important;
+      }
     `;
     }
 

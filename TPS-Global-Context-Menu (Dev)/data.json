@@ -366,8 +366,7 @@
   "recurrenceCompletionStatuses": [
     "complete",
     "wont-do",
-    "note",
-    "blocked"
+    "holding"
   ],
   "recurrenceDefaultStatus": "",
   "recurringTemplateFolder": "/",
@@ -376,7 +375,7 @@
   "autoSaveFolderPath": true,
   "seedNewSubitemVisualMetadata": false,
   "applyCompanionRulesOnSubitemCreate": false,
-  "frontmatterAutoWriteExclusions": "re:(^|/)_[^/]*($|/|$)\nre: ^[^/]+\\.md$",
+  "frontmatterAutoWriteExclusions": "re:(^|/)_[^/]*($|/|$)",
   "folderExclusions": "System/Templates",
   "checkOpenChecklistItems": true,
   "checkParentLinkStatuses": true,
@@ -487,8 +486,7 @@
   "linkedSubitemUncheckedStatuses": [
     "todo",
     "working",
-    "holding",
-    "note"
+    "holding"
   ],
   "linkedSubitemCheckedStatuses": [
     "complete"
@@ -502,16 +500,16 @@
   "archiveTag": "archive",
   "archiveFolderPath": "Archive",
   "archiveUseDailyFolder": false,
-  "lastArchiveTagSweepDate": "2026-03-30",
+  "lastArchiveTagSweepDate": "2026-05-03",
   "workspaceRibbonButtons": false,
   "workspaceRibbonIcons": {
     "Calendar": "calendar"
   },
-  "enableCanvasBaseSplit": false,
-  "enableDailyNoteNav": false,
+  "enableCanvasBaseSplit": true,
+  "enableDailyNoteNav": true,
   "enableTopParentNav": true,
   "ignoreEmbeddedChildrenInTopLinks": true,
-  "dailyNavShowToday": false,
+  "dailyNavShowToday": true,
   "enableAutoPopulateDailyNotes": true,
   "ignoredBacklinksFrontmatterKeys": [
     "dateModified",
@@ -563,7 +561,7 @@
   ],
   "enableAutoInsertBlankLineOnOpen": false,
   "defaultAttachmentsPath": "Markdown/Notes",
-  "defaultSubitemsPath": "Markdown/Action Items",
+  "defaultSubitemsPath": "Action Items",
   "defaultNewSubitemStatus": "",
   "defaultNewSubitemPriority": "",
   "checklistPromotionBehavior": "link-only",
@@ -894,7 +892,7 @@
         {
           "source": "property:status",
           "operator": "!is",
-          "value": "blocked"
+          "value": "holding"
         }
       ],
       "enabled": true,
@@ -949,7 +947,7 @@
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         },
         {
           "source": "property:priority",
@@ -974,7 +972,7 @@
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         },
         {
           "source": "property:priority",
@@ -999,7 +997,7 @@
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         },
         {
           "source": "property:priority",
@@ -1024,7 +1022,7 @@
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         },
         {
           "source": "property:priority",
@@ -1263,7 +1261,7 @@
         {
           "source": "property:status",
           "operator": "is",
-          "value": "open"
+          "value": "todo"
         },
         {
           "source": "property:priority",
@@ -1288,7 +1286,7 @@
         {
           "source": "property:status",
           "operator": "is",
-          "value": "open"
+          "value": "todo"
         },
         {
           "source": "property:priority",
@@ -1338,7 +1336,7 @@
         {
           "source": "property:status",
           "operator": "is",
-          "value": "open"
+          "value": "todo"
         },
         {
           "source": "property:priority",
@@ -1387,7 +1385,7 @@
         {
           "source": "property:status",
           "operator": "is",
-          "value": "blocked"
+          "value": "holding"
         }
       ],
       "enabled": true,

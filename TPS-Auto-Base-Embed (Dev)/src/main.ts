@@ -1487,6 +1487,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
 
     container.setAttribute("data-base-paths", basePaths.join(","));
     container.setAttribute("data-source-path", file.path);
+    container.classList.toggle(`${EMBED_CLASS}--tabs`, matchingRules.length > 1);
 
     // Seed the cooldown timestamp BEFORE rendering so the metadataCache.changed
     // guard is active if MarkdownRenderer.render (fallback path) is used.
@@ -1540,6 +1541,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     for (const oldPanel of oldPanels) {
       this.unloadPanel(oldPanel as HTMLElement);
     }
+    this.normalizeTabbedExpandedPanels(leaf, container);
     this.renderSignatureByLeaf.set(leaf, renderSignature);
     // Refresh the timestamp now that all panels have finished rendering, so the
     // cooldown window extends from render-end rather than only from render-start.
@@ -1696,6 +1698,44 @@ export default class AutoBaseEmbedPlugin extends Plugin {
     container.innerHTML = "";
   }
 
+  private normalizeTabbedExpandedPanels(leaf: WorkspaceLeaf, container: HTMLElement): void {
+    const isTabbed = container.classList.contains(`${EMBED_CLASS}--tabs`);
+    const panels = Array.from(container.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
+    if (!isTabbed || panels.length <= 1) {
+      this.updateTabActiveStates(container);
+      return;
+    }
+
+    const expandedSet = this.getExpandedSet(leaf);
+    let activePanel = panels.find((panel) => panel.getAttribute(COLLAPSED_ATTR) === "false") || panels[0];
+    const activePath = activePanel.getAttribute("data-base-path");
+
+    for (const panel of panels) {
+      const path = panel.getAttribute("data-base-path");
+      const isActive = panel === activePanel;
+      panel.setAttribute(COLLAPSED_ATTR, isActive ? "false" : "true");
+      const toggle = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__toggle`);
+      if (toggle) toggle.textContent = isActive ? "▾" : "▸";
+      if (path) {
+        if (isActive) expandedSet.add(path);
+        else expandedSet.delete(path);
+      }
+    }
+
+    if (activePath) this.setManualExpansionState(activePath, true);
+    this.updateTabActiveStates(container);
+  }
+
+  private updateTabActiveStates(container: HTMLElement | null): void {
+    if (!container) return;
+    const panels = Array.from(container.querySelectorAll<HTMLElement>(`.${EMBED_CLASS}__panel`));
+    for (const panel of panels) {
+      const isActive = panel.getAttribute(COLLAPSED_ATTR) === "false";
+      const bar = panel.querySelector<HTMLElement>(`.${EMBED_CLASS}__bar`);
+      if (bar) bar.classList.toggle(`${EMBED_CLASS}__bar--active`, isActive);
+    }
+  }
+
   private async buildPanel(
     leaf: WorkspaceLeaf,
     baseFile: TFile,
@@ -1777,6 +1817,7 @@ export default class AutoBaseEmbedPlugin extends Plugin {
           }
         }
       }
+      this.updateTabActiveStates(panel.parentElement);
     };
     if (toggle) {
       toggle.textContent = isExpanded ? "▾" : "▸";
@@ -2048,6 +2089,31 @@ export default class AutoBaseEmbedPlugin extends Plugin {
         display: flex;
         flex-direction: column;
         gap: 6px;
+      }
+      .${EMBED_CLASS}.${EMBED_CLASS}--tabs {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+        align-items: start;
+        gap: 0 4px;
+      }
+      .${EMBED_CLASS}.${EMBED_CLASS}--tabs .${EMBED_CLASS}__panel {
+        display: contents;
+      }
+      .${EMBED_CLASS}.${EMBED_CLASS}--tabs .${EMBED_CLASS}__bar {
+        grid-row: 1;
+        min-width: 0;
+        border-radius: 8px 8px 0 0;
+        border-bottom-color: transparent;
+        box-shadow: none;
+      }
+      .${EMBED_CLASS}.${EMBED_CLASS}--tabs .${EMBED_CLASS}__bar--active {
+        background: var(--background-secondary);
+        border-bottom-color: var(--background-secondary);
+      }
+      .${EMBED_CLASS}.${EMBED_CLASS}--tabs .${EMBED_CLASS}__content {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        border-radius: 0 0 10px 10px;
       }
       .${EMBED_CLASS}__bar {
         display: flex;

@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, Platform, Plugin, TFile } from "obsidian";
+import { MarkdownView, Notice, Platform, Plugin, TFile, normalizePath } from "obsidian";
 import { NotebookNavigatorCompanionSettingTab } from "./settings-tab";
 import {
   DEFAULT_SETTINGS,
@@ -59,6 +59,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   titleSyncService!: TitleSyncService;
   styleService!: StyleService;
   vaultWalker!: VaultWalker;
+  private notebookNavigatorLinkObserver: MutationObserver | null = null;
 
   async onload(): Promise<void> {
     this.logger = new Logger({
@@ -96,6 +97,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
     this.styleService.applyNavigatorSystemIconColorOverride();
     this.addSettingTab(new NotebookNavigatorCompanionSettingTab(this.app, this));
     this.registerEvents();
+    this.installNotebookNavigatorPageLinks();
     this.setupPluginApi();
 
     if (this.settings.applyOnStartup) {
@@ -128,6 +130,8 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
   onunload(): void {
     this.metadataManager?.dispose();
     this.styleService?.dispose();
+    this.notebookNavigatorLinkObserver?.disconnect();
+    this.notebookNavigatorLinkObserver = null;
     delete (this as any).api;
   }
 
@@ -258,6 +262,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       // affordances keep working the same way folders do.
       const tagActionTarget = target.closest(
         [
+          ".tps-nn-tag-page-link",
           ".nn-file-tag",
           ".nn-clickable-tag",
           ".nn-navitem-name",
@@ -269,7 +274,7 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
         return;
       }
 
-      const tagEl = target.closest(".nn-file-tag.nn-clickable-tag, .nn-navitem[data-nav-item-type='tag'], .nn-navitem[data-drop-zone='tag'][data-tag], [data-drop-zone='tag'][data-tag], [data-drop-zone='tag-root']") as HTMLElement | null;
+      const tagEl = target.closest(".tps-nn-tag-page-link, .nn-file-tag.nn-clickable-tag, .nn-navitem[data-nav-item-type='tag'], .nn-navitem[data-drop-zone='tag'][data-tag], [data-drop-zone='tag'][data-tag], [data-drop-zone='tag-root']") as HTMLElement | null;
       if (!tagEl) return;
 
       const rawTagAttr = tagEl.getAttribute("data-tag") || "";
@@ -285,9 +290,41 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
       const isRootTagsItem = isTagRootDropZone || (!rawTagAttr && normalizedTag === "tags");
       if ((!normalizedTag || normalizedTag === "__untagged__") && !isRootTagsItem) return;
 
+      const pageFile = this.resolveTagPageFile(isRootTagsItem ? ROOT_TAG_PAGE : normalizedTag);
+      if (!pageFile) return;
+
       event.preventDefault();
       event.stopPropagation();
-      void this.openTagCanvasForTag(isRootTagsItem ? ROOT_TAG_PAGE : normalizedTag);
+      void this.openFileInPreferredLeaf(pageFile);
+    }, { capture: true });
+
+    this.registerDomEvent(document, "click", (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+
+      const notebookNavigatorRoot = target.closest(".view-content.notebook-navigator, .notebook-navigator") as HTMLElement | null;
+      if (!notebookNavigatorRoot) return;
+
+      const isPrimaryClick = event.button === 0;
+      if (!isPrimaryClick || event.defaultPrevented) return;
+
+      const propertyTarget = target.closest(
+        ".tps-nn-property-page-link, .nn-file-property, .nn-navitem.nn-property, .nn-navitem[data-nav-item-type='property'], [data-drop-zone='property']",
+      ) as HTMLElement | null;
+      if (!propertyTarget) return;
+      if (target.closest(".tree-item-icon-collapse, .collapse-icon, .nn-navitem-chevron, [aria-label*='Collapse'], [aria-label*='Expand']")) {
+        return;
+      }
+
+      const propertyKey = this.extractNotebookNavigatorPropertyKey(propertyTarget);
+      if (!propertyKey) return;
+
+      const pageFile = this.resolvePropertyPageFile(propertyKey);
+      if (!pageFile) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void this.openFileInPreferredLeaf(pageFile);
     }, { capture: true });
 
     this.registerEvent(
@@ -357,6 +394,129 @@ export default class NotebookNavigatorCompanionPlugin extends Plugin {
         });
       }),
     );
+  }
+
+  private installNotebookNavigatorPageLinks(): void {
+    const enhance = () => this.enhanceNotebookNavigatorPageLinks();
+    this.app.workspace.onLayoutReady(() => {
+      enhance();
+      this.notebookNavigatorLinkObserver?.disconnect();
+      this.notebookNavigatorLinkObserver = new MutationObserver(() => {
+        window.requestAnimationFrame(enhance);
+      });
+      this.notebookNavigatorLinkObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+    });
+  }
+
+  private enhanceNotebookNavigatorPageLinks(): void {
+    const roots = Array.from(document.querySelectorAll<HTMLElement>(".view-content.notebook-navigator, .notebook-navigator"));
+    if (roots.length === 0) return;
+
+    for (const root of roots) {
+      const tagEls = root.querySelectorAll<HTMLElement>(
+        ".nn-file-tag, .nn-clickable-tag, .nn-navitem[data-nav-item-type='tag'], .nn-navitem[data-drop-zone='tag'][data-tag], [data-drop-zone='tag'][data-tag]",
+      );
+      tagEls.forEach((el) => {
+        const tag = this.extractNotebookNavigatorTag(el);
+        this.setPageLinkState(el, !!(tag && this.resolveTagPageFile(tag)), "tag");
+      });
+
+      const propertyEls = root.querySelectorAll<HTMLElement>(
+        ".nn-file-property, .nn-navitem.nn-property, .nn-navitem[data-nav-item-type='property'], [data-drop-zone='property']",
+      );
+      propertyEls.forEach((el) => {
+        const propertyKey = this.extractNotebookNavigatorPropertyKey(el);
+        this.setPageLinkState(el, !!(propertyKey && this.resolvePropertyPageFile(propertyKey)), "property");
+      });
+    }
+  }
+
+  private setPageLinkState(el: HTMLElement, hasPage: boolean, kind: "tag" | "property"): void {
+    const wasPageLink = el.hasClass("tps-nn-page-link");
+    el.toggleClass("tps-nn-page-link", hasPage);
+    el.toggleClass(`tps-nn-${kind}-page-link`, hasPage);
+    if (hasPage) {
+      el.setAttribute("role", "link");
+      el.setAttribute("title", `Open ${kind} page`);
+    } else if (wasPageLink) {
+      el.removeAttribute("role");
+      el.removeAttribute("title");
+    }
+  }
+
+  private extractNotebookNavigatorTag(el: HTMLElement): string {
+    const raw =
+      el.getAttribute("data-tag") ||
+      el.dataset.tag ||
+      el.querySelector<HTMLElement>(".nn-file-tag")?.textContent ||
+      el.querySelector<HTMLElement>(".nn-navitem-name")?.textContent ||
+      el.textContent ||
+      "";
+    return String(raw)
+      .replace(/^#/, "")
+      .replace(/\s*•\s*\d+\s*$/, "")
+      .replace(/\s+\d+$/, "")
+      .trim()
+      .toLowerCase();
+  }
+
+  private extractNotebookNavigatorPropertyKey(el: HTMLElement): string {
+    const raw =
+      el.getAttribute("data-property-key") ||
+      el.getAttribute("data-property") ||
+      el.dataset.propertyKey ||
+      el.dataset.property ||
+      el.querySelector<HTMLElement>(".nn-navitem-name")?.textContent ||
+      el.textContent ||
+      "";
+    const cleaned = String(raw)
+      .replace(/^\.+/, "")
+      .replace(/[↓↑]/g, "")
+      .replace(/[❕]/g, "")
+      .split(":")[0]
+      .split("=")[0]
+      .replace(/\s*•\s*\d+\s*$/, "")
+      .replace(/\s+\d+$/, "")
+      .trim();
+    return cleaned.toLowerCase();
+  }
+
+  private resolveTagPageFile(tag: string): TFile | null {
+    const clean = String(tag || "").replace(/^#/, "").trim().toLowerCase();
+    if (!clean || clean === "__untagged__") return null;
+    if (clean === ROOT_TAG_PAGE) return null;
+    return this.resolveFirstExistingFile([
+      `_tags/${clean}.canvas`,
+      `_tags/${clean}.md`,
+      `_tags/${clean}.base`,
+    ]);
+  }
+
+  private resolvePropertyPageFile(propertyKey: string): TFile | null {
+    const clean = String(propertyKey || "").replace(/^\.+/, "").trim().toLowerCase();
+    if (!clean) return null;
+    return this.resolveFirstExistingFile([
+      `_properties/${clean}.base`,
+      `_properties/${clean}.md`,
+      `_properties/${clean}.canvas`,
+    ]);
+  }
+
+  private resolveFirstExistingFile(paths: string[]): TFile | null {
+    for (const path of paths) {
+      const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
+      if (file instanceof TFile) return file;
+    }
+    return null;
+  }
+
+  private async openFileInPreferredLeaf(file: TFile): Promise<void> {
+    const leaf = this.resolvePreferredContentLeaf();
+    if (!leaf) return;
+    await leaf.openFile(file);
   }
 
   private async openTagCanvasForTag(tag: string): Promise<void> {
