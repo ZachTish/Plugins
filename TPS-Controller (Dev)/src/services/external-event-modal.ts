@@ -288,7 +288,7 @@ export async function createMeetingNoteFromExternalEvent(
     // Tertiary check: scan target folder for a file whose title matches and
     // whose frontmatter date is on the same day. Catches old YYYY-MM-DD named
     // files that predate the current event-ID format.
-    if (event.title && folderPath) {
+    if (event.title) {
       const sanitizedForSearch = event.title
         .replace(/[\\/:*?"<>|\x00-\x1F\x7F]/g, "")
         .replace(/\s+/g, " ")
@@ -333,7 +333,7 @@ export async function createMeetingNoteFromExternalEvent(
       ? sanitizedTitle
       : `${sanitizedTitle} ${dateSuffix}`;
     const safeBasename = sanitizePathSegment(app, rawBasename);
-    const deterministicPath = normalizePath(`${folder}/${safeBasename}.md`);
+    const deterministicPath = normalizePath(folder ? `${folder}/${safeBasename}.md` : `${safeBasename}.md`);
 
     const existingAtPath = app.vault.getAbstractFileByPath(deterministicPath) || findFileByPathInsensitive(app, deterministicPath);
     if (existingAtPath instanceof TFile) {
@@ -672,13 +672,13 @@ function doesFrontmatterDateMatchDay(value: unknown, dayTarget: string): boolean
 function findExistingNoteByTitleAndDay(
   app: App,
   sanitizedTitle: string,
-  folderPath: string,
+  folderPath: string | null,
   startDate: Date,
   startKey: string,
 ): TFile | null {
-  if (!sanitizedTitle || !folderPath || !startDate) return null;
+  if (!sanitizedTitle || !startDate) return null;
   const titlePrefix = sanitizedTitle.toLowerCase() + " ";
-  const folderNorm = normalizePath(folderPath).toLowerCase();
+  const folderNorm = normalizePath(folderPath || "").toLowerCase();
   const yr = startDate.getFullYear();
   const mo = String(startDate.getMonth() + 1).padStart(2, "0");
   const dy = String(startDate.getDate()).padStart(2, "0");
@@ -687,7 +687,7 @@ function findExistingNoteByTitleAndDay(
 
   for (const file of app.vault.getMarkdownFiles()) {
     const parentPath = normalizePath(file.parent?.path || "").toLowerCase();
-    if (parentPath !== folderNorm) continue;
+    if (folderNorm ? parentPath !== folderNorm : parentPath !== "") continue;
     if (!file.basename.toLowerCase().startsWith(titlePrefix)) continue;
 
     // Prefer metadata cache; fall back to nothing (we don't do async here).
@@ -733,7 +733,7 @@ function findFileByBasenameInFolder(app: App, folderPath: string, basename: stri
 
   for (const markdownFile of app.vault.getMarkdownFiles()) {
     const parentPath = normalizePath(markdownFile.parent?.path || "").toLowerCase();
-    if (folderNorm && parentPath !== folderNorm) continue;
+    if (folderNorm ? parentPath !== folderNorm : parentPath !== "") continue;
     if (markdownFile.name.toLowerCase() === nameNorm) {
       return markdownFile;
     }

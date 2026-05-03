@@ -459,7 +459,11 @@ export class AutoCreateService {
         for (const rawRoot of this.config.scanRootFolders || []) {
             if (typeof rawRoot !== "string") continue;
             const normalized = normalizePath(rawRoot).replace(/^\/+|\/+$/g, "").trim();
-            if (!normalized || normalized === "." || normalized === "/") continue;
+            if (normalized === "." || normalized === "/") continue;
+            if (!normalized) {
+                roots.add("");
+                continue;
+            }
             roots.add(normalized);
         }
         return Array.from(roots);
@@ -660,11 +664,12 @@ export class AutoCreateService {
 
         while (stack.length > 0) {
             const current = stack.pop();
-            if (!current) continue;
+            if (current == null) continue;
 
-            const normalizedCurrent = normalizePath(current);
+            const normalizedCurrent = normalizePath(current).replace(/^\/+|\/+$/g, "").trim();
             if (visitedFolders.has(normalizedCurrent)) continue;
             visitedFolders.add(normalizedCurrent);
+            const rootOnly = normalizedCurrent === "";
 
             let listing: { files: string[]; folders: string[] } | null = null;
             try {
@@ -674,10 +679,12 @@ export class AutoCreateService {
             }
             if (!listing) continue;
 
-            for (const folderPath of listing.folders || []) {
-                const normalizedFolder = normalizePath(folderPath).replace(/^\/+|\/+$/g, "").trim();
-                if (!normalizedFolder) continue;
-                stack.push(normalizedFolder);
+            if (!rootOnly) {
+                for (const folderPath of listing.folders || []) {
+                    const normalizedFolder = normalizePath(folderPath).replace(/^\/+|\/+$/g, "").trim();
+                    if (!normalizedFolder) continue;
+                    stack.push(normalizedFolder);
+                }
             }
 
             for (const filePath of listing.files || []) {
@@ -852,9 +859,10 @@ export class AutoCreateService {
 
         const resolvedFolder = calendarInfo?.typeFolder || calendarInfo?.folder || "";
 
-        // Hard protection: never auto-create at vault root or inside any _ folder.
-        const folderSegments = resolvedFolder.split('/').filter(Boolean);
-        if (!resolvedFolder || folderSegments.some(seg => seg.startsWith('_'))) {
+        // Hard protection: never auto-create inside any _ folder. An empty folder
+        // is intentional and means "create at vault root".
+        const folderSegments = normalizePath(resolvedFolder).split('/').filter(Boolean);
+        if (folderSegments.some(seg => seg.startsWith('_'))) {
             logger.warn(`[AutoCreateService] Refusing to create in protected path "${resolvedFolder || '(vault root)'}" for: ${event.title}`);
             return { action: 'none' };
         }

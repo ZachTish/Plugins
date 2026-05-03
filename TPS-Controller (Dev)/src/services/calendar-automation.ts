@@ -169,6 +169,7 @@ export class CalendarAutomationService {
 
         addRoot(archiveFolder);
         for (const calendar of calendars || []) {
+            if (calendar?.autoCreateEnabled === false) continue;
             if ((calendar?.autoCreateMode || "note") === "task-list") {
                 const taskFilePath = this.normalizeScanRoot(calendar?.autoCreateTaskListPath);
                 if (taskFilePath) {
@@ -179,8 +180,15 @@ export class CalendarAutomationService {
                 }
                 continue;
             }
-            addRoot(calendar?.autoCreateFolder);
-            addRoot(calendar?.autoCreateTypeFolder);
+
+            const typeFolder = this.normalizeScanRoot(calendar?.autoCreateTypeFolder);
+            const folder = this.normalizeScanRoot(calendar?.autoCreateFolder);
+            if (typeFolder || folder) {
+                if (typeFolder) roots.add(typeFolder);
+                if (folder) roots.add(folder);
+            } else {
+                roots.add("");
+            }
         }
 
         return Array.from(roots);
