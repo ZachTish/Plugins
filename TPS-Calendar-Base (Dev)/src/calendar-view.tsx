@@ -139,6 +139,25 @@ export class CalendarView extends BasesView {
           return { cleanTitle: basename.substring(0, match.index).trim(), dateSuffix: parsed.format('YYYY-MM-DD') };
         }
       }
+
+      const humanDatePattern = /\s*((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:day)?,?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)(?:[a-z]+)?\s+\d{1,2},?\s+\d{4})(?:\s+\d+)?$/i;
+      const humanMatch = basename.match(humanDatePattern);
+      if (humanMatch) {
+        const moment = (window as any).moment;
+        const parsed = moment
+          ? moment(humanMatch[1], [
+            'ddd, MMM D YYYY',
+            'ddd MMM D YYYY',
+            'dddd, MMMM D YYYY',
+            'dddd MMMM D YYYY',
+            'ddd, MMMM D YYYY',
+            'ddd MMMM D YYYY',
+          ], true)
+          : null;
+        if (parsed && parsed.isValid && parsed.isValid()) {
+          return { cleanTitle: basename.substring(0, humanMatch.index).trim(), dateSuffix: parsed.format('YYYY-MM-DD') };
+        }
+      }
     } catch {
       // Fall through to naive behavior.
     }
@@ -149,6 +168,13 @@ export class CalendarView extends BasesView {
     }
 
     return { cleanTitle: basename, dateSuffix: null };
+  }
+
+  private dateFromIsoDateOnly(value: string | null): Date | null {
+    if (!value) return null;
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
   }
 
   private showFullDay: boolean = false;
@@ -4215,6 +4241,26 @@ export class CalendarView extends BasesView {
           slot: source.slot,
           isDateOnly: this.isDateOnlyValue(rawValue),
         };
+      }
+    }
+
+    const entryFile = entry.file;
+    const allDayFieldName = this.getNoteField(this.allDayProperty);
+    if (entryFile instanceof TFile && allDayFieldName) {
+      const cache = this.app.metadataCache.getFileCache(entryFile);
+      const isAllDay = this.parseBooleanLike(
+        this.getFrontmatterValueCaseInsensitive(cache?.frontmatter as Record<string, any> | undefined, allDayFieldName),
+        false,
+      );
+      if (isAllDay) {
+        const parsedFromName = this.dateFromIsoDateOnly(this.parseFilenameComponents(entryFile.basename).dateSuffix);
+        if (parsedFromName) {
+          return {
+            date: parsedFromName,
+            slot: "primary",
+            isDateOnly: true,
+          };
+        }
       }
     }
     return null;
