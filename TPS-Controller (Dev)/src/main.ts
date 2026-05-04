@@ -485,8 +485,9 @@ export default class TPSControllerPlugin extends Plugin {
             return;
         }
 
-        const allDayNotifications = result.notifications.filter((n) => n.isAllDay);
-        const nonAllDayNotifications = result.notifications.filter((n) => !n.isAllDay);
+        const externalNotifications = result.notifications.filter((n) => n.sourceType === "external-event");
+        const allDayNotifications = result.notifications.filter((n) => n.isAllDay && n.sourceType !== "external-event");
+        const nonAllDayNotifications = result.notifications.filter((n) => !n.isAllDay && n.sourceType !== "external-event");
 
         if (this.settings.batchNotifications && nonAllDayNotifications.length > 1) {
             const count = nonAllDayNotifications.length;
@@ -504,6 +505,12 @@ export default class TPSControllerPlugin extends Plugin {
 
         // All-day reminders are always sent individually to avoid hiding them in grouped batch payloads.
         for (const p of allDayNotifications) {
+            if (notifier.sendNotification) await notifier.sendNotification(p.title, p.body, p.file);
+            else if (notifier.sendMessage) await notifier.sendMessage(p.body, p.file, p.title);
+        }
+
+        // External calendar events are live notifications, not overdue queue items.
+        for (const p of externalNotifications) {
             if (notifier.sendNotification) await notifier.sendNotification(p.title, p.body, p.file);
             else if (notifier.sendMessage) await notifier.sendMessage(p.body, p.file, p.title);
         }

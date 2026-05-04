@@ -271,6 +271,7 @@ export class ReminderEngine {
                 continue;
             }
 
+            const isExternalEvent = target.sourceType === "external-event";
             if (params.now < triggerTime) {
                 if (state.triggered && reminder.repeatUntilComplete) {
                     state.triggered = false;
@@ -283,6 +284,17 @@ export class ReminderEngine {
             let shouldNotify = false;
             if (!state.triggered) {
                 if (!reminder.repeatUntilComplete && state.lastTriggerKey === triggerKey && state.lastSent) continue;
+                if (isExternalEvent) {
+                    const staleMs = this.getExternalEventLiveFireWindowMs(settings);
+                    if (params.now - triggerTime > staleMs) {
+                        state.triggered = true;
+                        state.repeatCount = 0;
+                        state.lastTriggerKey = triggerKey;
+                        state.lastSent = params.now;
+                        stateChanged = true;
+                        continue;
+                    }
+                }
                 if (reminder.mode === "timeblock") {
                     const staleMs = 5 * 60 * 1000;
                     if (params.now - triggerTime > staleMs) {
@@ -299,6 +311,7 @@ export class ReminderEngine {
                 state.lastTriggerKey = triggerKey;
                 stateChanged = true;
             } else if (
+                !isExternalEvent &&
                 reminder.repeatUntilComplete &&
                 (!reminder.mode || reminder.mode === "task") &&
                 !isAllDaySafe
@@ -541,6 +554,11 @@ export class ReminderEngine {
     private normalizeReminderPropertyValue(value: unknown): string {
         const raw = Array.isArray(value) ? value[0] : value;
         return String(raw ?? "").replace(/[\[\]]/g, "").trim();
+    }
+
+    private getExternalEventLiveFireWindowMs(settings: TPSControllerSettings): number {
+        const pollMs = Math.max(30000, settings.pollMinutes * 60 * 1000);
+        return Math.max(60000, pollMs * 2);
     }
 
     private buildTriggerKey(

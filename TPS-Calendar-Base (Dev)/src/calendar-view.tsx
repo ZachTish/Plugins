@@ -4155,7 +4155,10 @@ export class CalendarView extends BasesView {
       } else {
         // All-day event: start at midnight, end at next-day midnight (FC exclusive end).
         startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
-        endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0);
+        const durationMinutes = task.durationMinutes && task.durationMinutes > 0
+          ? task.durationMinutes
+          : 24 * 60;
+        endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
       }
 
       entries.push({

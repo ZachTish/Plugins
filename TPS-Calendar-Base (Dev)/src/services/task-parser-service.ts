@@ -174,7 +174,7 @@ function cleanText(raw: string): string {
         .replace(/➕\s*\d{4}-\d{2}-\d{2}/g, "")
         .replace(/❌\s*\d{4}-\d{2}-\d{2}/g, "")
         .replace(/🔁\s*\S+/g, "")
-        .replace(/\[(?:due|scheduled|start|completion|created|cancelled)::\s*[^\]]+\]/gi, "")
+        .replace(/\[[a-zA-Z0-9_-]+::\s*[^\]]+\]/g, "")
         .trim();
 }
 
