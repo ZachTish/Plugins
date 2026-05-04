@@ -177,6 +177,70 @@ export class CalendarView extends BasesView {
     return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
   }
 
+  private parseDurationMinutesFromValue(value: unknown): number | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number") {
+      return Number.isFinite(value) && value > 0 ? value : null;
+    }
+    if (typeof value === "object") {
+      const anyValue = value as any;
+      if ("data" in anyValue) {
+        return this.parseDurationMinutesFromValue(anyValue.data);
+      }
+      if (typeof anyValue.toNumber === "function") {
+        const numValue = anyValue.toNumber();
+        if (typeof numValue === "number" && Number.isFinite(numValue) && numValue > 0) {
+          return numValue;
+        }
+      }
+    }
+
+    const strValue = valueToString(value)?.trim();
+    if (!strValue) return null;
+
+    let minutes = 0;
+    let matched = false;
+    const hoursMatch = strValue.match(/(\d+(?:\.\d+)?)h/i);
+    if (hoursMatch) {
+      minutes += parseFloat(hoursMatch[1]) * 60;
+      matched = true;
+    }
+    const minsMatch = strValue.match(/(\d+(?:\.\d+)?)m/i);
+    if (minsMatch) {
+      minutes += parseFloat(minsMatch[1]);
+      matched = true;
+    }
+    if (matched) {
+      return minutes > 0 ? minutes : null;
+    }
+
+    const parsed = parseFloat(strValue);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  private resolveDurationMinutes(
+    entry: BasesEntry,
+    propId: BasesPropertyId,
+    frontmatter: Record<string, any> | undefined,
+  ): number | null {
+    const fieldName = this.getNoteField(propId);
+    if (fieldName) {
+      const frontmatterDuration = this.parseDurationMinutesFromValue(
+        this.getFrontmatterValueCaseInsensitive(frontmatter, fieldName),
+      );
+      if (frontmatterDuration !== null && frontmatterDuration > 0) {
+        return frontmatterDuration;
+      }
+    }
+
+    const entryDuration = extractDuration(entry, propId);
+    if (entryDuration !== null && entryDuration > 0) {
+      return entryDuration;
+    }
+
+    return null;
+  }
+
   private showFullDay: boolean = false;
   private currentDate: Date | null = null;
   private dayCount: number = 7;
@@ -1147,7 +1211,11 @@ export class CalendarView extends BasesView {
         if (this.endDateProp) {
           if (this.useEndDuration) {
             // Duration mode: compute end from start + duration (in minutes)
-            const durationMinutes = extractDuration(entry, this.endDateProp);
+            const durationMinutes = this.resolveDurationMinutes(
+              entry,
+              this.endDateProp,
+              cache?.frontmatter as Record<string, any> | undefined,
+            );
             if (durationMinutes !== null && durationMinutes > 0) {
               endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
               hasExplicitEnd = true;
@@ -1176,6 +1244,19 @@ export class CalendarView extends BasesView {
           frontmatterAllDay ||
           forceAllDayFromSource ||
           (!hasExplicitEnd && configuredDurationMinutes === null && startsAtMidnight);
+
+        if (forceAllDay && this.endDateProp) {
+          const allDayDurationMinutes = this.parseDurationMinutesFromValue(
+            this.getFrontmatterValueCaseInsensitive(
+              cache?.frontmatter as Record<string, any> | undefined,
+              this.getNoteField(this.endDateProp) || "",
+            ),
+          );
+          if (allDayDurationMinutes !== null && allDayDurationMinutes > 0) {
+            endDate = new Date(startDate.getTime() + allDayDurationMinutes * 60 * 1000);
+            hasExplicitEnd = true;
+          }
+        }
 
 
 
