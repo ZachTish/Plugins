@@ -227,6 +227,7 @@ export async function createMeetingNoteFromExternalEvent(
   const frontmatter: Record<string, any> = {};
   frontmatter[titleKey] = event.title;
   frontmatter[eventIdKey] = event.id;
+  frontmatter["allDay"] = !!event.isAllDay;
 
   if (uidKey) {
     frontmatter[uidKey] = event.uid;
@@ -252,20 +253,9 @@ export async function createMeetingNoteFromExternalEvent(
     }
   }
 
-  // Build note content (body only, frontmatter handled separately)
-  let noteContent = templateContent;
-
-  if (!templateContent) {
-    // Default content if no template
-    noteContent = `# ${event.title}\n\n`;
-    if (event.description) {
-      noteContent += `## Description\n${event.description}\n\n`;
-    }
-    if (event.attendees && event.attendees.length > 0) {
-      noteContent += `## Attendees\n${event.attendees.map((a: string) => `- ${a}`).join("\n")}\n\n`;
-    }
-    noteContent += `## Notes\n\n`;
-  }
+  // Only explicit templates should write body content. With no configured
+  // template, create an empty note and let frontmatter/title carry the event.
+  const noteContent = templateContent || "";
 
   let file: TFile | null = null;
 
