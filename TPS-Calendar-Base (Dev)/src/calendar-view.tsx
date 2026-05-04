@@ -1378,7 +1378,6 @@ export class CalendarView extends BasesView {
         const taskEventId = this.normalizeIdentityValue(task.externalEventId);
         if (taskEventId) {
           handledExternalEventIds.add(taskEventId);
-          continue;
         }
 
         const taskUid = this.normalizeIdentityValue(
@@ -4618,6 +4617,14 @@ export class CalendarView extends BasesView {
 
       const suppressedDate = new Date(suppressedTimestamp);
       const eventDate = new Date(eventTimestamp);
+      if (
+        suppressedDate.getFullYear() === eventDate.getFullYear() &&
+        suppressedDate.getMonth() === eventDate.getMonth() &&
+        suppressedDate.getDate() === eventDate.getDate()
+      ) {
+        return true;
+      }
+
       if (
         suppressedDate.getUTCDate() === eventDate.getUTCDate() &&
         suppressedDate.getUTCHours() === eventDate.getUTCHours() &&
